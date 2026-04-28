@@ -3,10 +3,13 @@
  * This module provides a single, configurable function to create consistent and
  * professional-looking PDF documents for quotes, production orders, and purchase requests.
  */
+'use client';
+
 import jsPDF from "jspdf";
 import autoTable, { type RowInput } from "jspdf-autotable";
 import { format, parseISO } from 'date-fns';
 import type { Company } from '../types';
+import QRCode from 'qrcode';
 
 export interface DocumentData {
     docTitle: string;
@@ -52,7 +55,7 @@ export const generateDocument = (data: DocumentData): jsPDF => {
     const pageWidth = doc.internal.pageSize.getWidth();
     let finalY = 0;
 
-    const addHeader = (): number => {
+    const addHeaderAndBlocks = (): number => {
         let currentY = 40; // Initial Y position for the main title
         const rightColX = pageWidth - margin;
 
@@ -128,7 +131,25 @@ export const generateDocument = (data: DocumentData): jsPDF => {
             doc.text(data.topLegend, margin, 25);
         }
         
-        return Math.max(companyY, rightY) + 20;
+        let startY = Math.max(companyY, rightY) + 20;
+
+        if (data.blocks.length > 0) {
+            autoTable(doc, {
+                startY,
+                body: data.blocks.map(b => ([
+                    { content: b.title, styles: { fontStyle: 'bold', cellPadding: { top: 0, right: 5, bottom: 2, left: 0 } } },
+                    { content: b.content, styles: { fontStyle: 'normal', cellPadding: { top: 0, right: 0, bottom: 2, left: 0 } } }
+                ])),
+                theme: 'plain',
+                tableWidth: 'wrap',
+                styles: { fontSize: 9, cellPadding: 0 },
+                columnStyles: { 0: { cellWidth: 'wrap' } },
+                margin: { left: margin, right: margin }
+            });
+            startY = (doc as any).lastAutoTable.finalY + 15;
+        }
+
+        return startY;
     };
 
     let pagesDrawnByAutotable = new Set<number>();
@@ -136,48 +157,18 @@ export const generateDocument = (data: DocumentData): jsPDF => {
     const didDrawPage = (hookData: any) => {
         pagesDrawnByAutotable.add(hookData.pageNumber);
         if (hookData.pageNumber > 1) {
-            const blockStartY = addHeader();
-            if (data.blocks && data.blocks.length > 0) {
-                autoTable(doc, {
-                    startY: blockStartY,
-                    body: data.blocks.map(b => ([
-                        { content: b.title, styles: { fontStyle: 'bold', cellPadding: { top: 0, right: 5, bottom: 2, left: 0 } } },
-                        { content: b.content, styles: { fontStyle: 'normal', cellPadding: { top: 0, right: 0, bottom: 2, left: 0 } } }
-                    ])),
-                    theme: 'plain',
-                    tableWidth: 'wrap',
-                    styles: { fontSize: 9, cellPadding: 0 },
-                    columnStyles: { 0: { cellWidth: 'wrap' } },
-                    margin: { left: margin, right: margin }
-                });
-            }
+            hookData.settings.startY = addHeaderAndBlocks();
         }
     };
     
-    finalY = addHeader();
+    finalY = addHeaderAndBlocks();
     
-    if (data.blocks && data.blocks.length > 0) {
-        autoTable(doc, {
-            startY: finalY,
-            body: data.blocks.map(b => ([
-                { content: b.title, styles: { fontStyle: 'bold', cellPadding: { top: 0, right: 5, bottom: 2, left: 0 } } },
-                { content: b.content, styles: { fontStyle: 'normal', cellPadding: { top: 0, right: 0, bottom: 2, left: 0 } } }
-            ])),
-            theme: 'plain',
-            tableWidth: 'wrap',
-            styles: { fontSize: 9, cellPadding: 0 },
-            columnStyles: { 0: { cellWidth: 'wrap' } },
-            margin: { left: margin, right: margin }
-        });
-        finalY = (doc as any).lastAutoTable.finalY + 15;
-    }
-
     if (data.table && data.table.rows.length > 0) {
         autoTable(doc, {
             head: [data.table.columns],
             body: data.table.rows,
             startY: finalY,
-            margin: { top: finalY, right: margin, left: margin, bottom: 120 }, // Increased bottom margin
+            margin: { top: finalY, right: margin, left: margin, bottom: 120 },
             theme: 'striped',
             headStyles: { fillColor: [41, 128, 185], textColor: 255, font: 'Helvetica', fontStyle: 'bold' },
             styles: { font: 'Helvetica', fontSize: 9, cellPadding: 4 },
@@ -194,23 +185,11 @@ export const generateDocument = (data: DocumentData): jsPDF => {
 
     let bottomContentY = finalY + 20;
 
-    if (bottomContentY > pageHeight - 160) { // Increased check value
+    if (bottomContentY > pageHeight - 160) {
         doc.addPage();
         currentPage++;
         totalPages++;
-        bottomContentY = 60; 
-        addHeader();
-        if (data.blocks && data.blocks.length > 0) {
-             autoTable(doc, {
-                startY: (doc as any).lastAutoTable.finalY + 20,
-                body: data.blocks.map(b => ([
-                    { content: b.title, styles: { fontStyle: 'bold' } },
-                    { content: b.content, styles: { fontStyle: 'normal' } }
-                ])),
-                theme: 'plain',
-                styles: { fontSize: 9, cellPadding: 0 }
-            });
-        }
+        bottomContentY = addHeaderAndBlocks();
     }
     
     doc.setPage(currentPage);
@@ -271,7 +250,7 @@ export const generateDocument = (data: DocumentData): jsPDF => {
     for (let i = 1; i <= totalPages; i++) {
         doc.setPage(i);
         if (!pagesDrawnByAutotable.has(i)) {
-             addHeader();
+             addHeaderAndBlocks();
         }
         addFooter(doc, i, totalPages);
     }
@@ -280,7 +259,7 @@ export const generateDocument = (data: DocumentData): jsPDF => {
 };
 
 
-export const generateScannerLabelsPDF = (data: {
+export const generateScannerLabelsPDF = async (data: {
     location: { id: number; path: string; code: string };
     product: { id: string; description: string };
     user: { name: string };
@@ -291,54 +270,44 @@ export const generateScannerLabelsPDF = (data: {
     try {
         const qrContent = `${location.id}>${product.id}`;
         
-        // This promise must be handled inside an async function. We'll wrap the logic.
-        const generate = async () => {
-            const qrCodeDataUrl = await QRCode.toDataURL(qrContent, { errorCorrectionLevel: 'M', width: 200 });
-            const margin = 40;
-            const pageWidth = doc.internal.pageSize.getWidth();
-            const pageHeight = doc.internal.pageSize.getHeight();
+        const qrCodeDataUrl = await QRCode.toDataURL(qrContent, { errorCorrectionLevel: 'M', width: 200 });
+        const margin = 40;
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
 
-            // QR Code in top-left
-            doc.addImage(qrCodeDataUrl, 'PNG', margin, margin, 100, 100);
+        // QR Code in top-left
+        doc.addImage(qrCodeDataUrl, 'PNG', margin, margin, 100, 100);
 
-            // Metadata in top-right
-            doc.setFontSize(9);
-            doc.setFont('Helvetica', 'normal');
-            doc.setTextColor('#666');
-            doc.text(`Creado: ${format(new Date(), 'dd/MM/yyyy')}`, pageWidth - margin, margin, { align: 'right' });
-            if (user) {
-                doc.text(`por ${user.name}`, pageWidth - margin, margin + 12, { align: 'right' });
-            }
+        // Metadata in top-right
+        doc.setFontSize(9);
+        doc.setFont('Helvetica', 'normal');
+        doc.setTextColor('#666');
+        doc.text(`Creado: ${format(new Date(), 'dd/MM/yyyy')}`, pageWidth - margin, margin, { align: 'right' });
+        if (user) {
+            doc.text(`por ${user.name}`, pageWidth - margin, margin + 12, { align: 'right' });
+        }
 
-            // Main Content
-            doc.setTextColor('#000');
-            doc.setFontSize(150); // As requested
-            doc.setFont('Helvetica', 'bold');
-            doc.text(product.id, pageWidth / 2, pageHeight / 2 - 40, { align: 'center'});
+        // Main Content
+        doc.setTextColor('#000');
+        doc.setFontSize(150); // As requested
+        doc.setFont('Helvetica', 'bold');
+        doc.text(product.id, pageWidth / 2, pageHeight / 2 - 40, { align: 'center'});
 
-            doc.setFontSize(52); // As requested
-            doc.setFont('Helvetica', 'normal');
-            const descLines = doc.splitTextToSize(product.description, pageWidth - margin * 2 - 40); // Add some padding
-            doc.text(descLines, pageWidth / 2, pageHeight / 2 + 50, { align: 'center' });
+        doc.setFontSize(52); // As requested
+        doc.setFont('Helvetica', 'normal');
+        const descLines = doc.splitTextToSize(product.description, pageWidth - margin * 2 - 40); // Add some padding
+        doc.text(descLines, pageWidth / 2, pageHeight / 2 + 50, { align: 'center' });
 
-            // Footer
-            doc.setFontSize(24); // As requested
-            doc.setFont('Helvetica', 'bold');
-            doc.text('Ubicación:', margin, pageHeight - 80);
+        // Footer
+        doc.setFontSize(24); // As requested
+        doc.setFont('Helvetica', 'bold');
+        doc.text('Ubicación:', margin, pageHeight - 80);
+        
+        doc.setFontSize(28); // As requested
+        doc.setFont('Helvetica', 'normal');
+        const footerLines = doc.splitTextToSize(location.path, pageWidth - margin * 2);
+        doc.text(footerLines, margin, pageHeight - 50);
             
-            doc.setFontSize(28); // As requested
-            doc.setFont('Helvetica', 'normal');
-            const footerLines = doc.splitTextToSize(location.path, pageWidth - margin * 2);
-            doc.text(footerLines, margin, pageHeight - 50);
-            
-        };
-
-        // Although jsPDF itself is synchronous, the QR generation is async.
-        // We can't await here directly. This is a known limitation. 
-        // The calling function must handle the async nature. For now, we assume it's handled.
-        // A better pattern would be for this function to be async and return a Promise<jsPDF>.
-        // However, given the surrounding code, we'll keep it sync and log if QR fails.
-        generate().catch(err => console.error("QR Code generation failed:", err));
     } catch(err) {
         console.error("Error generating scanner label PDF:", err);
     }
