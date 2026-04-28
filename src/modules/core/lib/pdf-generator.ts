@@ -165,7 +165,7 @@ export const generateDocument = (data: DocumentData): jsPDF => {
             head: [data.table.columns],
             body: data.table.rows,
             startY: finalY,
-            margin: { right: margin, left: margin, bottom: 120 }, // Increased bottom margin
+            margin: { top: finalY, right: margin, left: margin, bottom: 120 }, // Increased bottom margin
             theme: 'striped',
             headStyles: { fillColor: [41, 128, 185], textColor: 255, font: 'Helvetica', fontStyle: 'bold' },
             styles: { font: 'Helvetica', fontSize: 9, cellPadding: 4 },
