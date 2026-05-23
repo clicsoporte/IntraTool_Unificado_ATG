@@ -97,7 +97,7 @@ export function useItemAssignmentsReport() {
                 ...a,
                 productName: products.find(p => p.id === a.itemId)?.description || a.itemId,
                 clientName: customers.find(c => c.id === a.clientId)?.name || '',
-                locationPath: renderLocationPathAsString(a.locationId, locations),
+                locationPath: a.cached_full_path || renderLocationPathAsString(a.locationId, locations),
             }));
 
             updateState({ data: enrichedData });

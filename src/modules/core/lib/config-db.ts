@@ -6,7 +6,7 @@
  */
 "use server";
 
-import { connectDb } from '@/modules/core/lib/db';
+import { getDb } from '@/modules/core/lib/db';
 import type { SqlConfig } from '@/modules/core/types';
 
 /**
@@ -14,9 +14,9 @@ import type { SqlConfig } from '@/modules/core/types';
  * @returns {Promise<SqlConfig | null>} The SQL configuration object, or null if not found.
  */
 export async function getSqlConfig(): Promise<SqlConfig | null> {
-    const db = await connectDb();
+    const db = await getDb();
     try {
-        const rows = db.prepare('SELECT key, value FROM sql_config').all() as {key: string, value: string}[];
+        const rows = db.prepare('SELECT key, value FROM core_sql_config').all() as {key: string, value: string}[];
         if (!rows || rows.length === 0) {
             // If there's no config in the DB, it hasn't been saved yet.
             return null;

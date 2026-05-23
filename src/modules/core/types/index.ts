@@ -24,6 +24,7 @@ export type User = {
   securityAnswer?: string;
   forcePasswordChange?: boolean | number;
   activeWizardSession?: string | null;
+  employeeId?: string | null;
 };
 
 /**
@@ -189,6 +190,7 @@ export type ApiSettings = {
     exchangeRateApi: string;
     haciendaExemptionApi: string;
     haciendaTributariaApi: string;
+    recopeApi?: string;
 };
 
 /**
@@ -500,6 +502,7 @@ export type WarehouseLocation = {
     lockedBySessionId?: string;
     population_status?: 'P' | 'O' | 'S' | 'F'; // Pending, Occupied, Skipped, Finished
     is_mixed?: 0 | 1;
+    cached_full_path?: string;
 };
 
 /** Tracks physical quantity in a specific location */
@@ -522,6 +525,7 @@ export type ItemLocation = {
     requiresCertificate?: 0 | 1;
     updatedBy?: string;
     updatedAt?: string;
+    cached_full_path?: string;
 };
 
 /** Represents a single physical unit of inventory (pallet, box, etc.) */
@@ -686,17 +690,16 @@ export type UpdateBackupInfo = {
 };
 
 export type AuditResult = {
-    moduleId: string;
-    moduleName: string;
-    dbFile: string;
-    status: 'OK' | 'ERROR';
-    issues: string[];
+    table: string;
+    status: 'ok' | 'missing_table' | 'missing_columns';
+    missingColumns: string[];
 };
 
 export type WizardSession = {
     rackId: number;
     levelIds: number[];
     currentIndex: number;
+    assignments?: { locationId: number; itemId: string }[];
 };
 
 
@@ -1078,8 +1081,8 @@ export interface EmailSettings {
   smtpUser: string;
   smtpPass: string;
   smtpSecure: boolean;
-  recoveryEmailSubject: string;
-  recoveryEmailBody: string;
+  recoveryEmailSubject?: string;
+  recoveryEmailBody?: string;
 }
 
 // --- IT Tools Module Types ---
@@ -1243,4 +1246,49 @@ export class AuthError extends Error {
   }
 }
 
-    
+
+// --- Notifications Engine Types ---
+
+export type NotificationEventId = 
+    | 'onTicketCreated' | 'onTicketStatusChanged' | 'onTicketCompleted' | 'onTicketCanceled' | 'onTicketReplyAdded' | 'onTicketPriorityUrgent' | 'onTicketVisitScheduled'
+    | 'onContractExpiring' | 'onContractAutoRenewed' | 'onLicenseExpiring' | 'onLicenseAssigned'
+    | 'onProjectCompleted' | 'onProjectAdvanceAdded'
+    | 'onNewSuggestion'
+    | 'onFleetMaintenanceDue' | 'onFleetPermitExpiring' | 'onFleetOdometerAnomaly' | 'onFleetFuelLogAdded' | 'onFleetMaintenanceLogAdded' | 'onFleetWeeklyFuelReport' | 'onFleetAlertsSummary'
+    | 'onStockLow' | 'onStockMovement';
+
+export type NotificationRule = {
+    id: number;
+    name: string;
+    event: NotificationEventId;
+    action: 'sendEmail' | 'sendTelegram';
+    recipients: string[];
+    subject?: string;
+    enabled: boolean;
+};
+
+export type NotificationTemplate = {
+    eventId: NotificationEventId;
+    subject: string;
+    body: string; // HTML
+    telegram: string; // Markdown/HTML for Telegram
+    internal: string; // Text for internal bell icon
+};
+
+export type ScheduledTask = {
+    id: number;
+    name: string;
+    schedule: string; // Cron expression
+    taskId: string; // Function identifier
+    lastRun?: string;
+    enabled: boolean;
+};
+
+export type NotificationServiceConfig = {
+    telegram?: {
+        botToken: string;
+        chatId: string;
+    };
+    smtp?: EmailSettings;
+};
+

@@ -23,7 +23,34 @@ Este documento registra todas las mejoras, correcciones y cambios significativos
 
 ---
 
-## [3.0.0] - En Desarrollo
+## [3.1.0] - En Desarrollo
+
+### Mono-Base de Datos y Normalización de Datos
+
+-   **[NUEVO] Arquitectura Mono-Base de Datos (`clic_tools.db`):**
+    -   Se ha unificado la persistencia de todos los módulos en un único archivo de base de datos SQLite.
+    -   Simplifica drásticamente el proceso de copias de seguridad (backups), restauraciones y mantenimiento del servidor.
+    -   Implementación de un **Singleton `getDb()`** para una gestión eficiente de conexiones.
+    -   Prefijado automático de tablas por módulo (ej: `core_`, `wh_`, `pl_`, `req_`, `con_`) para evitar colisiones.
+-   **[CALIDAD] Normalización Estricta de Identificadores:**
+    -   **Mayúsculas para IDs de Negocio:** Todos los códigos de producto (`productId`), clientes (`customerId`) y proveedores (`supplierId`) se normalizan automáticamente a **MAYÚSCULAS** antes de guardarse.
+    -   **Minúsculas para IDs de Sistema:** Los roles de usuario se normalizan a **minúsculas** para asegurar la consistencia en el control de acceso.
+    -   Esta normalización previene la duplicidad de datos por diferencias de capitalización y asegura que las búsquedas relacionales sean 100% fiables.
+-   **[SISTEMA] Orquestador de Migraciones Centralizado:**
+    -   Se ha implementado un sistema que inicializa y migra los esquemas de todos los módulos de forma secuencial y atómica durante el arranque de la aplicación.
+-   **[ESTABILIDAD] Corrección de Tipado en Importaciones:** Se han corregido errores de TypeScript en las funciones de importación del ERP y guardado de exenciones para soportar correctamente el manejo de fechas y normalización de strings.
+
+### Estándares de Diseño y Responsivo
+
+-   **[NUEVO] Estándar de Diseño Responsivo Premium (Mobile Bottom Sheet):**
+    -   Implementación de un nuevo patrón de diseño adaptativo para secciones complejas y flujos de trabajo con pestañas (`Tabs`) en dispositivos móviles.
+    -   En celulares y tablets pequeñas, las pestañas tradicionales horizontales se reemplazan por un menú vertical de acceso con botones/tarjetas de bordes redondeados (`rounded-2xl`), iconos con micro-backdrops en tonos pastel suaves e indicadores direccionales.
+    -   La visualización y captura de datos se realiza dentro de un **Panel Inferior Desplizable Premium (`Bottom Sheet Drawer`)** con scroll vertical independiente (`overflow-y-auto bg-slate-50`), aislando por completo los formularios complejos y evitando desbordamientos de página.
+    -   El botón de cierre (`X`) se ha rediseñado con enfoque táctil de alta gama: forma circular (`rounded-full`), tamaño de toque óptimo (`w-10 h-10`), fondo de contraste suave (`bg-slate-100 hover:bg-slate-200`) e icono de cierre ampliado a `h-5 w-5`.
+
+---
+
+## [3.0.0] - Publicado
 
 ### Funcionalidades y Mejoras Principales
 

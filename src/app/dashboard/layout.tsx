@@ -14,6 +14,7 @@ import { useAuth, REDIRECT_URL_KEY } from "@/modules/core/hooks/useAuth";
 import { useEffect } from "react";
 import { Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { AutomationTrigger } from "@/components/automation-trigger";
 
 function DashboardContent({ children }: { children: React.ReactNode }) {
   const { title } = usePageTitle();
@@ -48,6 +49,12 @@ export default function DashboardLayout({
         sessionStorage.setItem(REDIRECT_URL_KEY, fullPath);
       }
       router.replace('/');
+    } else if (isAuthReady && user?.forcePasswordChange) {
+      // If user must change password, force them to profile page unless they are already there
+      const currentPath = window.location.pathname;
+      if (currentPath !== '/dashboard/profile') {
+        router.replace('/dashboard/profile?forceChange=true');
+      }
     }
   }, [isAuthReady, user, router]);
 
@@ -72,6 +79,7 @@ export default function DashboardLayout({
                 <DashboardContent>{children}</DashboardContent>
             </SidebarInset>
           </div>
+          <AutomationTrigger />
         </SidebarProvider>
       </PageTitleProvider>
   );

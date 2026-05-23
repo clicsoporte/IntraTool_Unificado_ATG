@@ -4,7 +4,7 @@
 'use server';
 
 import { getCompletedOrdersByDateRange, getPlannerSettings } from '@/modules/planner/lib/db';
-import { getAllRoles, getAllSuppliers, getAllStock, getAllCustomers, getAllProducts, connectDb, getAnalyticsSettings } from '@/modules/core/lib/db';
+import { getAllRoles, getAllSuppliers, getAllStock, getAllCustomers, getAllProducts, getDb, getAnalyticsSettings } from '@/modules/core/lib/db';
 import { getAllUsersForReport } from '@/modules/core/lib/auth';
 import type { DateRange, ProductionOrder, PlannerSettings, ProductionOrderHistoryEntry, Product, User, Role, ErpPurchaseOrderLine, ErpPurchaseOrderHeader, Supplier, StockInfo, PhysicalInventoryComparisonItem, ItemLocation, WarehouseLocation, InventoryUnit, WarehouseSettings, AnalyticsSettings, RestockBoleta, BoletaLine, BoletaHistory, ConsignmentProduct, ConsignmentReportRow, PeriodClosure, ConsignmentAdjustment, PhysicalCount, TransitStatusAlias, BoletaType } from '@/modules/core/types';
 import { differenceInDays, parseISO, format } from 'date-fns';
@@ -45,8 +45,10 @@ export async function getProductionReportData({ dateRange, filters = {} }: { dat
         getAllProducts(),
     ]);
 
+    const normalizedProductId = filters.productId?.toUpperCase();
+
     const filteredOrders = allOrders.filter((order: ProductionOrder) => {
-        if (filters.productId && order.productId !== filters.productId) {
+        if (normalizedProductId && order.productId !== normalizedProductId) {
             return false;
         }
         if (filters.machineIds && filters.machineIds.length > 0 && (!order.machineId || !filters.machineIds.includes(order.machineId))) {
@@ -177,7 +179,7 @@ const renderLocationPathAsString = (locationId: number, locations: any[]): strin
 export async function getPhysicalInventoryReportData({ dateRange }: { dateRange?: DateRange }): Promise<{ comparisonData: PhysicalInventoryComparisonItem[], allLocations: WarehouseLocation[] }> {
     try {
         const [physicalInventory, erpStock, allProducts, allLocations, allItemLocations, selectableLocations] = await Promise.all([
-            getInventoryUnits({ dateRange, includeVoided: false, statuses: ['applied'] }),
+            getPhysicalInventory(dateRange),
             getAllStock(),
             getAllProducts(),
             getWarehouseLocations(),
@@ -194,20 +196,21 @@ export async function getPhysicalInventoryReportData({ dateRange }: { dateRange?
         });
 
         const comparisonData: PhysicalInventoryComparisonItem[] = physicalInventory.map(item => {
-            const erpQuantity = erpStockMap.get(item.productId) ?? 0;
+            const productId = item.itemId;
+            const erpQuantity = erpStockMap.get(productId) ?? 0;
             const location = item.locationId ? locationMap.get(item.locationId) : undefined;
             return {
-                productId: item.productId,
-                productDescription: productMap.get(item.productId) || 'Producto Desconocido',
+                productId: productId,
+                productDescription: productMap.get(productId) || 'Producto Desconocido',
                 locationId: item.locationId!,
                 locationName: location?.name || 'Ubicación Desconocida',
                 locationCode: location?.code || 'N/A',
                 physicalCount: item.quantity,
                 erpStock: erpQuantity,
                 difference: item.quantity - erpQuantity,
-                lastCountDate: item.appliedAt || item.createdAt,
-                updatedBy: item.appliedBy || item.createdBy,
-                assignedLocationPath: itemLocationMap.get(item.productId) || 'Sin Asignar',
+                lastCountDate: item.lastUpdated,
+                updatedBy: item.updatedBy,
+                assignedLocationPath: itemLocationMap.get(productId) || 'Sin Asignar',
             };
         });
 
@@ -285,8 +288,8 @@ export async function getOccupancyReportData(): Promise<{ reportRows: OccupancyR
 }
 
 export async function getInventoryMonitorData(agreementId: number): Promise<any> {
-    const mainDb = await connectDb();
-    const productMap = new Map((await mainDb.prepare('SELECT id, description FROM products').all() as Product[]).map(p => [p.id, p.description]));
+    const mainDb = await getDb();
+    const productMap = new Map((await mainDb.prepare('SELECT id, description FROM core_products').all() as Product[]).map(p => [p.id, p.description]));
 
     const lastClosure = await getLatestApprovedClosure(agreementId);
     const startDate = lastClosure ? new Date(lastClosure.created_at) : new Date(0); // From beginning of time if no closure

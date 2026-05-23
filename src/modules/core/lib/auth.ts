@@ -6,7 +6,7 @@
  */
 "use server";
 
-import { connectDb, getAllRoles, getCompanySettings, getAllCustomers, getAllProducts, getAllStock, getAllExemptions, getExemptionLaws, getUnreadSuggestions, getDbModules, getStockSettings, getWarehouseData } from './db';
+import { getDb, getAllRoles, getCompanySettings, getAllCustomers, getAllProducts, getAllStock, getAllExemptions, getExemptionLaws, getUnreadSuggestions, getDbModules, getStockSettings, getWarehouseData } from './db';
 import { sendEmail, getEmailSettings as getEmailSettingsFromDb } from './email-service';
 import type { User, ExchangeRateApiResponse, EmailSettings, Role } from '@/modules/core/types';
 import bcrypt from 'bcryptjs';
@@ -14,14 +14,8 @@ import { logInfo, logWarn, logError } from './logger';
 import { headers, cookies } from 'next/headers';
 import { getExchangeRate, getEmailSettings } from './api-actions';
 import { NewUserSchema, UserSchema } from './auth-schemas';
-import { initializePlannerDb, runPlannerMigrations } from '../../planner/lib/db';
-import { initializeRequestsDb, runRequestMigrations } from '../../requests/lib/db';
-import { initializeWarehouseDb, runWarehouseMigrations, getLocations as getWarehouseLocationsDb, getInventory as getWarehouseInventoryDb, getAllItemLocations as getAllItemLocationsDb } from '../../warehouse/lib/db';
-import { initializeCostAssistantDb, runCostAssistantMigrations } from '../../cost-assistant/lib/db';
-import { initializeOperationsDb, runOperationsMigrations } from '../../operations/lib/db';
-import { initializeItToolsDb, runItToolsMigrations } from '../../it-tools/lib/db';
-import { initializeConsignmentsDb, runConsignmentsMigrations } from '../../consignments/lib/db';
 import { revalidatePath } from 'next/cache';
+import { authorizeAction } from './auth-guard';
 
 const SALT_ROUNDS = 10;
 const SESSION_COOKIE_NAME = 'clic-tools-session';
@@ -35,14 +29,14 @@ const SESSION_DURATION = 8 * 60 * 60 * 1000; // 8 hours in milliseconds
  * @returns A promise that resolves to true if the user has permission, false otherwise.
  */
 export async function hasPermission(userId: number, permission: string): Promise<boolean> {
-    const db = await connectDb();
+    const db = await getDb();
     try {
-        const userRoleInfo = db.prepare('SELECT role FROM users WHERE id = ?').get(userId) as { role: string } | undefined;
+        const userRoleInfo = db.prepare('SELECT role FROM core_users WHERE id = ?').get(userId) as { role: string } | undefined;
 
         if (!userRoleInfo) return false;
         if (userRoleInfo.role === 'admin') return true; // Admins have all permissions
 
-        const role = db.prepare('SELECT permissions FROM roles WHERE id = ?').get(userRoleInfo.role) as { permissions: string } | undefined;
+        const role = db.prepare('SELECT permissions FROM core_roles WHERE id = ?').get(userRoleInfo.role) as { permissions: string } | undefined;
         if (!role) return false;
 
         const permissions: string[] = JSON.parse(role.permissions);
@@ -70,13 +64,21 @@ export async function login(email: string, passwordProvided: string): Promise<{ 
     ip: headerList.get("x-forwarded-for") || "N/A",
     host: headerList.get("host") || "N/A",
   };
-  const db = await connectDb();
+  const db = await getDb();
   const logMeta = { email, ...clientInfo };
   try {
-    const stmt = db.prepare('SELECT * FROM users WHERE email = ?');
+    const stmt = db.prepare('SELECT * FROM core_users WHERE email = ?');
     const user: User | undefined = stmt.get(email) as User | undefined;
 
     if (user && user.password) {
+      if (user.employeeId) {
+        const emp = db.prepare('SELECT ACTIVO FROM core_employees WHERE EMPLEADO = ?').get(user.employeeId) as { ACTIVO: string } | undefined;
+        if (emp && emp.ACTIVO === 'N') {
+          await logWarn(`Failed login attempt for email: ${email} - Linked employee is inactive.`, logMeta);
+          return { user: null, forcePasswordChange: false };
+        }
+      }
+
       const isMatch = await bcrypt.compare(passwordProvided, user.password);
       if (isMatch) {
         const { password: _, ...userWithoutPassword } = user;
@@ -110,8 +112,8 @@ export async function logout(): Promise<void> {
     
     if (sessionCookie && sessionCookie.value) {
         const userId = Number(sessionCookie.value);
-        const db = await connectDb();
-        const user = db.prepare('SELECT name FROM users WHERE id = ?').get(userId) as { name: string } | undefined;
+        const db = await getDb();
+        const user = db.prepare('SELECT name FROM core_users WHERE id = ?').get(userId) as { name: string } | undefined;
         if (user) {
             await logInfo(`User '${user.name}' logged out.`, { userId });
         }
@@ -134,9 +136,9 @@ export async function logout(): Promise<void> {
  * @returns {Promise<User[]>} A promise that resolves to an array of all users, including password hashes.
  */
 async function getAllUsersWithPasswords(): Promise<User[]> {
-    const db = await connectDb();
+    const db = await getDb();
     try {
-        const stmt = db.prepare('SELECT * FROM users ORDER BY name');
+        const stmt = db.prepare('SELECT * FROM core_users ORDER BY name');
         return stmt.all() as User[];
     } catch (error) {
         console.error("Failed to get all users:", error);
@@ -150,6 +152,7 @@ async function getAllUsersWithPasswords(): Promise<User[]> {
  * @returns {Promise<User[]>} A promise that resolves to an array of all users without passwords.
  */
 export async function getAllUsers(): Promise<User[]> {
+    await authorizeAction('users:read');
     const users = await getAllUsersWithPasswords();
     return users.map(u => {
         const { password: _, ...userWithoutPassword } = u;
@@ -163,9 +166,10 @@ export async function getAllUsers(): Promise<User[]> {
  * @returns {Promise<User[]>} A promise that resolves to an array of all users without passwords.
  */
 export async function getAllUsersForReport(): Promise<User[]> {
-    const db = await connectDb();
+    await authorizeAction('users:read');
+    const db = await getDb();
     try {
-        const stmt = db.prepare('SELECT * FROM users ORDER BY name');
+        const stmt = db.prepare('SELECT * FROM core_users ORDER BY name');
         const users = stmt.all() as User[];
         return users.map(u => {
             const { password: _, ...userWithoutPassword } = u;
@@ -183,14 +187,15 @@ export async function getAllUsersForReport(): Promise<User[]> {
  * @returns The newly created user object, without the password hash.
  */
 export async function addUser(userData: Omit<User, 'id' | 'avatar' | 'recentActivity' | 'securityQuestion' | 'securityAnswer'> & { password: string, forcePasswordChange: boolean }): Promise<User> {
-  const db = await connectDb();
+  await authorizeAction('users:create');
+  const db = await getDb();
   const validationResult = NewUserSchema.safeParse(userData);
   if (!validationResult.success) {
       throw new Error(`Validation failed: ${validationResult.error.errors.map(e => e.message).join(', ')}`);
   }
   
   const hashedPassword = bcrypt.hashSync(validationResult.data.password, SALT_ROUNDS);
-  const highestIdResult = db.prepare('SELECT MAX(id) as maxId FROM users').get() as { maxId: number | null };
+  const highestIdResult = db.prepare('SELECT MAX(id) as maxId FROM core_users').get() as { maxId: number | null };
   const nextId = (highestIdResult.maxId || 0) + 1;
 
   const userToCreate: User = {
@@ -205,11 +210,12 @@ export async function addUser(userData: Omit<User, 'id' | 'avatar' | 'recentActi
     whatsapp: validationResult.data.whatsapp || "",
     erpAlias: validationResult.data.erpAlias || "",
     forcePasswordChange: validationResult.data.forcePasswordChange,
+    employeeId: validationResult.data.employeeId || null,
   };
   
   const stmt = db.prepare(
-    `INSERT INTO users (id, name, email, password, phone, whatsapp, erpAlias, avatar, role, recentActivity, securityQuestion, securityAnswer, forcePasswordChange) 
-     VALUES (@id, @name, @email, @password, @phone, @whatsapp, @erpAlias, @avatar, @role, @recentActivity, @securityQuestion, @securityAnswer, @forcePasswordChange)`
+    `INSERT INTO core_users (id, name, email, password, phone, whatsapp, erpAlias, avatar, role, recentActivity, securityQuestion, securityAnswer, forcePasswordChange, employeeId) 
+     VALUES (@id, @name, @email, @password, @phone, @whatsapp, @erpAlias, @avatar, @role, @recentActivity, @securityQuestion, @securityAnswer, @forcePasswordChange, @employeeId)`
   );
   
   stmt.run({
@@ -220,6 +226,7 @@ export async function addUser(userData: Omit<User, 'id' | 'avatar' | 'recentActi
     securityQuestion: userToCreate.securityQuestion || null,
     securityAnswer: userToCreate.securityAnswer || null,
     forcePasswordChange: userToCreate.forcePasswordChange ? 1 : 0,
+    employeeId: userToCreate.employeeId || null,
   });
 
   const { password: _, ...userWithoutPassword } = userToCreate;
@@ -235,7 +242,8 @@ export async function addUser(userData: Omit<User, 'id' | 'avatar' | 'recentActi
  * @returns {Promise<User>} The updated user object without password.
  */
 export async function updateUser(user: User): Promise<User> {
-    const db = await connectDb();
+    await authorizeAction('users:update');
+    const db = await getDb();
     const validationResult = UserSchema.safeParse(user);
     if (!validationResult.success) {
         throw new Error(`Validation failed: ${validationResult.error.errors.map(e => e.message).join(', ')}`);
@@ -251,7 +259,7 @@ export async function updateUser(user: User): Promise<User> {
         }
     } else {
         // If no password is provided, fetch the existing one to avoid erasing it.
-        const existingUser = db.prepare('SELECT password FROM users WHERE id = ?').get(validatedUser.id) as { password?: string };
+        const existingUser = db.prepare('SELECT password FROM core_users WHERE id = ?').get(validatedUser.id) as { password?: string };
         passwordToSave = existingUser?.password;
     }
 
@@ -264,15 +272,16 @@ export async function updateUser(user: User): Promise<User> {
         securityQuestion: validatedUser.securityQuestion || null,
         securityAnswer: validatedUser.securityAnswer || null,
         forcePasswordChange: validatedUser.forcePasswordChange ? 1 : 0,
+        employeeId: validatedUser.employeeId || null,
     };
     
     db.prepare(`
-        UPDATE users SET
+        UPDATE core_users SET
             name = @name, email = @email, password = @password,
             phone = @phone, whatsapp = @whatsapp, erpAlias = @erpAlias,
             avatar = @avatar, role = @role, recentActivity = @recentActivity,
             securityQuestion = @securityQuestion, securityAnswer = @securityAnswer,
-            forcePasswordChange = @forcePasswordChange
+            forcePasswordChange = @forcePasswordChange, employeeId = @employeeId
         WHERE id = @id
     `).run(userToUpdate);
     
@@ -286,11 +295,12 @@ export async function updateUser(user: User): Promise<User> {
  * @param {number} userId - The ID of the user to delete.
  */
 export async function deleteUser(userId: number): Promise<void> {
-    const db = await connectDb();
+    await authorizeAction('users:delete');
+    const db = await getDb();
     if (userId === 1) {
         throw new Error("No se puede eliminar al usuario administrador principal.");
     }
-    db.prepare('DELETE FROM users WHERE id = ?').run(userId);
+    db.prepare('DELETE FROM core_users WHERE id = ?').run(userId);
     revalidatePath('/dashboard/admin/users');
 }
 
@@ -303,21 +313,22 @@ export async function deleteUser(userId: number): Promise<void> {
  * @returns {Promise<void>}
  */
 export async function saveAllUsers(users: User[]): Promise<void> {
-   const db = await connectDb();
+   await authorizeAction('users:update');
+   const db = await getDb();
    const upsert = db.prepare(`
-    INSERT INTO users (id, name, email, password, phone, whatsapp, erpAlias, avatar, role, recentActivity, securityQuestion, securityAnswer, forcePasswordChange) 
-    VALUES (@id, @name, @email, @password, @phone, @whatsapp, @erpAlias, @avatar, @role, @recentActivity, @securityQuestion, @securityAnswer, @forcePasswordChange)
+    INSERT INTO core_users (id, name, email, password, phone, whatsapp, erpAlias, avatar, role, recentActivity, securityQuestion, securityAnswer, forcePasswordChange, employeeId) 
+    VALUES (@id, @name, @email, @password, @phone, @whatsapp, @erpAlias, @avatar, @role, @recentActivity, @securityQuestion, @securityAnswer, @forcePasswordChange, @employeeId)
     ON CONFLICT(id) DO UPDATE SET
         name = excluded.name, email = excluded.email, password = excluded.password,
         phone = excluded.phone, whatsapp = excluded.whatsapp, erpAlias = excluded.erpAlias,
         avatar = excluded.avatar, role = excluded.role, recentActivity = excluded.recentActivity,
         securityQuestion = excluded.securityQuestion, securityAnswer = excluded.securityAnswer,
-        forcePasswordChange = excluded.forcePasswordChange
+        forcePasswordChange = excluded.forcePasswordChange, employeeId = excluded.employeeId
    `);
 
     const transaction = db.transaction((usersToSave: User[]) => {
         const existingUsersMap = new Map<number, { pass: string | undefined; force: boolean | number | undefined }>(
-            (db.prepare('SELECT id, password, forcePasswordChange FROM users').all() as User[]).map(u => [u.id, { pass: u.password, force: u.forcePasswordChange }])
+            (db.prepare('SELECT id, password, forcePasswordChange FROM core_users').all() as User[]).map(u => [u.id, { pass: u.password, force: u.forcePasswordChange }])
         );
 
         for (const user of usersToSave) {
@@ -340,11 +351,16 @@ export async function saveAllUsers(users: User[]): Promise<void> {
           }
 
           const userToInsert = {
-            ...validatedUser, password: passwordToSave,
-            phone: validatedUser.phone || null, whatsapp: validatedUser.whatsapp || null,
-            erpAlias: validatedUser.erpAlias || null, securityQuestion: validatedUser.securityQuestion || null,
+            ...validatedUser, 
+            password: passwordToSave,
+            role: validatedUser.role.toLowerCase(),
+            phone: validatedUser.phone || null, 
+            whatsapp: validatedUser.whatsapp || null,
+            erpAlias: validatedUser.erpAlias || null, 
+            securityQuestion: validatedUser.securityQuestion || null,
             securityAnswer: validatedUser.securityAnswer || null,
             forcePasswordChange: validatedUser.forcePasswordChange ? 1 : 0,
+            employeeId: validatedUser.employeeId || null,
           };
           upsert.run(userToInsert);
         }
@@ -372,8 +388,8 @@ export async function comparePasswords(userId: number, password: string): Promis
       ip: headerList.get("x-forwarded-for") || "N/A",
       host: headerList.get("host") || "N/A",
     };
-    const db = await connectDb();
-    const user = db.prepare('SELECT password FROM users WHERE id = ?').get(userId) as User | undefined;
+    const db = await getDb();
+    const user = db.prepare('SELECT password FROM core_users WHERE id = ?').get(userId) as User | undefined;
     if (!user || !user.password) return false;
     
     const isMatch = await bcrypt.compare(password, user.password);
@@ -400,11 +416,31 @@ export async function getCurrentUser(): Promise<User | null> {
     }
 
     try {
-        const db = await connectDb();
-        const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as User | undefined;
+        const db = await getDb();
+        const user = db.prepare('SELECT * FROM core_users WHERE id = ?').get(userId) as User | undefined;
 
         if (!user) {
             return null;
+        }
+
+        if (user.employeeId) {
+            const emp = db.prepare('SELECT ACTIVO FROM core_employees WHERE EMPLEADO = ?').get(user.employeeId) as { ACTIVO: string } | undefined;
+            if (emp && emp.ACTIVO === 'N') {
+                await logWarn(`Deactivated employee session lockout for user ID: ${userId}, employee ID: ${user.employeeId}`);
+                try {
+                    const useSecureCookie = process.env.CLIC_TOOLS_COOKIE_SECURE === 'true';
+                    cookieStore.set(SESSION_COOKIE_NAME, '', {
+                        httpOnly: true,
+                        secure: useSecureCookie,
+                        maxAge: 0,
+                        path: '/',
+                        sameSite: 'lax',
+                    });
+                } catch (cookieError) {
+                    // Next.js might throw an error if cookies are modified during page render
+                }
+                return null;
+            }
         }
 
         const { password: _, ...userWithoutPassword } = user;
@@ -421,10 +457,10 @@ export async function getCurrentUser(): Promise<User | null> {
  */
 export async function getInitialAuthData() {
   try {
-      const db = await connectDb();
+      const db = await getDb();
       const dbModules = await getDbModules();
       for (const dbModule of dbModules) {
-          await connectDb(dbModule.dbFile);
+          await getDb(); // This just ensures connection is open, though getDb() is singleton anyway
       }
       
       const [
@@ -466,10 +502,10 @@ export async function sendPasswordRecoveryEmail(email: string): Promise<void> {
       ip: headerList.get("x-forwarded-for") || "N/A",
       host: headerList.get("host") || "N/A",
     };
-    const db = await connectDb();
+    const db = await getDb();
     const logMeta = { email, ...clientInfo };
 
-    const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email) as User | undefined;
+    const user = db.prepare('SELECT * FROM core_users WHERE email = ?').get(email) as User | undefined;
     if (!user) {
         await logWarn('Password recovery requested for non-existent email.', logMeta);
         return;
@@ -478,7 +514,7 @@ export async function sendPasswordRecoveryEmail(email: string): Promise<void> {
     const tempPassword = Math.random().toString(36).slice(-8);
     const hashedPassword = await bcrypt.hash(tempPassword, SALT_ROUNDS);
 
-    db.prepare('UPDATE users SET password = ?, forcePasswordChange = 1 WHERE id = ?')
+    db.prepare('UPDATE core_users SET password = ?, forcePasswordChange = 1 WHERE id = ?')
       .run(hashedPassword, user.id);
 
     try {

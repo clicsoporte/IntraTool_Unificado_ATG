@@ -208,7 +208,7 @@ export default function SimpleWarehouseSearchPage() {
     const searchResult = useMemo((): SearchResultItem | null => {
         if (!lastSearchedItem) return null;
 
-        const erpStock = stock.find(s => s.itemId === lastSearchedItem.id) || null;
+        const erpStock = stock.find(s => s.itemId.toUpperCase() === lastSearchedItem.id.toUpperCase()) || null;
         
         const physicalLocations = inventory
             .filter(inv => inv.itemId === lastSearchedItem.id)

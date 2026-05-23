@@ -7,66 +7,51 @@
 import type { DatabaseModule } from '@/modules/core/types';
 
 // Import schema definitions
-import { plannerSchema } from '../../planner/lib/schema';
-import { requestSchema } from '../../requests/lib/schema';
-import { warehouseSchema } from '../../warehouse/lib/schema';
-import { costAssistantSchema } from '../../cost-assistant/lib/schema';
-import { operationsSchema } from '../../operations/lib/schema';
-import { itToolsSchema } from '../../it-tools/lib/schema';
-import { consignmentsSchema } from '../../consignments/lib/schema';
-import { mainDbSchema } from './schema';
+import { CORE_TABLES } from './schema';
 
 /**
  * Acts as a registry for all database modules in the application.
  * This is the single source of truth for module definitions, containing only configuration data.
  */
-export const DB_MODULES: Omit<DatabaseModule, 'initFn' | 'migrationFn'>[] = [
+export const DB_MODULES: { id: string, name: string, dbFile: string }[] = [
     { 
         id: 'clic-tools-main', 
         name: 'Clic-Tools (Sistema Principal)', 
-        dbFile: 'intratool.db', 
-        schema: mainDbSchema,
+        dbFile: 'clic_tools.db', 
     },
     { 
         id: 'purchase-requests', 
         name: 'Solicitud de Compra', 
-        dbFile: 'requests.db', 
-        schema: requestSchema,
+        dbFile: 'clic_tools.db', 
     },
     { 
         id: 'production-planner', 
         name: 'Planificador de Producción', 
-        dbFile: 'planner.db', 
-        schema: plannerSchema,
+        dbFile: 'clic_tools.db', 
     },
     { 
         id: 'warehouse-management', 
         name: 'Gestión de Almacenes', 
-        dbFile: 'warehouse.db', 
-        schema: warehouseSchema,
+        dbFile: 'clic_tools.db', 
     },
     { 
         id: 'cost-assistant', 
         name: 'Asistente de Costos', 
-        dbFile: 'cost_assistant.db', 
-        schema: costAssistantSchema,
+        dbFile: 'clic_tools.db', 
     },
     {
         id: 'operations',
         name: 'Centro de Operaciones',
-        dbFile: 'operations.db',
-        schema: operationsSchema,
+        dbFile: 'clic_tools.db',
     },
     {
         id: 'it-tools',
         name: 'Herramientas de TI',
-        dbFile: 'it_tools.db',
-        schema: itToolsSchema,
+        dbFile: 'clic_tools.db',
     },
     {
         id: 'consignments',
         name: 'Gestión de Consignaciones',
-        dbFile: 'consignments.db',
-        schema: consignmentsSchema,
+        dbFile: 'clic_tools.db',
     }
 ];

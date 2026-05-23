@@ -11,7 +11,7 @@ import {
     deleteSuggestion as dbDeleteSuggestion, 
     getUnreadSuggestions as dbGetUnreadSuggestions,
     getUnreadSuggestionsCount as dbGetUnreadSuggestionsCount,
-    connectDb,
+    getDb,
 } from '@/modules/core/lib/db';
 import type { Suggestion } from '@/modules/core/types';
 import { logInfo, logError } from '@/modules/core/lib/logger';
@@ -66,11 +66,11 @@ export async function getUnreadSuggestionsCount(): Promise<number> {
  * @param userName - The name of the user submitting the suggestion.
  */
 export async function addSuggestion(content: string, userId: number, userName: string): Promise<void> {
-    const db = await connectDb();
+    const db = await getDb();
     let newSuggestionId;
     try {
         const info = db.prepare(`
-            INSERT INTO suggestions (content, userId, userName, isRead, timestamp)
+            INSERT INTO core_suggestions (content, userId, userName, isRead, timestamp)
             VALUES (?, ?, ?, 0, ?)
         `).run(content, userId, userName, new Date().toISOString());
         newSuggestionId = info.lastInsertRowid;

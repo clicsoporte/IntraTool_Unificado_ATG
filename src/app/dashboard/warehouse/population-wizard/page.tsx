@@ -113,7 +113,7 @@ export default function PopulationWizardPage() {
                     <CardContent className="space-y-6 text-center">
                         <div>
                             <Label className="text-muted-foreground">Ubicación Actual</Label>
-                            <p className="text-2xl font-bold">{selectors.renderLocationPathAsString(locationsToPopulate[currentIndex]?.id, state.allLocations)}</p>
+                            <p className="text-2xl font-bold">{selectors.renderLocationPathAsString(locationsToPopulate[currentIndex]?.id)}</p>
                         </div>
                          <div className="flex flex-col gap-4">
                             <SearchInput

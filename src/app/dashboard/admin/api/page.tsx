@@ -47,6 +47,7 @@ const initialApiSettings: ApiSettings = {
     exchangeRateApi: "https://api.hacienda.go.cr/indicadores/tc/dolar",
     haciendaExemptionApi: "https://api.hacienda.go.cr/fe/ex?autorizacion=",
     haciendaTributariaApi: "https://api.hacienda.go.cr/fe/ae?identificacion=",
+    recopeApi: "",
 }
 
 const emptyLaw: ExemptionLaw = {
@@ -198,6 +199,14 @@ export default function ApiSettingsPage() {
                       <Input 
                         id="haciendaTributariaApi" 
                         value={apiSettings.haciendaTributariaApi || ''}
+                        onChange={handleApiChange}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="recopeApi">API Recope Precios combustible</Label>
+                      <Input 
+                        id="recopeApi" 
+                        value={apiSettings.recopeApi || ''}
                         onChange={handleApiChange}
                       />
                     </div>

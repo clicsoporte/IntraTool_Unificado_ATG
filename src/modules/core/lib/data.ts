@@ -34,6 +34,7 @@ export const initialCompany: Omit<Company, 'id'> = {
   searchDebounceTime: 500,
   syncWarningHours: 12,
   importMode: 'file',
+  systemVersion: "3.0.0",
 };
 
 /**
@@ -110,8 +111,16 @@ export const mainTools: Tool[] = [
     icon: Warehouse,
     bgColor: "bg-cyan-600",
   },
-     {
-      id: "hacienda:query",
+  {
+    id: "fleet:access",
+    name: "Gestión de Flota",
+    description: "Control de combustible, mantenimiento y activos.",
+    href: "/dashboard/fleet",
+    icon: Truck,
+    bgColor: "bg-blue-600",
+  },
+  {
+    id: "hacienda:query",
       name: "Consultas Hacienda",
       description: "Verificar situación tributaria y exoneraciones.",
       href: "/dashboard/hacienda",
@@ -328,7 +337,7 @@ export const adminTools: Tool[] = [
       },
       {
         id: "roles:read",
-        name: "Gestión de Roles",
+        name: "Gestion de Roles",
         description: "Definir roles y asignar permisos granulares.",
         href: "/dashboard/admin/roles",
         icon: ShieldCheck,
@@ -439,12 +448,28 @@ export const adminTools: Tool[] = [
         bgColor: 'bg-lime-500',
       },
       {
+        id: "fleet:settings:manage",
+        name: "Config. Flota",
+        description: "Gestionar marcas, combustibles y tipos de permiso.",
+        href: "/dashboard/admin/fleet",
+        icon: Truck,
+        bgColor: 'bg-blue-600',
+      },
+      {
         id: "admin:logs:read",
         name: "Visor de Eventos",
         description: "Revisar los registros y errores del sistema.",
         href: "/dashboard/admin/logs",
         icon: FileTerminal,
         bgColor: 'bg-gray-500',
+      },
+      {
+        id: "admin:settings:automations",
+        name: "Automatizaciones y Alertas",
+        description: "Configurar el motor de eventos, plantillas y tareas Cron.",
+        href: "/dashboard/admin/automations",
+        icon: BellRing,
+        bgColor: 'bg-pink-600',
       }
 ];
 

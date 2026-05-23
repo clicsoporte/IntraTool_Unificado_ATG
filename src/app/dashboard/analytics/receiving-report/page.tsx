@@ -125,18 +125,26 @@ export default function ReceivingReportPage() {
                                 ) : sortedData.length > 0 ? (
                                     sortedData.map(item => (
                                         <TableRow key={item.id} className={cn(item.quantity === 0 && 'bg-destructive/10 text-destructive')}>
-                                            {visibleColumns.map(colId => {
-                                                const { content, className, type } = selectors.getColumnContent(item, colId);
-                                                return (
-                                                    <TableCell key={colId} className={cn(className, item.quantity === 0 && 'text-destructive')}>
-                                                        {type === 'badge' ? (
-                                                            <Badge variant={content.variant as any}>{content.text}</Badge>
-                                                        ) : (
-                                                            content
-                                                        )}
-                                                    </TableCell>
-                                                )
-                                            })}
+                                             {visibleColumns.map(colId => {
+                                                 const { content, className, type, variant } = selectors.getColumnContent(item, colId);
+                                                 return (
+                                                     <TableCell key={colId} className={cn(className, item.quantity === 0 && 'text-destructive')}>
+                                                         {type === 'badge' ? (
+                                                             <Badge variant={variant as any}>{content}</Badge>
+                                                         ) : type === 'multiline' && Array.isArray(content) ? (
+                                                             <div className="flex flex-col">
+                                                                 {content.map((line: any, idx: number) => (
+                                                                     <span key={idx} className={line.className || ''}>
+                                                                         {line.text}
+                                                                     </span>
+                                                                 ))}
+                                                             </div>
+                                                         ) : (
+                                                             content
+                                                         )}
+                                                     </TableCell>
+                                                 )
+                                             })}
                                         </TableRow>
                                     ))
                                 ) : (

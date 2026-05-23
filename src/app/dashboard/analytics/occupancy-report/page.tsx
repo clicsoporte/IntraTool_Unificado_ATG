@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Input } from '@/components/ui/input';
-import { Loader2, Search, FilterX, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, FileSpreadsheet } from 'lucide-react';
+import { Loader2, Search, FilterX, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, FileSpreadsheet, ChevronDown, Info } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
@@ -17,7 +17,23 @@ import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@
 import { Label } from '@/components/ui/label';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { DialogColumnSelector } from '@/components/ui/dialog-column-selector';
-import { Info } from 'lucide-react';
+import { 
+    Dialog, 
+    DialogContent, 
+    DialogDescription,
+    DialogFooter, 
+    DialogHeader, 
+    DialogTitle, 
+    DialogClose 
+} from '@/components/ui/dialog';
+import { 
+    DropdownMenu, 
+    DropdownMenuContent, 
+    DropdownMenuItem, 
+    DropdownMenuTrigger 
+} from '@/components/ui/dropdown-menu';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 
 // This new component handles rendering the tooltip for mixed items.
 const ItemsTooltipContent = ({ items }: { items: OccupancyReportRow['items'] }) => {
@@ -46,6 +62,9 @@ export default function OccupancyReportPage() {
         isAuthorized,
         isInitialLoading,
     } = useOccupancyReport();
+
+    const [selectedLocationForDetails, setSelectedLocationForDetails] = React.useState<OccupancyReportRow | null>(null);
+    const [isDetailsDialogOpen, setIsDetailsDialogOpen] = React.useState(false);
 
     const { isLoading, searchTerm, sortKey, sortDirection, statusFilter, classificationFilter, clientFilter, rackFilter, levelFilter, rowsPerPage, currentPage, visibleColumns, hasRun } = state;
     const { paginatedData, classifications, clients, rackOptions, levelOptions } = selectors;
@@ -149,7 +168,25 @@ export default function OccupancyReportPage() {
                                 onColumnChange={actions.handleColumnVisibilityChange}
                                 onSave={actions.savePreferences}
                             />
-                            <Button variant="outline" onClick={actions.handleExportExcel} disabled={isLoading || paginatedData.length === 0}><FileSpreadsheet className="mr-2"/>Exportar Excel</Button>
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button variant="outline" disabled={isLoading || paginatedData.length === 0}>
+                                        <FileSpreadsheet className="mr-2 h-4 w-4" />
+                                        Exportar Excel
+                                        <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-56">
+                                    <DropdownMenuItem onClick={actions.handleExportExcel} className="cursor-pointer">
+                                        <FileSpreadsheet className="mr-2 h-4 w-4 text-emerald-600" />
+                                        <span>Resumen (por Ubicación)</span>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onClick={actions.handleExportDetailedExcel} className="cursor-pointer">
+                                        <FileSpreadsheet className="mr-2 h-4 w-4 text-sky-600" />
+                                        <span>Detalle (por Artículo)</span>
+                                    </DropdownMenuItem>
+                                </DropdownMenuContent>
+                            </DropdownMenu>
                         </div>
                     </div>
                 </CardHeader>
@@ -185,10 +222,26 @@ export default function OccupancyReportPage() {
                                                 {selectors.visibleColumnsData.map((col) => {
                                                      const { content, className } = selectors.renderCellContent(item, col.id);
                                                     return (
-                                                        <TableCell key={col.id} className={className}>
+                                                        <TableCell 
+                                                            key={col.id} 
+                                                            className={cn(
+                                                                className,
+                                                                (col.id === 'items' || col.id === 'clients') && item.items.length > 0 && "cursor-pointer hover:bg-muted/80 transition-colors"
+                                                            )}
+                                                            onClick={() => {
+                                                                if ((col.id === 'items' || col.id === 'clients') && item.items.length > 0) {
+                                                                    setSelectedLocationForDetails(item);
+                                                                    setIsDetailsDialogOpen(true);
+                                                                }
+                                                            }}
+                                                        >
                                                             {col.id === 'items' && item.status === 'Mixto' ? (
                                                                 <Tooltip>
-                                                                    <TooltipTrigger asChild>{content}</TooltipTrigger>
+                                                                    <TooltipTrigger asChild>
+                                                                        <div className="flex items-center gap-1">
+                                                                            {content}
+                                                                        </div>
+                                                                    </TooltipTrigger>
                                                                     <TooltipContent>
                                                                         <ItemsTooltipContent items={item.items} />
                                                                     </TooltipContent>
@@ -230,6 +283,79 @@ export default function OccupancyReportPage() {
                     </div>
                 </CardFooter>
             </Card>
+
+            {/* Modal de Detalle de Ubicación */}
+            <Dialog open={isDetailsDialogOpen} onOpenChange={setIsDetailsDialogOpen}>
+                <DialogContent className="sm:max-w-2xl">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2 text-xl font-bold">
+                            <span>📦 Detalle de Contenido</span>
+                            <Badge variant={selectedLocationForDetails?.status === 'Libre' ? 'secondary' : (selectedLocationForDetails?.status === 'Ocupado' ? 'default' : 'destructive')}>
+                                {selectedLocationForDetails?.status}
+                            </Badge>
+                        </DialogTitle>
+                        <DialogDescription>
+                            Ubicación: <strong className="text-foreground">{selectedLocationForDetails?.locationPath}</strong>
+                        </DialogDescription>
+                    </DialogHeader>
+                    
+                    <div className="py-4 space-y-6">
+                        <div className="rounded-md border overflow-hidden">
+                            <Table>
+                                <TableHeader className="bg-muted/50">
+                                    <TableRow>
+                                        <TableHead className="font-bold">Código</TableHead>
+                                        <TableHead className="font-bold">Descripción</TableHead>
+                                        <TableHead className="font-bold">Clasificación</TableHead>
+                                        <TableHead className="text-right font-bold">Cantidad</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {selectedLocationForDetails?.items && selectedLocationForDetails.items.length > 0 ? (
+                                        selectedLocationForDetails.items.map((prod) => (
+                                            <TableRow key={prod.productId}>
+                                                <TableCell className="font-mono text-xs font-bold text-muted-foreground">{prod.productId}</TableCell>
+                                                <TableCell className="text-xs font-semibold">{prod.productDescription}</TableCell>
+                                                <TableCell className="text-xs">{prod.classification || "-"}</TableCell>
+                                                <TableCell className="text-right font-bold text-primary">{prod.quantity !== undefined ? prod.quantity : 0}</TableCell>
+                                            </TableRow>
+                                        ))
+                                    ) : (
+                                        <TableRow>
+                                            <TableCell colSpan={4} className="text-center text-muted-foreground py-4">
+                                                No hay artículos en esta ubicación.
+                                            </TableCell>
+                                        </TableRow>
+                                    )}
+                                </TableBody>
+                            </Table>
+                        </div>
+                        
+                        <div className="space-y-2">
+                            <h4 className="text-xs font-black uppercase tracking-wider text-muted-foreground">Clientes Asignados a la Ubicación</h4>
+                            <div className="flex flex-wrap gap-2 pt-1">
+                                {selectedLocationForDetails?.clients && selectedLocationForDetails.clients.length > 0 ? (
+                                    selectedLocationForDetails.clients.map((c) => (
+                                        <Badge key={c.clientId} variant="outline" className="px-2.5 py-1 text-xs">
+                                            {c.clientName} <span className="ml-1 text-[10px] text-muted-foreground">({c.clientId})</span>
+                                        </Badge>
+                                    ))
+                                ) : (
+                                    <Badge variant="outline" className="px-2.5 py-1 text-xs text-muted-foreground">
+                                        Venta General (Sin restricción de cliente)
+                                    </Badge>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <DialogFooter>
+                        <DialogClose asChild>
+                            <Button variant="outline">Cerrar</Button>
+                        </DialogClose>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </main>
     );
 }

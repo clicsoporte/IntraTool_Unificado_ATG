@@ -8,7 +8,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useToast } from '@/modules/core/hooks/use-toast';
 import { useAuthorization } from '@/modules/core/hooks/useAuthorization';
 import { logError, logInfo } from '@/modules/core/lib/logger';
-import { getLocations, getSelectableLocations, updateInventory, getAllItemLocations } from '@/modules/warehouse/lib/actions';
+import { getLocations, getSelectableLocations, updateInventory, getAllItemLocations, clearInventory } from '@/modules/warehouse/lib/actions';
 import type { Product, WarehouseLocation, User, ItemLocation } from '@/modules/core/types';
 import { useAuth } from '@/modules/core/hooks/useAuth';
 import { useDebounce } from 'use-debounce';
@@ -280,6 +280,27 @@ export const useInventoryCount = () => {
              updateState({ isSubmitting: false });
         }
     };
+    
+    const handleClearAllCounts = async () => {
+        if (!window.confirm("¿Estás seguro de que deseas borrar TODA la toma de inventario actual? Esta acción no se puede deshacer.")) {
+            return;
+        }
+
+        updateState({ isSubmitting: true });
+        try {
+            await clearInventory();
+            toast({ title: "Inventario Borrado", description: "Se han eliminado todos los registros de la toma de inventario actual." });
+            updateState({ 
+                selectedProductId: null, productSearchTerm: '', countedQuantity: '',
+                scannerLoadedData: null, lastCountInfo: null
+            });
+        } catch (error: any) {
+            logError('Failed to clear inventory', { error: error.message });
+            toast({ title: "Error", description: "No se pudo borrar el inventario.", variant: "destructive" });
+        } finally {
+            updateState({ isSubmitting: false });
+        }
+    };
 
 
     return {
@@ -302,6 +323,7 @@ export const useInventoryCount = () => {
             handleScanKeyDown,
             handleSaveScannerCount,
             setScannerQuantityInput: (qty: string) => updateState({ scannerQuantityInput: qty }),
+            handleClearAllCounts,
         },
         selectors: {
             productOptions,

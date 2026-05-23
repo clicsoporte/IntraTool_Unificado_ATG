@@ -7,6 +7,7 @@
 import { XMLParser } from 'fast-xml-parser';
 import type { InvoiceReportLine, ProcessedInvoiceInfo } from '@/modules/core/types';
 import { logError } from '@/modules/core/lib/logger';
+import { authorizeAction } from '@/modules/core/lib/auth-guard';
 
 // Helper to get a value from a potentially nested object
 const getValue = (obj: any, path: string[], defaultValue: any = '') => {
@@ -93,9 +94,9 @@ async function parseInvoice(xmlContent: string, fileIndex: number): Promise<{ da
             let itemCode = 'N/A';
             const preferredCodeNode = codigosComerciales.find((c: any) => c.Tipo === '01'); // Prioritize supplier's code
             if (preferredCodeNode && preferredCodeNode.Codigo) {
-                itemCode = preferredCodeNode.Codigo;
+                itemCode = String(preferredCodeNode.Codigo).toUpperCase();
             } else if (codigosComerciales[0]?.Codigo) {
-                itemCode = codigosComerciales[0].Codigo;
+                itemCode = String(codigosComerciales[0].Codigo).toUpperCase();
             }
 
 
@@ -158,6 +159,7 @@ export async function processInvoicesForReport(xmlContents: string[]): Promise<{
     processedInvoices: ProcessedInvoicePayload[], 
     statusReport: ProcessedInvoiceInfo[] 
 }> {
+    await authorizeAction('invoices:access');
     const processedInvoicePayloads: ProcessedInvoicePayload[] = [];
     const statusReport: ProcessedInvoiceInfo[] = [];
 

@@ -31,7 +31,8 @@ import { usePageTitle } from "@/modules/core/hooks/usePageTitle";
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
-import { restoreAllFromUpdateBackup, listAllUpdateBackups, deleteOldUpdateBackups, restoreDatabase, backupAllForUpdate, factoryReset, getDbModules, getCurrentVersion, runDatabaseAudit, runSingleModuleMigration, forceWalCheckpoint } from '@/modules/core/lib/db';
+import { restoreAllFromUpdateBackup, listAllUpdateBackups, deleteOldUpdateBackups, restoreDatabase, backupAllForUpdate, factoryReset, getDbModules, getCurrentVersion, forceWalCheckpoint } from '@/modules/core/lib/db';
+import { runDatabaseAudit, repairDatabaseSchema } from '@/modules/core/lib/maintenance-actions';
 import { cleanupAllExportFiles } from '@/modules/core/lib/actions';
 import { migrateLegacyInventoryUnits, initializePopulationStatus, cleanupAndInitializeLocationFlags } from '@/modules/warehouse/lib/actions';
 import type { UpdateBackupInfo, DatabaseModule, AuditResult, WarehouseSettings } from '@/modules/core/types';
@@ -89,6 +90,7 @@ export default function MaintenancePage() {
     
     // State for audit
     const [isAuditing, setIsAuditing] = useState(false);
+    const [isRepairing, setIsRepairing] = useState(false);
     const [auditResults, setAuditResults] = useState<AuditResult[] | null>(null);
 
     // State for legacy migration
@@ -103,16 +105,29 @@ export default function MaintenancePage() {
      * @returns A valid Date object.
      */
     const parseBackupTimestamp = (timestampString: string): Date => {
+        if (!timestampString) return new Date(NaN);
         const parts = timestampString.split('T');
         if (parts.length !== 2) {
-            // Fallback for unexpected formats, might result in Invalid Date but won't crash format()
             return parseISO(timestampString);
         }
         const datePart = parts[0];
         const timePart = parts[1];
-        // Replace hyphens in the time part back to colons
         const correctedTimePart = timePart.replace(/-/g, ':');
         return parseISO(`${datePart}T${correctedTimePart}`);
+    };
+
+    /**
+     * Safely formats a date, returning a fallback string if the date is invalid.
+     */
+    const safeFormatDate = (date: Date | string | null, formatStr: string) => {
+        if (!date) return 'Sin fecha';
+        try {
+            const d = typeof date === 'string' ? parseISO(date) : date;
+            if (isNaN(d.getTime())) return 'Fecha inválida';
+            return format(d, formatStr, { locale: es });
+        } catch (e) {
+            return 'Error de fecha';
+        }
     };
 
 
@@ -370,12 +385,25 @@ export default function MaintenancePage() {
     };
 
     const handleRunAudit = async () => {
-        if (!user) return;
         setIsAuditing(true);
         setAuditResults(null);
         try {
-            const results = await runDatabaseAudit(user.name);
+            const results = await runDatabaseAudit();
             setAuditResults(results);
+            
+            const issues = results.filter(r => r.status !== 'ok').length;
+            if (issues > 0) {
+                toast({ 
+                    title: "Auditoría Completada", 
+                    description: `Se encontraron ${issues} discrepancias en el esquema.`, 
+                    variant: "destructive" 
+                });
+            } else {
+                toast({ 
+                    title: "Auditoría Completada", 
+                    description: "La estructura de la base de datos está íntegra.", 
+                });
+            }
         } catch (error: any) {
             logError("Error running database audit", { error: error.message });
             toast({ title: "Error en la Auditoría", description: "No se pudo completar el proceso de auditoría.", variant: "destructive" });
@@ -384,19 +412,30 @@ export default function MaintenancePage() {
         }
     }
 
-    const handleManualMigration = async (moduleId: string) => {
-        if (!user) return;
-        setIsAuditing(true); // Reuse auditing spinner
+    const handleRepairSchema = async () => {
+        if (!auditResults) return;
+        setIsRepairing(true);
         try {
-            await runSingleModuleMigration(moduleId);
-            toast({ title: "Corrección Aplicada", description: `Se intentó aplicar la migración para el módulo. Ejecuta la auditoría de nuevo para verificar.` });
-            // Re-run audit automatically after attempting fix
-            await handleRunAudit();
+            const result = await repairDatabaseSchema(auditResults);
+            if (result.success) {
+                toast({ 
+                    title: "Reparación Exitosa", 
+                    description: `Se corrigieron ${result.fixed.length} columnas.`, 
+                });
+                // Re-run audit to verify
+                await handleRunAudit();
+            } else {
+                toast({ 
+                    title: "Reparación Parcial", 
+                    description: `Se corrigieron ${result.fixed.length} columnas, pero hubo ${result.errors.length} errores.`, 
+                    variant: "destructive" 
+                });
+            }
         } catch (error: any) {
-            logError(`Manual migration failed for module ${moduleId}`, { error: error.message, user: user.name });
-            toast({ title: "Error al Corregir", description: `No se pudo aplicar la corrección. ${error.message}`, variant: "destructive" });
+            logError("Error repairing database schema", { error: error.message });
+            toast({ title: "Error en la Reparación", description: "No se pudo completar el proceso de reparación.", variant: "destructive" });
         } finally {
-            setIsAuditing(false);
+            setIsRepairing(false);
         }
     };
     
@@ -464,65 +503,100 @@ export default function MaintenancePage() {
     const selectedBackupVersion = selectedRestoreTimestamp ? updateBackups.find(b => b.date === selectedRestoreTimestamp)?.version : null;
     const isVersionMismatch = systemVersion && selectedBackupVersion && systemVersion !== selectedBackupVersion;
 
-    const hasAuditErrors = auditResults?.some(r => r.status === 'ERROR');
+    const hasAuditIssues = auditResults?.some(r => r.status !== 'ok');
 
     return (
         <main className="flex-1 p-4 md:p-6 lg:p-8">
             <div className="mx-auto max-w-4xl space-y-8">
                 <Accordion type="multiple" defaultValue={['audit']} className="w-full space-y-6">
-                     <Card>
-                        <AccordionItem value="audit">
-                            <AccordionTrigger className="p-6 hover:no-underline">
-                                <div className="flex items-center gap-4">
-                                    <ShieldCheck className="h-8 w-8 text-primary" />
+                     <Card className="overflow-hidden border-none shadow-xl bg-gradient-to-br from-background to-muted/30">
+                        <AccordionItem value="audit" className="border-none">
+                            <AccordionTrigger className="p-6 hover:no-underline hover:bg-muted/50 transition-all">
+                                <div className="flex items-center gap-4 text-left">
+                                    <div className="p-3 rounded-2xl bg-primary/10 text-primary">
+                                        <ShieldCheck className="h-8 w-8" />
+                                    </div>
                                     <div>
-                                        <CardTitle>Centro de Actualización y Verificación</CardTitle>
-                                        <CardDescription>
-                                        Audita y repara la estructura de las bases de datos. Ideal después de una actualización.
+                                        <CardTitle className="text-2xl font-bold tracking-tight">Centro de Actualización y Verificación</CardTitle>
+                                        <CardDescription className="text-base">
+                                            Audita y repara la estructura de las bases de datos para asegurar la integridad post-actualización.
                                         </CardDescription>
                                     </div>
                                 </div>
                             </AccordionTrigger>
                             <AccordionContent className="p-6 pt-0 space-y-6">
-                                <div className='flex flex-wrap gap-4 items-center'>
-                                    <Button onClick={handleRunAudit} disabled={isAuditing}>
-                                        {isAuditing ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <ShieldCheck className="mr-2 h-4 w-4" />}
-                                        Ejecutar Auditoría del Sistema
+                                <div className='flex flex-wrap gap-4 items-center bg-muted/20 p-4 rounded-xl border border-border/50'>
+                                    <Button 
+                                        onClick={handleRunAudit} 
+                                        disabled={isAuditing || isRepairing}
+                                        className="relative overflow-hidden group shadow-lg transition-all hover:scale-105 active:scale-95"
+                                    >
+                                        {isAuditing ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <ShieldCheck className="mr-2 h-4 w-4 group-hover:rotate-12 transition-transform" />}
+                                        Ejecutar Auditoría de Esquema
                                     </Button>
-                                    {hasAuditErrors && (
-                                        <Alert variant="destructive" className="flex-1">
+
+                                    {hasAuditIssues && (
+                                        <Button 
+                                            variant="secondary" 
+                                            onClick={handleRepairSchema} 
+                                            disabled={isAuditing || isRepairing}
+                                            className="shadow-md hover:bg-primary hover:text-primary-foreground transition-colors"
+                                        >
+                                            {isRepairing ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <Wrench className="mr-2 h-4 w-4" />}
+                                            Reparación Automática
+                                        </Button>
+                                    )}
+
+                                    {hasAuditIssues && (
+                                        <Alert variant="destructive" className="flex-1 border-destructive/50 bg-destructive/10 animate-in fade-in slide-in-from-left-4">
                                             <AlertTriangle className="h-4 w-4" />
-                                            <AlertTitle>¡Se encontraron problemas!</AlertTitle>
-                                            <AlertDescription>Revisa los módulos marcados en rojo. Puedes intentar una reparación automática.</AlertDescription>
+                                            <AlertTitle className="font-bold">¡Inconsistencias detectadas!</AlertTitle>
+                                            <AlertDescription>Se han encontrado tablas o columnas faltantes. Utiliza la reparación automática o contacta a soporte.</AlertDescription>
                                         </Alert>
                                     )}
                                 </div>
+
                                 {auditResults && (
-                                     <div className="space-y-4">
-                                        {auditResults.map(result => (
-                                            <Card key={result.moduleId} className={result.status === 'ERROR' ? 'border-destructive' : 'border-green-600'}>
-                                                <CardHeader>
-                                                    <CardTitle className="flex items-center justify-between">
-                                                         <div className="flex items-center gap-2">
-                                                            {result.status === 'OK' ? <CheckCircle className="h-5 w-5 text-green-600" /> : <AlertTriangle className="h-5 w-5 text-destructive" />}
-                                                            {result.moduleName} ({result.dbFile})
-                                                         </div>
-                                                          {result.status === 'ERROR' && (
-                                                            <Button size="sm" variant="destructive" onClick={() => handleManualMigration(result.moduleId)} disabled={isAuditing}>
-                                                                {isAuditing ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <Wrench className="mr-2 h-4 w-4"/>}
-                                                                Intentar Reparación
-                                                            </Button>
-                                                        )}
-                                                    </CardTitle>
-                                                </CardHeader>
-                                                {result.issues.length > 0 && (
-                                                    <CardContent>
-                                                        <ul className="list-disc space-y-1 pl-5 text-sm text-destructive">
-                                                            {result.issues.map((issue, i) => <li key={i} dangerouslySetInnerHTML={{ __html: issue.replace(/'/g, "&apos;") }} />)}
-                                                        </ul>
-                                                    </CardContent>
+                                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 animate-in fade-in zoom-in-95 duration-500">
+                                        {auditResults.map(r => (
+                                            <div 
+                                                key={r.table} 
+                                                className={cn(
+                                                    "group p-4 rounded-xl border transition-all duration-300 hover:shadow-md",
+                                                    r.status === 'ok' 
+                                                        ? 'bg-green-50/30 border-green-200 hover:border-green-400' 
+                                                        : 'bg-red-50/30 border-red-200 hover:border-red-400'
                                                 )}
-                                            </Card>
+                                            >
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <span className="font-bold text-sm tracking-wider opacity-70 group-hover:opacity-100 transition-opacity">
+                                                        {r.table.toUpperCase()}
+                                                    </span>
+                                                    <div className={cn(
+                                                        "p-1.5 rounded-full",
+                                                        r.status === 'ok' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'
+                                                    )}>
+                                                        {r.status === 'ok' ? <CheckCircle className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
+                                                    </div>
+                                                </div>
+                                                
+                                                {r.status !== 'ok' && (
+                                                    <div className="mt-3 space-y-2">
+                                                        <div className="text-[10px] font-bold uppercase tracking-widest text-red-500/70">Faltan:</div>
+                                                        <div className="flex flex-wrap gap-1">
+                                                            {r.missingColumns.map(col => (
+                                                                <span key={col} className="px-2 py-0.5 rounded-md bg-red-100 text-red-700 text-[10px] font-mono border border-red-200">
+                                                                    {col}
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {r.status === 'ok' && (
+                                                    <p className="text-[10px] text-green-600/70 italic">Esquema verificado e íntegro</p>
+                                                )}
+                                            </div>
                                         ))}
                                     </div>
                                 )}
@@ -566,7 +640,7 @@ export default function MaintenancePage() {
                                                         const backupInfo = updateBackups.find(b => b.date === ts);
                                                         return (
                                                             <SelectItem key={ts} value={ts}>
-                                                                {format(parseBackupTimestamp(ts), "dd/MM/yyyy 'a las' HH:mm:ss", { locale: es })}
+                                                                {safeFormatDate(parseBackupTimestamp(ts), "dd/MM/yyyy 'a las' HH:mm:ss")}
                                                                 {backupInfo?.version && <span className="ml-2 text-xs text-muted-foreground"> (v{backupInfo.version})</span>}
                                                             </SelectItem>
                                                         )
@@ -618,7 +692,7 @@ export default function MaintenancePage() {
                                                         <div key={b.fileName} className="flex items-center justify-between rounded-md p-2 hover:bg-muted">
                                                             <div>
                                                                 <p className="font-semibold text-sm">{b.moduleName} {b.version && <span className="font-normal text-xs text-muted-foreground">(v{b.version})</span>}</p>
-                                                                <p className="text-xs text-muted-foreground">{format(parseBackupTimestamp(b.date), "dd/MM/yyyy HH:mm:ss", { locale: es })}</p>
+                                                                <p className="text-xs text-muted-foreground">{safeFormatDate(parseBackupTimestamp(b.date), "dd/MM/yyyy HH:mm:ss")}</p>
                                                             </div>
                                                             <a href={`/routes/temp-backups?file=${encodeURIComponent(b.fileName)}`} download={b.fileName}>
                                                                 <Button variant="ghost" size="icon"><Download className="h-4 w-4"/></Button>
@@ -696,7 +770,7 @@ export default function MaintenancePage() {
                                                 </AlertDialogContent>
                                             </AlertDialog>
                                              {warehouseSettings?.lastLegacyMigration && (
-                                                <p className="text-xs text-muted-foreground pt-2">Última ejecución: {format(parseISO(warehouseSettings.lastLegacyMigration), 'dd/MM/yyyy HH:mm', { locale: es })}</p>
+                                                <p className="text-xs text-muted-foreground pt-2">Última ejecución: {safeFormatDate(warehouseSettings.lastLegacyMigration, 'dd/MM/yyyy HH:mm')}</p>
                                             )}
                                         </div>
                                          <div className="space-y-2 rounded-lg border p-4">
@@ -725,7 +799,7 @@ export default function MaintenancePage() {
                                                 </AlertDialogContent>
                                             </AlertDialog>
                                             {warehouseSettings?.lastPopulationInit && (
-                                                <p className="text-xs text-muted-foreground pt-2">Última ejecución: {format(parseISO(warehouseSettings.lastPopulationInit), 'dd/MM/yyyy HH:mm', { locale: es })}</p>
+                                                <p className="text-xs text-muted-foreground pt-2">Última ejecución: {safeFormatDate(warehouseSettings.lastPopulationInit, 'dd/MM/yyyy HH:mm')}</p>
                                             )}
                                         </div>
                                          <div className="space-y-2 rounded-lg border p-4">

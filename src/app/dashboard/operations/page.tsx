@@ -1,13 +1,10 @@
-/**
- * @fileoverview Main page for the new Operations module.
- * For now, it serves as a placeholder indicating the module is under construction.
- */
 'use client';
 
 import React from 'react';
 import { usePageTitle } from '@/modules/core/hooks/usePageTitle';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
-import { FileSignature, Construction } from 'lucide-react';
+import { FileSignature, Truck, ArrowRight } from 'lucide-react';
+import Link from 'next/link';
 
 export default function OperationsPage() {
     const { setTitle } = usePageTitle();
@@ -16,23 +13,58 @@ export default function OperationsPage() {
         setTitle("Centro de Trazabilidad y Operaciones");
     }, [setTitle]);
 
+    const submodules: any[] = [
+        // More submodules can be added here
+    ];
+
     return (
-        <main className="flex-1 p-4 md:p-6 lg:p-8">
-            <div className="mx-auto max-w-4xl">
-                <Card>
-                    <CardHeader className="text-center">
-                        <div className="mx-auto bg-amber-100 p-4 rounded-full w-fit">
-                            <Construction className="h-12 w-12 text-amber-600" />
+        <main className="flex-1 p-4 md:p-6 lg:p-8 animate-in fade-in duration-500">
+            <div className="mx-auto max-w-5xl space-y-8">
+                <div className="flex items-center gap-4">
+                    <div className="p-3 bg-teal-600 rounded-2xl text-white shadow-lg shadow-teal-100">
+                        <FileSignature className="w-8 h-8" />
+                    </div>
+                    <div>
+                        <h1 className="text-3xl font-extrabold tracking-tight">Centro de Operaciones</h1>
+                        <p className="text-muted-foreground font-medium">Gestión de activos, formularios digitales y trazabilidad operativa.</p>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    {submodules.map((sub) => (
+                        <Link key={sub.href} href={sub.href}>
+                            <Card className="group hover:shadow-xl transition-all border-none shadow-md overflow-hidden relative">
+                                <div className={`absolute top-0 right-0 w-32 h-32 -mr-8 -mt-8 rounded-full ${sub.bgColor} opacity-20 group-hover:scale-110 transition-transform`} />
+                                <CardHeader className="pb-2 flex flex-row items-center gap-4">
+                                    <div className={`p-3 ${sub.bgColor} ${sub.color} rounded-xl`}>
+                                        <sub.icon className="w-6 h-6" />
+                                    </div>
+                                    <div>
+                                        <CardTitle className="text-xl">{sub.title}</CardTitle>
+                                    </div>
+                                </CardHeader>
+                                <CardContent>
+                                    <p className="text-muted-foreground text-sm leading-relaxed mb-4">
+                                        {sub.description}
+                                    </p>
+                                    <div className={`flex items-center gap-1 text-sm font-bold ${sub.color}`}>
+                                        Acceder ahora <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        </Link>
+                    ))}
+
+                    <Card className="border-dashed flex items-center justify-center p-8 bg-muted/30">
+                        <div className="text-center space-y-2">
+                            <div className="mx-auto bg-muted p-4 rounded-full w-fit">
+                                <FileSignature className="h-8 w-8 text-muted-foreground/40" />
+                            </div>
+                            <CardTitle className="text-muted-foreground">Próximos Módulos</CardTitle>
+                            <CardDescription>Boletas de entrega, control de rutas y más formularios digitales en desarrollo.</CardDescription>
                         </div>
-                        <CardTitle className="mt-4 text-2xl">Módulo en Construcción</CardTitle>
-                        <CardDescription className="max-w-md mx-auto">
-                            El nuevo &quot;Centro de Trazabilidad y Operaciones&quot; se está desarrollando. Pronto podrás gestionar todas tus boletas y formularios digitales desde aquí.
-                        </CardDescription>
-                    </CardHeader>
-                    <CardContent>
-                        <p className="text-center text-sm text-muted-foreground">La infraestructura base, incluyendo la base de datos y los permisos, ya ha sido creada.</p>
-                    </CardContent>
-                </Card>
+                    </Card>
+                </div>
             </div>
         </main>
     );

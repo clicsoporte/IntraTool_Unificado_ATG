@@ -43,6 +43,8 @@ import { useToast } from '@/modules/core/hooks/use-toast';
 import { logInfo, logError } from '@/modules/core/lib/logger';
 import { getAllUsers, addUser, updateUser, deleteUser } from '@/modules/core/lib/auth-client';
 import { getAllRoles } from '@/modules/core/lib/db';
+import { getAllEmployeesAction } from '@/modules/fleet/lib/actions';
+import { getAllLinkagesAction } from '@/modules/fleet/lib/telegram-actions';
 import type { User, Role } from '@/modules/core/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { PlusCircle, Edit, Trash2, Save, Loader2 } from 'lucide-react';
@@ -71,6 +73,9 @@ export default function UsersClient() {
   const { toast } = useToast();
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [telegramLinkages, setTelegramLinkages] = useState<any[]>([]);
+  const [showInactiveEmployees, setShowInactiveEmployees] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const { setTitle } = usePageTitle();
 
@@ -80,15 +85,29 @@ export default function UsersClient() {
   const [isEditing, setIsEditing] = useState(false);
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
 
+  const filteredEmployees = useMemo(() => {
+    return employees.filter(emp => {
+      if (showInactiveEmployees) return true;
+      return emp.active === 'S';
+    });
+  }, [employees, showInactiveEmployees]);
+
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [usersData, rolesData] = await Promise.all([getAllUsers(), getAllRoles()]);
+      const [usersData, rolesData, employeesData, linkagesData] = await Promise.all([
+        getAllUsers(),
+        getAllRoles(),
+        getAllEmployeesAction(),
+        getAllLinkagesAction()
+      ]);
       setUsers(usersData);
       setRoles(rolesData);
+      setEmployees(employeesData || []);
+      setTelegramLinkages(linkagesData || []);
     } catch (error) {
-      logError('Error fetching users/roles', { error });
-      toast({ title: 'Error', description: 'No se pudieron cargar los datos de usuarios y roles.', variant: 'destructive' });
+      logError('Error fetching users/roles/employees/linkages', { error });
+      toast({ title: 'Error', description: 'No se pudieron cargar los datos de usuarios, roles, empleados y vinculaciones de Telegram.', variant: 'destructive' });
     }
     setIsLoading(false);
   }, [toast]);
@@ -130,6 +149,7 @@ export default function UsersClient() {
           whatsapp: currentUser.whatsapp || '',
           erpAlias: currentUser.erpAlias || '',
           forcePasswordChange: !!(currentUser.forcePasswordChange ?? true),
+          employeeId: currentUser.employeeId || null,
         });
         toast({ title: 'Usuario Creado' });
       }
@@ -213,6 +233,29 @@ export default function UsersClient() {
                           <div>
                             <p className="font-semibold">{user.name}</p>
                             <p className="text-sm text-muted-foreground">{user.email}</p>
+                            {user.employeeId && (
+                              <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5 flex-wrap">
+                                <span className="bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300 px-2 py-0.5 rounded text-[10px] font-medium">
+                                  Empleado: {(() => {
+                                    const emp = employees.find(e => e.id === user.employeeId);
+                                    return emp ? `${emp.name} (${user.employeeId})` : user.employeeId;
+                                  })()}
+                                </span>
+                                {(() => {
+                                  const linkedTelegram = telegramLinkages.find(t => t.employeeId === user.employeeId);
+                                  return linkedTelegram ? (
+                                    <span className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-400 px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1">
+                                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                                      Telegram Bot Activo
+                                    </span>
+                                  ) : (
+                                    <span className="bg-zinc-100 text-zinc-600 dark:bg-zinc-800/50 dark:text-zinc-400 px-2 py-0.5 rounded text-[10px] font-medium">
+                                      Sin Telegram Bot
+                                    </span>
+                                  );
+                                })()}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -297,9 +340,51 @@ export default function UsersClient() {
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-2">
+                        <Label htmlFor="employee">Vincular a Empleado (Opcional)</Label>
+                        <div className="space-y-1.5">
+                            <Select 
+                              value={currentUser.employeeId || 'none'} 
+                              onValueChange={(value) => {
+                                const empId = value === 'none' ? null : value;
+                                handleFieldChange('employeeId', empId || '');
+                                if (empId) {
+                                  const selectedEmp = employees.find(e => e.id === empId);
+                                  if (selectedEmp) {
+                                    handleFieldChange('name', selectedEmp.name);
+                                  }
+                                }
+                              }}
+                            >
+                                <SelectTrigger id="employee">
+                                  <SelectValue placeholder="Seleccionar un empleado" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="none">Sin vincular</SelectItem>
+                                    {filteredEmployees.map(emp => (
+                                        <SelectItem key={emp.id} value={emp.id}>
+                                          {emp.name} ({emp.id}){emp.active === 'N' ? ' [INACTIVO]' : ''}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                            <div className="flex items-center space-x-2">
+                                <Checkbox 
+                                  id="showInactiveEmployees" 
+                                  checked={showInactiveEmployees} 
+                                  onCheckedChange={(checked) => setShowInactiveEmployees(!!checked)} 
+                                />
+                                <Label htmlFor="showInactiveEmployees" className="text-xs text-muted-foreground font-normal cursor-pointer select-none">
+                                  Mostrar también inactivos
+                                </Label>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="space-y-2">
                         <Label htmlFor="erpAlias">Alias de Usuario (ERP)</Label>
                         <Input id="erpAlias" value={currentUser.erpAlias || ''} onChange={(e) => handleFieldChange('erpAlias', e.target.value)} />
                     </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                      <div className="space-y-2">
                         <Label htmlFor="role">Rol</Label>
                         <Select value={currentUser.role} onValueChange={(value) => handleFieldChange('role', value)} required>

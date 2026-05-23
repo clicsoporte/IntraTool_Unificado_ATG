@@ -89,6 +89,43 @@ export async function getExemptionStatus(authNumber: string): Promise<any> {
 }
 
 /**
+ * Fetches contributor information from the Hacienda API.
+ * @param {string} id - The identification number of the contributor.
+ * @returns {Promise<any>} The JSON response from the external API or an error object.
+ */
+export async function getTaxPayerInfo(id: string): Promise<any> {
+    if (!id) {
+        return { error: true, message: "Identification number is required", status: 400 };
+    }
+
+    try {
+        const apiSettings = await getApiSettingsDb();
+        if (!apiSettings?.haciendaTributariaApi) {
+            throw new Error("Taxpayer API URL not configured in settings.");
+        }
+
+        const fullApiUrl = `${apiSettings.haciendaTributariaApi}${id}`;
+
+        const response = await fetch(fullApiUrl, {
+            cache: 'no-store'
+        });
+
+        if (!response.ok) {
+            if (response.status === 404) {
+                return { error: true, message: "Contribuyente no encontrado.", status: 404 };
+            }
+            return { error: true, message: `Error de API externa (${response.status})`, status: response.status };
+        }
+
+        const data = await response.json();
+        return data;
+    } catch (error: any) {
+        await logError(`Failed to fetch taxpayer info for id: ${id}`, { error: error.message });
+        return { error: true, message: "Error al consultar la situación tributaria." };
+    }
+}
+
+/**
  * Fetches the API settings from the database.
  * This is a server action wrapper for the database function.
  * @returns {Promise<ApiSettings | null>} The API settings.

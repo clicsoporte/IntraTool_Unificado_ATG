@@ -264,23 +264,42 @@ export const useLabelCenter = () => {
                     const mainText = location.code;
                     const secondaryText = renderLocationPathAsString(location.id, state.allLocations);
                     const qrCodeDataUrl = await QRCode.toDataURL(qrContent, { errorCorrectionLevel: 'M', width: 200 });
+                    
                     const margin = 40;
                     const pageWidth = doc.internal.pageSize.getWidth();
                     const pageHeight = doc.internal.pageSize.getHeight();
+                    const maxWidth = pageWidth - (margin * 2);
+
                     doc.addImage(qrCodeDataUrl, 'PNG', margin, margin, 100, 100);
+                    
+                    // Metadatos arriba a la derecha
                     doc.setFontSize(9);
                     doc.setFont('Helvetica', 'normal');
                     doc.setTextColor('#666');
                     doc.text(`Creado: ${format(new Date(), 'dd/MM/yyyy')}`, pageWidth - margin, margin, { align: 'right' });
                     doc.setTextColor('#000');
-                    doc.setFontSize(150);
+
+                    // 1. Ajustar Código de Ubicación (Main Text) - Máximo tamaño posible
                     doc.setFont('Helvetica', 'bold');
-                    doc.text(mainText, pageWidth / 2, pageHeight / 2 - 40, { align: 'center' });
-                    const maxWidth = pageWidth - (margin * 2) - 20;
-                    const dynamicSize = getDynamicFontSize(doc, secondaryText, maxWidth);
-                    doc.setFontSize(dynamicSize);
+                    let mainFontSize = 160;
+                    doc.setFontSize(mainFontSize);
+                    while (doc.getTextWidth(mainText) > maxWidth && mainFontSize > 20) {
+                        mainFontSize -= 5;
+                        doc.setFontSize(mainFontSize);
+                    }
+                    doc.text(mainText, pageWidth / 2, pageHeight / 2 - 10, { align: 'center' });
+
+                    // 2. Ajustar Ruta de Ubicación (Secondary Text) - Con soporte multilínea
                     doc.setFont('Helvetica', 'normal');
-                    doc.text(secondaryText, pageWidth / 2, pageHeight / 2 + 60, { align: 'center' });
+                    let secondaryFontSize = 38;
+                    doc.setFontSize(secondaryFontSize);
+                    // Si es extremadamente largo, bajamos un poco la base antes de hacer el wrap
+                    while (doc.getTextWidth(secondaryText) > maxWidth * 2 && secondaryFontSize > 14) {
+                        secondaryFontSize -= 2;
+                        doc.setFontSize(secondaryFontSize);
+                    }
+                    const secondaryTextLines = doc.splitTextToSize(secondaryText, maxWidth);
+                    doc.text(secondaryTextLines, pageWidth / 2, pageHeight / 2 + 80, { align: 'center' });
                 }
                  if (doc.getNumberOfPages() > 1) {
                     doc.save(`etiquetas_ubicacion_${Date.now()}.pdf`);

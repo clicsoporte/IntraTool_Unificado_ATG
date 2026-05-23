@@ -3,7 +3,7 @@
  */
 "use server";
 
-import { connectDb, getAllRoles as getAllRolesFromMain } from '../../core/lib/db';
+import { getDb, getAllRoles as getAllRolesFromMain } from '../../core/lib/db';
 import { getAllUsers as getAllUsersFromMain } from '../../core/lib/auth';
 import { logInfo, logError, logWarn } from '../../core/lib/logger';
 import type { PurchaseRequest, RequestSettings, UpdateRequestStatusPayload, PurchaseRequestHistoryEntry, UpdatePurchaseRequestPayload, RejectCancellationPayload, PurchaseRequestStatus, DateRange, AdministrativeAction, AdministrativeActionPayload, StockInfo, ErpOrderHeader, ErpOrderLine, User, PurchaseSuggestion, PurchaseRequestPriority, ErpPurchaseOrderHeader, ErpPurchaseOrderLine } from '../../core/types';
@@ -11,8 +11,10 @@ import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { executeQuery } from '@/modules/core/lib/sql-service';
 import { getAllProducts, getAllStock, getAllCustomers } from '@/modules/core/lib/db';
+import { REQUESTS_TABLES } from './schema';
+import { authorizeAction } from '@/modules/core/lib/auth-guard';
 
-const REQUESTS_DB_FILE = 'requests.db';
+// Unified DB configuration
 
 const normalizeText = (text: string | null | undefined): string => {
     if (!text) return "";
@@ -57,163 +59,12 @@ const sanitizeRequest = (request: any): PurchaseRequest => {
 };
 
 
-export async function initializeRequestsDb(db: import('better-sqlite3').Database) {
-    const schema = `
-        CREATE TABLE IF NOT EXISTS request_settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS purchase_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            consecutive TEXT UNIQUE NOT NULL,
-            purchaseOrder TEXT,
-            requestDate TEXT NOT NULL,
-            requiredDate TEXT NOT NULL,
-            arrivalDate TEXT,
-            receivedDate TEXT,
-            clientId TEXT NOT NULL,
-            clientName TEXT NOT NULL,
-            clientTaxId TEXT,
-            itemId TEXT NOT NULL,
-            itemDescription TEXT NOT NULL,
-            quantity REAL NOT NULL,
-            deliveredQuantity REAL,
-            inventory REAL,
-            inventoryErp REAL,
-            priority TEXT DEFAULT 'medium',
-            purchaseType TEXT DEFAULT 'single',
-            unitSalePrice REAL,
-            salePriceCurrency TEXT DEFAULT 'CRC',
-            requiresCurrency BOOLEAN DEFAULT FALSE,
-            erpOrderNumber TEXT,
-            erpOrderLine INTEGER,
-            erpEntryNumber TEXT,
-            manualSupplier TEXT,
-            route TEXT,
-            shippingMethod TEXT,
-            status TEXT NOT NULL,
-            pendingAction TEXT DEFAULT 'none',
-            notes TEXT,
-            requestedBy TEXT NOT NULL,
-            approvedBy TEXT,
-            receivedInWarehouseBy TEXT,
-            lastStatusUpdateBy TEXT,
-            lastStatusUpdateNotes TEXT,
-            reopened BOOLEAN DEFAULT FALSE,
-            previousStatus TEXT,
-            lastModifiedBy TEXT,
-            lastModifiedAt TEXT,
-            hasBeenModified BOOLEAN DEFAULT FALSE,
-            sourceOrders TEXT,
-            involvedClients TEXT,
-            analysis TEXT
-        );
-        CREATE TABLE IF NOT EXISTS purchase_request_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            requestId INTEGER NOT NULL,
-            timestamp TEXT NOT NULL,
-            status TEXT NOT NULL,
-            notes TEXT,
-            updatedBy TEXT NOT NULL,
-            FOREIGN KEY (requestId) REFERENCES purchase_requests(id) ON DELETE CASCADE
-        );
-    `;
-    db.exec(schema);
-
-    db.prepare(`INSERT OR IGNORE INTO request_settings (key, value) VALUES ('requestPrefix', 'SC-')`).run();
-    db.prepare(`INSERT OR IGNORE INTO request_settings (key, value) VALUES ('nextRequestNumber', '1')`).run();
-    db.prepare(`INSERT OR IGNORE INTO request_settings (key, value) VALUES ('routes', '["Ruta GAM", "Fuera de GAM"]')`).run();
-    db.prepare(`INSERT OR IGNORE INTO request_settings (key, value) VALUES ('shippingMethods', '["Mensajería", "Encomienda", "Transporte Propio"]')`).run();
-    db.prepare(`INSERT OR IGNORE INTO request_settings (key, value) VALUES ('useWarehouseReception', 'false')`).run();
-    db.prepare(`INSERT OR IGNORE INTO request_settings (key, value) VALUES ('useErpEntry', 'false')`).run();
-    db.prepare(`INSERT OR IGNORE INTO request_settings (key, value) VALUES ('showCustomerTaxId', 'true')`).run();
-    
-    console.log(`Database ${REQUESTS_DB_FILE} initialized for Purchase Requests.`);
-    
-    await runRequestMigrations(db);
-}
-
-
-export async function runRequestMigrations(db: import('better-sqlite3').Database) {
-    try {
-        const requestsTable = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='purchase_requests'`).get();
-        if (!requestsTable) {
-            return;
-        }
-
-        const tableInfo = db.prepare(`PRAGMA table_info(purchase_requests)`).all() as { name: string }[];
-        const columns = new Set(tableInfo.map(c => c.name));
-
-        if (!columns.has('shippingMethod')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN shippingMethod TEXT`);
-        if (!columns.has('deliveredQuantity')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN deliveredQuantity REAL;`);
-        if (!columns.has('receivedInWarehouseBy')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN receivedInWarehouseBy TEXT;`);
-        if (!columns.has('inventory')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN inventory REAL;`);
-        if (!columns.has('priority')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN priority TEXT DEFAULT 'medium'`);
-        if (!columns.has('receivedDate')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN receivedDate TEXT`);
-        if (!columns.has('previousStatus')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN previousStatus TEXT`);
-        if (!columns.has('purchaseType')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN purchaseType TEXT DEFAULT 'single'`);
-        if (!columns.has('arrivalDate')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN arrivalDate TEXT`);
-        if (!columns.has('purchaseOrder')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN purchaseOrder TEXT`);
-        if (!columns.has('unitSalePrice')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN unitSalePrice REAL`);
-        if (!columns.has('erpOrderNumber')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN erpOrderNumber TEXT`);
-        if (!columns.has('erpOrderLine')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN erpOrderLine INTEGER`);
-        if (!columns.has('manualSupplier')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN manualSupplier TEXT`);
-        if (!columns.has('pendingAction')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN pendingAction TEXT DEFAULT 'none'`);
-        if (!columns.has('lastModifiedBy')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN lastModifiedBy TEXT`);
-        if (!columns.has('lastModifiedAt')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN lastModifiedAt TEXT`);
-        if (!columns.has('hasBeenModified')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN hasBeenModified BOOLEAN DEFAULT FALSE`);
-        if (!columns.has('clientTaxId')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN clientTaxId TEXT`);
-        if (!columns.has('erpEntryNumber')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN erpEntryNumber TEXT`);
-        if (!columns.has('salePriceCurrency')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN salePriceCurrency TEXT DEFAULT 'CRC'`);
-        if (!columns.has('requiresCurrency')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN requiresCurrency BOOLEAN DEFAULT FALSE`);
-        if (!columns.has('sourceOrders')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN sourceOrders TEXT`);
-        if (!columns.has('involvedClients')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN involvedClients TEXT`);
-        if (!columns.has('inventoryErp')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN inventoryErp REAL`);
-        if (!columns.has('analysis')) db.exec(`ALTER TABLE purchase_requests ADD COLUMN analysis TEXT`);
-        
-        const settingsTable = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='request_settings'`).get();
-        if(settingsTable){
-            if (!db.prepare(`SELECT key FROM request_settings WHERE key = 'requestPrefix'`).get()) {
-                db.prepare(`INSERT INTO request_settings (key, value) VALUES ('requestPrefix', 'SC-')`).run();
-            }
-            if (!db.prepare(`SELECT key FROM request_settings WHERE key = 'nextRequestNumber'`).get()) {
-                db.prepare(`INSERT INTO request_settings (key, value) VALUES ('nextRequestNumber', '1')`).run();
-            }
-            const pdfTopLegendRow = db.prepare(`SELECT value FROM request_settings WHERE key = 'pdfTopLegend'`).get() as { value: string } | undefined;
-            if (!pdfTopLegendRow) {
-                console.log("MIGRATION (requests.db): Adding pdfTopLegend to settings.");
-                db.prepare(`INSERT INTO request_settings (key, value) VALUES ('pdfTopLegend', '')`).run();
-            }
-            const pdfExportColumnsRow = db.prepare(`SELECT value FROM request_settings WHERE key = 'pdfExportColumns'`).get() as { value: string } | undefined;
-            if (!pdfExportColumnsRow) {
-                console.log("MIGRATION (requests.db): Adding pdfExportColumns to settings.");
-                const defaultColumns = ['consecutive', 'itemDescription', 'quantity', 'clientName', 'requiredDate', 'status'];
-                db.prepare(`INSERT INTO request_settings (key, value) VALUES ('pdfExportColumns', ?)`).run(JSON.stringify(defaultColumns));
-            }
-            const pdfPaperSizeRow = db.prepare(`SELECT value FROM request_settings WHERE key = 'pdfPaperSize'`).get() as { value: string } | undefined;
-            if (!pdfPaperSizeRow) {
-                console.log("MIGRATION (requests.db): Adding pdfPaperSize and pdfOrientation to settings.");
-                db.prepare(`INSERT INTO request_settings (key, value) VALUES ('pdfPaperSize', 'letter')`).run();
-                db.prepare(`INSERT INTO request_settings (key, value) VALUES ('pdfOrientation', 'portrait')`).run();
-            }
-            if (!db.prepare(`SELECT key FROM request_settings WHERE key = 'showCustomerTaxId'`).get()) {
-                console.log("MIGRATION (requests.db): Adding showCustomerTaxId to settings.");
-                db.prepare(`INSERT INTO request_settings (key, value) VALUES ('showCustomerTaxId', 'true')`).run();
-            }
-            if (!db.prepare(`SELECT key FROM request_settings WHERE key = 'useErpEntry'`).get()) {
-                console.log("MIGRATION (requests.db): Adding useErpEntry to settings.");
-                db.prepare(`INSERT INTO request_settings (key, value) VALUES ('useErpEntry', 'false')`).run();
-            }
-        }
-    } catch (error) {
-        console.error("Error during requests migrations:", error);
-    }
-}
+// Database initialization is now handled by the central orchestrator in core/lib/db.ts
 
 
 export async function getSettings(): Promise<RequestSettings> {
-    const db = await connectDb(REQUESTS_DB_FILE);
-    const settingsRows = db.prepare('SELECT * FROM request_settings').all() as { key: string; value: string }[];
+    const db = await getDb();
+    const settingsRows = db.prepare(`SELECT * FROM ${REQUESTS_TABLES.settings}`).all() as { key: string; value: string }[];
     
     const settings: RequestSettings = {
         requestPrefix: 'SC-',
@@ -246,14 +97,15 @@ export async function getSettings(): Promise<RequestSettings> {
 }
 
 export async function saveSettings(settings: RequestSettings): Promise<void> {
-    const db = await connectDb(REQUESTS_DB_FILE);
+    await authorizeAction('admin:settings:requests');
+    const db = await getDb();
     
     const transaction = db.transaction((settingsToUpdate) => {
         const keys: (keyof RequestSettings)[] = ['requestPrefix', 'nextRequestNumber', 'routes', 'shippingMethods', 'useWarehouseReception', 'useErpEntry', 'showCustomerTaxId', 'pdfTopLegend', 'pdfExportColumns', 'pdfPaperSize', 'pdfOrientation'];
         for (const key of keys) {
              if (settingsToUpdate[key] !== undefined) {
                 const value = typeof settingsToUpdate[key] === 'object' ? JSON.stringify(settingsToUpdate[key]) : String(settingsToUpdate[key]);
-                db.prepare('INSERT OR REPLACE INTO request_settings (key, value) VALUES (?, ?)').run(key, value);
+                db.prepare(`INSERT OR REPLACE INTO ${REQUESTS_TABLES.settings} (key, value) VALUES (?, ?)`).run(key, value);
             }
         }
     });
@@ -274,8 +126,7 @@ export async function getRequests(options: {
         dateRange?: DateRange;
     };
 }): Promise<{ requests: PurchaseRequest[], totalActive: number, totalArchived: number }> {
-    const db = await connectDb(REQUESTS_DB_FILE);
-    const mainDb = await connectDb();
+    const db = await getDb();
     const { page, pageSize, isArchived, filters } = options;
 
     const settings = await getSettings();
@@ -288,8 +139,8 @@ export async function getRequests(options: {
         let itemIdsFromBarcode: string[] = [];
 
         if (filters.searchTerm) {
-            const productResults = mainDb.prepare(`
-                SELECT id FROM products WHERE barcode LIKE ?
+            const productResults = db.prepare(`
+                SELECT id FROM core_products WHERE barcode LIKE ?
             `).all(`%${filters.searchTerm}%`);
             itemIdsFromBarcode = productResults.map((p: any) => p.id);
         }
@@ -333,7 +184,7 @@ export async function getRequests(options: {
         }
 
         if (filters.classification && filters.classification !== 'all') {
-            const productIds = mainDb.prepare(`SELECT id FROM products WHERE classification = ?`).all(filters.classification).map((p: any) => p.id);
+            const productIds = db.prepare(`SELECT id FROM core_products WHERE classification = ?`).all(filters.classification).map((p: any) => p.id);
             if (productIds.length > 0) {
                 whereClauses.push(`itemId IN (${productIds.map(() => '?').join(',')})`);
                 queryParams.push(...productIds);
@@ -348,11 +199,11 @@ export async function getRequests(options: {
     const activeQueryParts = await buildQueryParts(false);
     const archivedQueryParts = await buildQueryParts(true);
 
-    const totalActive = (db.prepare(`SELECT COUNT(*) as count FROM purchase_requests WHERE ${activeQueryParts.whereClause || '1=1'}`).get(...activeQueryParts.params) as { count: number }).count;
-    const totalArchived = (db.prepare(`SELECT COUNT(*) as count FROM purchase_requests WHERE ${archivedQueryParts.whereClause || '1=1'}`).get(...archivedQueryParts.params) as { count: number }).count;
+    const totalActive = (db.prepare(`SELECT COUNT(*) as count FROM ${REQUESTS_TABLES.requests} WHERE ${activeQueryParts.whereClause || '1=1'}`).get(...activeQueryParts.params) as { count: number }).count;
+    const totalArchived = (db.prepare(`SELECT COUNT(*) as count FROM ${REQUESTS_TABLES.requests} WHERE ${archivedQueryParts.whereClause || '1=1'}`).get(...archivedQueryParts.params) as { count: number }).count;
     
     const targetQueryParts = isArchived ? archivedQueryParts : activeQueryParts;
-    let finalQuery = `SELECT * FROM purchase_requests WHERE ${targetQueryParts.whereClause || '1=1'} ORDER BY requestDate DESC LIMIT ? OFFSET ?`;
+    let finalQuery = `SELECT * FROM ${REQUESTS_TABLES.requests} WHERE ${targetQueryParts.whereClause || '1=1'} ORDER BY requestDate DESC LIMIT ? OFFSET ?`;
     let finalParams = [...targetQueryParts.params, pageSize, page * pageSize];
     
     const requestsRaw = db.prepare(finalQuery).all(...finalParams) as any[];
@@ -362,7 +213,8 @@ export async function getRequests(options: {
 }
 
 export async function addRequest(request: Omit<PurchaseRequest, 'id' | 'consecutive' | 'requestDate' | 'status' | 'reopened' | 'requestedBy' | 'deliveredQuantity' | 'receivedInWarehouseBy' | 'receivedDate' | 'previousStatus' | 'lastModifiedAt' | 'lastModifiedBy' | 'hasBeenModified' | 'approvedBy' | 'lastStatusUpdateBy' | 'lastStatusUpdateNotes'>, requestedBy: string): Promise<PurchaseRequest> {
-    const db = await connectDb(REQUESTS_DB_FILE);
+    await authorizeAction('requests:create');
+    const db = await getDb();
     
     const settings = await getSettings();
     const nextNumber = settings.nextRequestNumber || 1;
@@ -370,6 +222,8 @@ export async function addRequest(request: Omit<PurchaseRequest, 'id' | 'consecut
 
     const newRequest: Omit<PurchaseRequest, 'id'> = {
         ...request,
+        clientId: request.clientId.toUpperCase(),
+        itemId: request.itemId.toUpperCase(),
         requestedBy: requestedBy,
         consecutive: `${prefix}${nextNumber.toString().padStart(5, '0')}`,
         requestDate: new Date().toISOString(),
@@ -403,7 +257,7 @@ export async function addRequest(request: Omit<PurchaseRequest, 'id' | 'consecut
     try {
         const transaction = db.transaction(() => {
             const insertStmt = db.prepare(`
-                INSERT INTO purchase_requests (
+                INSERT INTO ${REQUESTS_TABLES.requests} (
                     consecutive, requestDate, requiredDate, clientId, clientName, clientTaxId,
                     itemId, itemDescription, quantity, unitSalePrice, salePriceCurrency, requiresCurrency,
                     erpOrderNumber, erpOrderLine, manualSupplier, route, shippingMethod, purchaseOrder,
@@ -421,16 +275,16 @@ export async function addRequest(request: Omit<PurchaseRequest, 'id' | 'consecut
             const info = insertStmt.run(preparedRequest);
             const newRequestId = info.lastInsertRowid as number;
 
-            db.prepare('UPDATE request_settings SET value = ? WHERE key = \'nextRequestNumber\'').run(nextNumber + 1);
+            db.prepare(`UPDATE ${REQUESTS_TABLES.settings} SET value = ? WHERE key = 'nextRequestNumber'`).run(nextNumber + 1);
             
-            const historyStmt = db.prepare('INSERT INTO purchase_request_history (requestId, timestamp, status, updatedBy, notes) VALUES (?, ?, ?, ?, ?)');
+            const historyStmt = db.prepare(`INSERT INTO ${REQUESTS_TABLES.history} (requestId, timestamp, status, updatedBy, notes) VALUES (?, ?, ?, ?, ?)`);
             historyStmt.run(newRequestId, new Date().toISOString(), 'pending', newRequest.requestedBy, 'Solicitud creada');
             
             return newRequestId;
         });
 
         const newId = transaction();
-        const createdRequest = db.prepare('SELECT * FROM purchase_requests WHERE id = ?').get(newId) as any;
+        const createdRequest = db.prepare(`SELECT * FROM ${REQUESTS_TABLES.requests} WHERE id = ?`).get(newId) as any;
         return sanitizeRequest(createdRequest);
     } catch (error: any) {
         logError("Failed to create request in DB", { context: 'addRequest DB transaction', error: error.message, details: preparedRequest });
@@ -439,10 +293,10 @@ export async function addRequest(request: Omit<PurchaseRequest, 'id' | 'consecut
 }
 
 export async function updateRequest(payload: UpdatePurchaseRequestPayload): Promise<PurchaseRequest> {
-    const db = await connectDb(REQUESTS_DB_FILE);
+    const db = await getDb();
     const { requestId, updatedBy, ...dataToUpdate } = payload;
     
-    const currentRequest = db.prepare('SELECT * FROM purchase_requests WHERE id = ?').get(requestId) as PurchaseRequest | undefined;
+    const currentRequest = db.prepare(`SELECT * FROM ${REQUESTS_TABLES.requests} WHERE id = ?`).get(requestId) as PurchaseRequest | undefined;
     if (!currentRequest) {
         throw new Error("Request not found.");
     }
@@ -454,7 +308,7 @@ export async function updateRequest(payload: UpdatePurchaseRequestPayload): Prom
 
     const transaction = db.transaction(() => {
         db.prepare(`
-            UPDATE purchase_requests SET
+            UPDATE ${REQUESTS_TABLES.requests} SET
                 requiredDate = @requiredDate,
                 clientId = @clientId,
                 clientName = @clientName,
@@ -486,6 +340,8 @@ export async function updateRequest(payload: UpdatePurchaseRequestPayload): Prom
         `).run({ 
             requestId, 
             ...dataToUpdate,
+            clientId: dataToUpdate.clientId?.toUpperCase(),
+            itemId: dataToUpdate.itemId?.toUpperCase(),
             requiresCurrency: dataToUpdate.requiresCurrency ? 1 : 0,
             salePriceCurrency: dataToUpdate.salePriceCurrency || 'CRC',
             updatedBy,
@@ -497,21 +353,39 @@ export async function updateRequest(payload: UpdatePurchaseRequestPayload): Prom
         });
 
         if (hasBeenModified) {
-            const historyStmt = db.prepare('INSERT INTO purchase_request_history (requestId, timestamp, status, updatedBy, notes) VALUES (?, ?, ?, ?, ?)');
+            const historyStmt = db.prepare(`INSERT INTO ${REQUESTS_TABLES.history} (requestId, timestamp, status, updatedBy, notes) VALUES (?, ?, ?, ?, ?)`);
             historyStmt.run(requestId, new Date().toISOString(), currentRequest.status, updatedBy, 'Solicitud editada después de aprobación.');
         }
     });
 
     transaction();
-    const updatedRequest = db.prepare('SELECT * FROM purchase_requests WHERE id = ?').get(requestId) as any;
+    const updatedRequest = db.prepare(`SELECT * FROM ${REQUESTS_TABLES.requests} WHERE id = ?`).get(requestId) as any;
     return sanitizeRequest(updatedRequest);
 }
 
 export async function updateStatus(payload: UpdateRequestStatusPayload): Promise<PurchaseRequest> {
-    const db = await connectDb(REQUESTS_DB_FILE);
     const { requestId, status, notes, updatedBy, reopen, manualSupplier, erpOrderNumber, erpEntryNumber, deliveredQuantity, arrivalDate } = payload;
+    
+    // Dynamic permission check based on target status
+    const permissionMap: Record<string, any> = {
+        'purchasing-review': 'requests:status:review',
+        'pending-approval': 'requests:status:pending-approval',
+        'approved': 'requests:status:approve',
+        'ordered': 'requests:status:ordered',
+        'received-in-warehouse': 'requests:status:received-in-warehouse',
+        'entered-erp': 'requests:status:entered-erp',
+        'canceled': 'requests:status:cancel',
+    };
 
-    const currentRequest = db.prepare('SELECT * FROM purchase_requests WHERE id = ?').get(requestId) as PurchaseRequest | undefined;
+    if (permissionMap[status]) {
+        await authorizeAction(permissionMap[status]);
+    } else {
+        await authorizeAction('requests:read');
+    }
+
+    const db = await getDb();
+
+    const currentRequest = db.prepare(`SELECT * FROM ${REQUESTS_TABLES.requests} WHERE id = ?`).get(requestId) as PurchaseRequest | undefined;
     if (!currentRequest) {
         throw new Error("Request not found.");
     }
@@ -545,7 +419,7 @@ export async function updateStatus(payload: UpdateRequestStatusPayload): Promise
 
     const transaction = db.transaction(() => {
         const stmt = db.prepare(`
-            UPDATE purchase_requests SET
+            UPDATE ${REQUESTS_TABLES.requests} SET
                 status = @status,
                 lastStatusUpdateNotes = @notes,
                 lastStatusUpdateBy = @updatedBy,
@@ -580,36 +454,36 @@ export async function updateStatus(payload: UpdateRequestStatusPayload): Promise
             previousStatus: previousStatus
         });
         
-        const historyStmt = db.prepare('INSERT INTO purchase_request_history (requestId, timestamp, status, updatedBy, notes) VALUES (?, ?, ?, ?, ?)');
+        const historyStmt = db.prepare(`INSERT INTO ${REQUESTS_TABLES.history} (requestId, timestamp, status, updatedBy, notes) VALUES (?, ?, ?, ?, ?)`);
         historyStmt.run(requestId, new Date().toISOString(), status, updatedBy, notes);
     });
 
     transaction();
-    const updatedRequest = db.prepare('SELECT * FROM purchase_requests WHERE id = ?').get(requestId) as any;
+    const updatedRequest = db.prepare(`SELECT * FROM ${REQUESTS_TABLES.requests} WHERE id = ?`).get(requestId) as any;
     return sanitizeRequest(updatedRequest);
 }
 
 export async function getRequestHistory(requestId: number): Promise<PurchaseRequestHistoryEntry[]> {
-    const db = await connectDb(REQUESTS_DB_FILE);
-    return db.prepare('SELECT * FROM purchase_request_history WHERE requestId = ? ORDER BY timestamp DESC').all(requestId) as PurchaseRequestHistoryEntry[];
+    const db = await getDb();
+    return db.prepare(`SELECT * FROM ${REQUESTS_TABLES.history} WHERE requestId = ? ORDER BY timestamp DESC`).all(requestId) as PurchaseRequestHistoryEntry[];
 }
 
 export async function updatePendingAction(payload: AdministrativeActionPayload): Promise<PurchaseRequest> {
-    const db = await connectDb(REQUESTS_DB_FILE);
+    const db = await getDb();
     const { entityId, action, notes, updatedBy } = payload;
 
-    const currentRequest = db.prepare('SELECT * FROM purchase_requests WHERE id = ?').get(entityId) as PurchaseRequest | undefined;
+    const currentRequest = db.prepare(`SELECT * FROM ${REQUESTS_TABLES.requests} WHERE id = ?`).get(entityId) as PurchaseRequest | undefined;
     if (!currentRequest) throw new Error("Request not found.");
 
     const transaction = db.transaction(() => {
         db.prepare(`
-            UPDATE purchase_requests SET
+            UPDATE ${REQUESTS_TABLES.requests} SET
                 pendingAction = @action,
                 previousStatus = CASE WHEN @action != 'none' THEN status ELSE previousStatus END
             WHERE id = @entityId
         `).run({ action, entityId });
         
-        const historyStmt = db.prepare('INSERT INTO purchase_request_history (requestId, timestamp, status, updatedBy, notes) VALUES (?, ?, ?, ?, ?)');
+        const historyStmt = db.prepare(`INSERT INTO ${REQUESTS_TABLES.history} (requestId, timestamp, status, updatedBy, notes) VALUES (?, ?, ?, ?, ?)`);
         const historyNote = action === 'none' 
             ? 'Acción administrativa rechazada/cancelada' 
             : `Solicitud de ${action === 'unapproval-request' ? 'desaprobación' : 'cancelación'} iniciada`;
@@ -617,25 +491,25 @@ export async function updatePendingAction(payload: AdministrativeActionPayload):
     });
     
     transaction();
-    const updatedRequest = db.prepare('SELECT * FROM purchase_requests WHERE id = ?').get(entityId) as any;
+    const updatedRequest = db.prepare(`SELECT * FROM ${REQUESTS_TABLES.requests} WHERE id = ?`).get(entityId) as any;
     return sanitizeRequest(updatedRequest);
 }
 
 export async function getErpOrderData(identifier: string | DateRange): Promise<{headers: ErpOrderHeader[], lines: ErpOrderLine[], inventory: StockInfo[]}> {
-    const mainDb = await connectDb();
+    const db = await getDb();
     
     let headers: ErpOrderHeader[] = [];
 
     if (typeof identifier === 'string') {
         logInfo("Buscando pedido ERP en DB local por número", { searchTerm: identifier });
-        headers = mainDb.prepare('SELECT * FROM erp_order_headers WHERE PEDIDO LIKE ?').all(`%${identifier}%`) as ErpOrderHeader[];
+        headers = db.prepare('SELECT * FROM core_erp_order_headers WHERE PEDIDO LIKE ?').all(`%${identifier}%`) as ErpOrderHeader[];
     } else {
         const { from, to } = identifier;
         if (!from) throw new Error('Date "from" is required for range search.');
         
         const toDate = to || new Date();
         logInfo("Buscando pedidos ERP en DB local por rango de fecha", { from: from.toISOString(), to: toDate.toISOString() });
-        headers = mainDb.prepare('SELECT * FROM erp_order_headers WHERE FECHA_PEDIDO BETWEEN ? AND ?').all(from.toISOString(), toDate.toISOString()) as ErpOrderHeader[];
+        headers = db.prepare('SELECT * FROM core_erp_order_headers WHERE FECHA_PEDIDO BETWEEN ? AND ?').all(from.toISOString(), toDate.toISOString()) as ErpOrderHeader[];
     }
 
     if (headers.length === 0) {
@@ -650,36 +524,36 @@ export async function getErpOrderData(identifier: string | DateRange): Promise<{
         return { headers, lines: [], inventory: [] };
     }
 
-    const lines: ErpOrderLine[] = mainDb.prepare(`SELECT * FROM erp_order_lines WHERE PEDIDO IN (${sanitizedOrderNumbers})`).all() as ErpOrderLine[];
+    const lines: ErpOrderLine[] = db.prepare(`SELECT * FROM core_erp_order_lines WHERE PEDIDO IN (${sanitizedOrderNumbers})`).all() as ErpOrderLine[];
     
     if (lines.length === 0) {
          return { headers, lines: [], inventory: [] };
     }
 
     const itemIds = [...new Set(lines.map(line => line.ARTICULO))];
-    const inventory: StockInfo[] = await (await connectDb()).prepare(`SELECT * FROM stock WHERE itemId IN (${itemIds.map(() => '?').join(',')})`).all(...itemIds) as StockInfo[];
+    const inventory: StockInfo[] = db.prepare(`SELECT * FROM core_stock WHERE itemId IN (${itemIds.map(() => '?').join(',')})`).all(...itemIds) as StockInfo[];
     const relevantInventory = inventory.filter(inv => itemIds.includes(inv.itemId));
 
     return JSON.parse(JSON.stringify({ headers, lines, inventory: relevantInventory }));
 }
 
 export async function updateRequestDetails(payload: { requestId: number; priority: PurchaseRequestPriority, updatedBy: string }): Promise<PurchaseRequest> {
-    const db = await connectDb(REQUESTS_DB_FILE);
+    const db = await getDb();
     const { requestId, priority, updatedBy } = payload;
     
-    const currentRequest = db.prepare('SELECT * FROM purchase_requests WHERE id = ?').get(requestId) as PurchaseRequest | undefined;
+    const currentRequest = db.prepare(`SELECT * FROM ${REQUESTS_TABLES.requests} WHERE id = ?`).get(requestId) as PurchaseRequest | undefined;
     if (!currentRequest) throw new Error("Request not found.");
 
     const transaction = db.transaction(() => {
-        db.prepare('UPDATE purchase_requests SET priority = ? WHERE id = ?').run(priority, requestId);
+        db.prepare(`UPDATE ${REQUESTS_TABLES.requests} SET priority = ? WHERE id = ?`).run(priority, requestId);
         
         const historyNote = `Prioridad cambiada a: ${priority}`;
-        const historyStmt = db.prepare('INSERT INTO purchase_request_history (requestId, timestamp, status, updatedBy, notes) VALUES (?, ?, ?, ?, ?)');
+        const historyStmt = db.prepare(`INSERT INTO ${REQUESTS_TABLES.history} (requestId, timestamp, status, updatedBy, notes) VALUES (?, ?, ?, ?, ?)`);
         historyStmt.run(requestId, new Date().toISOString(), currentRequest.status, updatedBy, historyNote);
     });
 
     transaction();
-    const updatedRequest = db.prepare('SELECT * FROM purchase_requests WHERE id = ?').get(requestId) as any;
+    const updatedRequest = db.prepare(`SELECT * FROM ${REQUESTS_TABLES.requests} WHERE id = ?`).get(requestId) as any;
     return sanitizeRequest(updatedRequest);
 }
 
@@ -694,24 +568,24 @@ export async function getRolesWithPermission(permission: string): Promise<string
 }
 
 export async function addNote(payload: { requestId: number; notes: string; updatedBy: string; }): Promise<PurchaseRequest> {
-    const db = await connectDb(REQUESTS_DB_FILE);
+    const db = await getDb();
     const { requestId, notes, updatedBy } = payload;
 
-    const currentRequest = db.prepare('SELECT status FROM purchase_requests WHERE id = ?').get(requestId) as PurchaseRequest | undefined;
+    const currentRequest = db.prepare(`SELECT status FROM ${REQUESTS_TABLES.requests} WHERE id = ?`).get(requestId) as PurchaseRequest | undefined;
     if (!currentRequest) {
         throw new Error("Request not found.");
     }
 
-    db.prepare('INSERT INTO purchase_request_history (requestId, timestamp, status, updatedBy, notes) VALUES (?, ?, ?, ?, ?)')
+    db.prepare(`INSERT INTO ${REQUESTS_TABLES.history} (requestId, timestamp, status, updatedBy, notes) VALUES (?, ?, ?, ?, ?)`)
       .run(requestId, new Date().toISOString(), currentRequest.status, updatedBy, `Nota agregada: ${notes}`);
 
-    const updatedRequest = db.prepare('SELECT * FROM purchase_requests WHERE id = ?').get(requestId) as any;
+    const updatedRequest = db.prepare(`SELECT * FROM ${REQUESTS_TABLES.requests} WHERE id = ?`).get(requestId) as any;
     return sanitizeRequest(updatedRequest);
 }
 
 
 export async function saveCostAnalysis(requestId: number, cost: number, salePrice: number): Promise<PurchaseRequest> {
-    const db = await connectDb(REQUESTS_DB_FILE);
+    const db = await getDb();
     
     if (cost <= 0) {
         throw new Error('El costo debe ser mayor a cero para calcular el margen.');
@@ -720,8 +594,8 @@ export async function saveCostAnalysis(requestId: number, cost: number, salePric
     const margin = (salePrice - cost) / cost;
     const analysis = { cost, salePrice, margin };
 
-    db.prepare(`UPDATE purchase_requests SET analysis = ?, unitSalePrice = ? WHERE id = ?`).run(JSON.stringify(analysis), salePrice, requestId);
+    db.prepare(`UPDATE ${REQUESTS_TABLES.requests} SET analysis = ?, unitSalePrice = ? WHERE id = ?`).run(JSON.stringify(analysis), salePrice, requestId);
 
-    const updatedRequest = db.prepare('SELECT * FROM purchase_requests WHERE id = ?').get(requestId) as any;
+    const updatedRequest = db.prepare(`SELECT * FROM ${REQUESTS_TABLES.requests} WHERE id = ?`).get(requestId) as any;
     return sanitizeRequest(updatedRequest);
 }

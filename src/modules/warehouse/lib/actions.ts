@@ -25,6 +25,7 @@ import {
     deleteInventoryUnit as deleteInventoryUnitServer,
     getInventoryUnitById as getInventoryUnitByIdServer,
     addBulkLocations as addBulkLocationsServer,
+    addLevelsToRack as addLevelsToRackServer,
     getActiveLocks as getActiveLocksServer,
     lockEntity as lockEntityServer,
     releaseLock as releaseLockServer,
@@ -46,6 +47,11 @@ import {
     getLevelsForRack as getLevelsForRackServer,
     updateLocationPopulationStatus as updateLocationPopulationStatusServer,
     finalizePopulationSession as finalizePopulationSessionServer,
+    clearInventory as clearInventoryServer,
+    searchLocations as searchLocationsServer,
+    getLocationsByParent as getLocationsByParentServer,
+    getItemLocationsByLocation as getItemLocationsByLocationServer,
+    getSuggestedLocations as getSuggestedLocationsServer,
 } from './db';
 import { getStockSettings as getStockSettingsDb, saveStockSettings as saveStockSettingsDb } from '@/modules/core/lib/db';
 import type { WarehouseSettings, WarehouseLocation, WarehouseInventoryItem, MovementLog, ItemLocation, InventoryUnit, StockSettings, User, DateRange, Product } from '@/modules/core/types';
@@ -62,6 +68,10 @@ export async function saveStockSettings(settings: StockSettings): Promise<void> 
     return saveStockSettingsDb(settings);
 }
 export const getLocations = async (): Promise<WarehouseLocation[]> => getLocationsServer();
+export const searchLocations = async (query: string, limit?: number): Promise<WarehouseLocation[]> => searchLocationsServer(query, limit);
+export const getLocationsByParent = async (parentId: number | null): Promise<WarehouseLocation[]> => getLocationsByParentServer(parentId);
+export const getItemLocationsByLocation = async (locationId: number): Promise<ItemLocation[]> => getItemLocationsByLocationServer(locationId);
+export const getSuggestedLocations = async (productId: string): Promise<WarehouseLocation[]> => getSuggestedLocationsServer(productId);
 
 /**
  * Filters a list of all locations to return only those that can be selected as final destinations
@@ -85,13 +95,24 @@ export async function addBulkLocations(payload: { type: 'rack' | 'clone'; params
     await logInfo(`Bulk locations created via wizard`, { payload });
 }
 
+export async function addLevelsToRack(rackId: number, numNewLevels: number): Promise<void> {
+    await logInfo(`Adding ${numNewLevels} levels to rack with ID ${rackId}`);
+    const res = await addLevelsToRackServer(rackId, numNewLevels);
+    if (!res.success) {
+        throw new Error(res.error);
+    }
+}
+
 export async function updateLocation(location: WarehouseLocation): Promise<WarehouseLocation> {
     const updatedLocation = await updateLocationServer(location);
     await logInfo(`Warehouse location updated: ${updatedLocation.name} (${updatedLocation.code})`);
     return updatedLocation;
 }
 export async function deleteLocation(id: number, userName: string): Promise<void> {
-    return deleteLocationServer(id, userName);
+    const res = await deleteLocationServer(id, userName);
+    if (!res.success) {
+        throw new Error(res.error);
+    }
 }
 export const getInventoryForItem = async (itemId: string): Promise<WarehouseInventoryItem[]> => getInventoryForItemServer(itemId);
 export const logMovement = async (movement: Omit<MovementLog, 'id'|'timestamp'>): Promise<void> => logMovementServer(movement);
@@ -104,7 +125,7 @@ export const updateInventory = async(itemId: string, locationId: number, quantit
 export const getItemLocations = async (itemId: string): Promise<ItemLocation[]> => getItemLocationsServer(itemId);
 export const getAllItemLocations = async (): Promise<ItemLocation[]> => getAllItemLocationsServer();
 
-export async function assignItemToLocation(payload: Partial<Omit<ItemLocation, 'updatedAt'>> & { updatedBy: string }, mode?: 'move' | 'add' | 'add_and_mix' | 'move_and_mix'): Promise<ItemLocation> {
+export async function assignItemToLocation(payload: Partial<Omit<ItemLocation, 'updatedAt'>> & { updatedBy: string }, mode?: 'move' | 'add' | 'add_and_mix' | 'move_and_mix'): Promise<{ success: boolean; data?: ItemLocation; error?: string }> {
     return assignItemToLocationServer(payload, mode);
 }
 
@@ -176,3 +197,7 @@ export const getRacks = async (): Promise<WarehouseLocation[]> => getRacksServer
 export const getLevelsForRack = async (rackId: number): Promise<(WarehouseLocation & { isCompleted?: boolean })[]> => getLevelsForRackServer(rackId);
 export const updateLocationPopulationStatus = async (locationId: number, status: 'S'): Promise<void> => updateLocationPopulationStatusServer(locationId, status);
 export const finalizePopulationSession = async (payload: { levelIds: number[]; userName: string; userId: number; assignments: { locationId: number, itemId: string }[] }): Promise<void> => finalizePopulationSessionServer(payload);
+
+export const clearInventory = async (): Promise<void> => {
+    return clearInventoryServer();
+};

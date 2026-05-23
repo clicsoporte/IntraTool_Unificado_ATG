@@ -1,7 +1,7 @@
 "use server";
 
 import nodemailer from 'nodemailer';
-import { connectDb } from './db';
+import { getDb } from './db';
 import type { EmailSettings } from '../types';
 import { logError, logWarn } from './logger';
 
@@ -10,9 +10,9 @@ import { logError, logWarn } from './logger';
  * @returns The saved email settings or an empty object.
  */
 export async function getEmailSettings(): Promise<Partial<EmailSettings>> {
-    const db = await connectDb();
+    const db = await getDb();
     try {
-        const rows = db.prepare('SELECT key, value FROM email_settings').all() as { key: string, value: string }[];
+        const rows = db.prepare('SELECT key, value FROM core_email_settings').all() as { key: string, value: string }[];
         if (rows.length === 0) return {};
         const settings: Partial<EmailSettings> = {};
         for (const row of rows) {
@@ -29,7 +29,7 @@ export async function getEmailSettings(): Promise<Partial<EmailSettings>> {
     } catch (error) {
         // If the table doesn't exist, it's not a critical failure, just return empty settings.
         if ((error as Error).message.includes('no such table')) {
-            console.warn('email_settings table does not exist. Returning empty settings.');
+            console.warn('core_email_settings table does not exist. Returning empty settings.');
             return {};
         }
         await logError('getEmailSettings', { error: (error as Error).message });
@@ -42,8 +42,8 @@ export async function getEmailSettings(): Promise<Partial<EmailSettings>> {
  * @param settings The email settings to save.
  */
 export async function saveEmailSettings(settings: EmailSettings): Promise<void> {
-    const db = await connectDb();
-    const insert = db.prepare('INSERT OR REPLACE INTO email_settings (key, value) VALUES (?, ?)');
+    const db = await getDb();
+    const insert = db.prepare('INSERT OR REPLACE INTO core_email_settings (key, value) VALUES (?, ?)');
     const transaction = db.transaction((s: EmailSettings) => {
         for (const [key, value] of Object.entries(s)) {
             insert.run(key, String(value));

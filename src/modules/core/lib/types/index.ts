@@ -189,6 +189,7 @@ export type ApiSettings = {
     exchangeRateApi: string;
     haciendaExemptionApi: string;
     haciendaTributariaApi: string;
+    recopeApi?: string;
 };
 
 /**

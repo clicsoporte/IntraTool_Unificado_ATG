@@ -21,6 +21,7 @@ export const UserSchema = z.object({
   securityQuestion: z.string().optional().nullable(),
   securityAnswer: z.string().optional().nullable(),
   forcePasswordChange: z.union([z.boolean(), z.number()]).optional(),
+  employeeId: z.string().optional().nullable(),
 });
 
 
@@ -35,4 +36,5 @@ export const NewUserSchema = z.object({
     whatsapp: z.string().optional(),
     erpAlias: z.string().optional(),
     forcePasswordChange: z.boolean(),
+    employeeId: z.string().optional().nullable(),
 });

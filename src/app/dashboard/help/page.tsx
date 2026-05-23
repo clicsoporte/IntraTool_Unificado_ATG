@@ -62,6 +62,8 @@ import {
   Undo2,
   Info,
   BadgeInfo,
+  RefreshCcw,
+  Zap,
   CreditCard,
   MessageSquare,
   Trash2,
@@ -224,6 +226,49 @@ export default function HelpPage() {
         )
     },
     {
+        title: "Minitutoriales Rápidos: El Nuevo Sistema Unificado",
+        icon: <Wand2 className="mr-4 h-6 w-6 text-purple-600" />,
+        content: (
+            <div className="space-y-6">
+                <p className="text-muted-foreground italic">Hemos simplificado la arquitectura para que el sistema sea más rápido y confiable. Aquí tienes lo esencial que debes saber:</p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Card className="bg-primary/5 border-primary/20">
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm flex items-center"><DatabaseZap className="mr-2 h-4 w-4 text-primary"/> Una Sola Base de Datos</CardTitle>
+                        </CardHeader>
+                        <CardContent className="text-xs">
+                            Antes cada módulo tenía su archivo. Ahora todo vive en <code>clic_tools.db</code>. Esto significa que si actualizas un cliente en un lado, se actualiza en todos instantáneamente.
+                        </CardContent>
+                    </Card>
+
+                    <Card className="bg-primary/5 border-primary/20">
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm flex items-center"><Zap className="mr-2 h-4 w-4 text-yellow-600"/> Velocidad Offline-First</CardTitle>
+                        </CardHeader>
+                        <CardContent className="text-xs">
+                            El sistema no consulta a Softland cada vez que buscas un producto. Lee de su propia copia local ultrarrápida. Por eso las búsquedas son instantáneas.
+                        </CardContent>
+                    </Card>
+
+
+
+                    <Card className="bg-primary/5 border-primary/20">
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm flex items-center"><RefreshCcw className="mr-2 h-4 w-4 text-green-600"/> Sincronización Inteligente</CardTitle>
+                        </CardHeader>
+                        <CardContent className="text-xs">
+                            Los datos de RRHH (empleados, puestos, departamentos) ahora se sincronizan igual que los productos. Todo el organigrama está disponible localmente.
+                        </CardContent>
+                    </Card>
+                </div>
+
+
+            </div>
+        )
+    },
+
+    {
         title: "Guía del Centro de Notificaciones",
         icon: <BellRing className="mr-4 h-6 w-6 text-yellow-500" />,
         content: (
@@ -271,8 +316,9 @@ export default function HelpPage() {
         content: (
             <div className="space-y-4">
                 <p>
-                Esta es una de las funcionalidades más importantes. Permite que la aplicación se mantenga al día con los datos maestros de tu sistema ERP (clientes, productos, inventario, etc.). Se gestiona desde <strong>Administración &gt; Importar Datos</strong> y tiene dos modos de funcionamiento.
+                Esta es una de las funcionalidades más importantes. Permite que la aplicación se mantenga al día con los datos maestros de tu sistema ERP (clientes, productos, inventario, RRHH, etc.). Se gestiona desde <strong>Administración &gt; Importar Datos</strong> y tiene dos modos de funcionamiento.
                 </p>
+
 
                 <h4 className="font-semibold text-lg pt-2 border-t">Modo 1: Importación desde Archivos</h4>
                 <ul className="list-disc space-y-3 pl-6">
@@ -302,9 +348,9 @@ export default function HelpPage() {
                     </li>
                 </ul>
                 
-                <h4 className="font-semibold text-lg pt-2 border-t">Automatización de Sincronización (Cron Job) - ¡NUEVO!</h4>
-                <p>Para mantener los datos del ERP actualizados automáticamente (por ejemplo, todas las noches), puedes configurar una tarea programada o &quot;cron job&quot; que llame a un endpoint seguro de la aplicación.</p>
-                <ol className="list-decimal space-y-3 pl-6">
+                <h4 className="font-semibold text-lg pt-2 border-t">Automatizaciones y Tareas Programadas (Cron Jobs) - ¡NUEVO!</h4>
+                <p>Para mantener los datos actualizados y las notificaciones activas automáticamente, puedes configurar tareas programadas externas que llamen de forma segura a los siguientes endpoints:</p>
+                <ol className="list-decimal space-y-4 pl-6">
                     <li>
                         <strong>Configurar la Clave Secreta:</strong>
                         <ul className="list-[circle] space-y-2 pl-5 mt-2 text-sm">
@@ -313,15 +359,25 @@ export default function HelpPage() {
                             <li className="p-2 bg-muted rounded-md font-mono text-xs"><code>CRON_SECRET=&quot;tu_clave_super_secreta_y_aleatoria_aqui&quot;</code></li>
                         </ul>
                     </li>
-                     <li>
-                        <strong>Configurar la Tarea Programada:</strong>
+                    <li>
+                        <strong>Configurar Sincronización del ERP:</strong>
                         <ul className="list-[circle] space-y-2 pl-5 mt-2 text-sm">
-                            <li>La tarea debe realizar una petición `POST` a la URL <code>/api/cron/sync-erp</code> de tu aplicación, incluyendo la clave secreta en la cabecera de autorización.</li>
-                            <li><strong>Ejemplo para Linux (<code>crontab</code>):</strong></li>
-                            <li className="p-2 bg-muted rounded-md font-mono text-xs"><code>0 2 * * * curl -X POST -H &quot;Authorization: Bearer tu_clave_super_secreta_y_aleatoria_aqui&quot; http://localhost:9003/api/cron/sync-erp</code></li>
+                            <li>La tarea debe realizar una petición <code>POST</code> a la URL <code>/api/cron/sync-erp</code> de tu aplicación, incluyendo la clave secreta en la cabecera de autorización.</li>
                             <li><strong>Ejemplo para Windows (Programador de Tareas):</strong></li>
                             <li className="p-2 bg-muted rounded-md font-mono text-xs"><code>powershell</code><br/>Argumentos: <code>{`Invoke-WebRequest -Uri "http://localhost:9003/api/cron/sync-erp" -Method POST -Headers @{'Authorization' = 'Bearer tu_clave_super_secreta'} -UseBasicParsing`}</code></li>
-                             <li><span className="font-bold">Importante:</span> El `cron` usará automáticamente las consultas SQL que hayas guardado en el panel de administración. No necesitas actualizar la tarea programada si cambias una consulta.</li>
+                            <li><strong>Ejemplo para Linux (<code>crontab</code>):</strong></li>
+                            <li className="p-2 bg-muted rounded-md font-mono text-xs"><code>0 2 * * * curl -X POST -H &quot;Authorization: Bearer tu_clave_super_secreta&quot; http://localhost:9003/api/cron/sync-erp</code></li>
+                        </ul>
+                    </li>
+                    <li>
+                        <strong>Configurar Auditoría de Flota (Vencimientos y Alertas):</strong>
+                        <ul className="list-[circle] space-y-2 pl-5 mt-2 text-sm">
+                            <li>La tarea debe realizar una petición <code>POST</code> a la URL <code>/api/cron/fleet-audit</code> de tu aplicación, incluyendo la clave secreta en la cabecera de autorización.</li>
+                            <li><strong>Ejemplo para Windows (Programador de Tareas):</strong></li>
+                            <li className="p-2 bg-muted rounded-md font-mono text-xs"><code>powershell</code><br/>Argumentos: <code>{`Invoke-WebRequest -Uri "http://localhost:9003/api/cron/fleet-audit" -Method POST -Headers @{'Authorization' = 'Bearer tu_clave_super_secreta'} -UseBasicParsing`}</code></li>
+                            <li><strong>Ejemplo para Linux (<code>crontab</code>):</strong></li>
+                            <li className="p-2 bg-muted rounded-md font-mono text-xs"><code>0 8 * * * curl -X POST -H &quot;Authorization: Bearer tu_clave_super_secreta&quot; http://localhost:9003/api/cron/fleet-audit</code></li>
+                            <li><span className="font-bold">Importante:</span> Esta tarea evalúa de forma inteligente los hitos de kilometraje (aceite) y fechas límite (RTV/permisos), y despacha alertas por correo y Telegram según tus preferencias.</li>
                         </ul>
                     </li>
                 </ol>
@@ -332,6 +388,86 @@ export default function HelpPage() {
                     <li>
                         <strong>Alerta de Sincronización Antigua (<AlertTriangle className="inline h-4 w-4 text-red-600"/>):</strong> Si ha pasado mucho tiempo desde la última sincronización (el tiempo es configurable en Administración &gt; General), el indicador &quot;Última Sinc&quot; y el botón de sincronización se pondrán en <strong>rojo y parpadearán</strong>. Esto es una alerta visual crítica que te indica que los datos de la aplicación (como precios o inventario) pueden estar desactualizados.
                     </li>
+                </ul>
+            </div>
+        )
+    },
+    {
+        title: "Manual del Bot de Telegram de Flota",
+        icon: <Send className="mr-4 h-6 w-6 text-sky-500" />,
+        content: (
+            <div className="space-y-4">
+                <p>
+                El <strong>Bot de Telegram Interactivo de Flota</strong> es una potente extensión que permite a los colaboradores (choferes y mecánicos) registrar cargas de combustible (repostajes) y reportar mantenimientos directamente desde Telegram, sin necesidad de acceder a la plataforma web.
+                </p>
+
+                <h4 className="font-semibold text-lg pt-2 border-t">🔑 1. Proceso de Vinculación de Seguridad</h4>
+                <p>Por motivos de seguridad, antes de que un colaborador pueda utilizar el bot, su cuenta de Telegram debe estar enlazada con su registro de empleado en el sistema. Existen dos métodos para realizar esto:</p>
+                <ul className="list-disc space-y-3 pl-6">
+                    <li>
+                        <strong>Generación de Código de Activación (Recomendado):</strong>
+                        <ol className="list-decimal space-y-1.5 pl-5 mt-2">
+                            <li>Un administrador va a <strong>Administración &gt; Automatizaciones &gt; Bot de Telegram Flota</strong>.</li>
+                            <li>En la tarjeta &quot;Generación Rápida de Código&quot;, selecciona al colaborador y presiona &quot;Generar Código&quot;.</li>
+                            <li>Brinda el código temporal generado al colaborador.</li>
+                            <li>El colaborador inicia el bot en Telegram enviando el comando <code>/vincular CODIGO</code> (ej: <code>/vincular ABC123XYZ</code>). El bot confirmará la vinculación exitosa al instante.</li>
+                        </ol>
+                    </li>
+                    <li>
+                        <strong>Vinculación Manual por Chat ID:</strong>
+                        <ol className="list-decimal space-y-1.5 pl-5 mt-2">
+                            <li>Si se conoce el <em>Chat ID</em> numérico del colaborador, el administrador puede forzar la vinculación inmediatamente haciendo clic en el botón &quot;Vincular Manualmente&quot; e ingresando el empleado y su ID de chat.</li>
+                        </ol>
+                    </li>
+                </ul>
+
+                <h4 className="font-semibold text-lg pt-2 border-t">⛽ 2. Flujo de Carga de Combustible (Repostaje)</h4>
+                <p>Cuando un colaborador de flota necesita reportar una recarga de combustible, debe seguir estos pasos en el bot de Telegram:</p>
+                <ol className="list-decimal space-y-3 pl-6">
+                    <li>Selecciona la opción <strong>1 - Repostaje</strong> en el menú interactivo (o envía <code>/menu</code>).</li>
+                    <li>El bot le solicitará la <strong>Placa del Vehículo</strong> (ej: <code>CL-12345</code>). El sistema validará en tiempo real que el vehículo exista y esté activo en la base de datos de la empresa.</li>
+                    <li>El bot solicitará el <strong>Kilometraje (Odómetro) Actual</strong>. Para garantizar la consistencia, el bot validará que la lectura no sea inferior al kilometraje previamente registrado del vehículo.</li>
+                    <li>El bot solicitará la **Cantidad de Litros** cargados. El tipo de combustible (Diésel, Regular, Súper, etc.) se autodetecta según la ficha del activo.</li>
+                    <li>El bot calculará y sugerirá el costo estimado según los precios de combustible guardados en el sistema y pedirá al usuario ingresar el **Costo Total**.</li>
+                    <li>Por último, solicitará la **Foto del Ticket/Comprobante** de pago (esta foto puede configurarse como obligatoria o no desde el panel de control).</li>
+                </ol>
+
+                <h4 className="font-semibold text-lg pt-2 border-t">🔧 3. Flujo de Reporte de Mantenimiento</h4>
+                <p>Para reportar fallos, reparaciones o mantenimientos preventivos realizados:</p>
+                <ol className="list-decimal space-y-3 pl-6">
+                    <li>Selecciona la opción <strong>2 - Mantenimiento</strong> en el menú interactivo del bot.</li>
+                    <li>Ingresa la <strong>Placa del Vehículo</strong>.</li>
+                    <li>El bot desplegará dinámicamente un teclado con los <strong>Tipos de Mantenimiento</strong> cargados directamente desde la configuración de tu sistema (ej: Cambio de Aceite, Frenos, RTV).</li>
+                    <li>Introduce el <strong>Kilometraje Actual</strong>, la <strong>Descripción detallada</strong> del trabajo (ej: Cambio de pastillas delanteras) y el <strong>Costo Total</strong>.</li>
+                    <li>Introduce el **Taller Responsable** y finalmente sube la **Foto del Comprobante** (obligatoria u opcional según la configuración).</li>
+                </ol>
+ 
+                <h4 className="font-semibold text-lg pt-2 border-t">🔍 4. Consultas Interactivas de Activos</h4>
+                <p>El bot permite a mecánicos, choferes y administradores consultar el estado de la flota en tiempo real:</p>
+                <ul className="list-disc space-y-3 pl-6">
+                    <li>
+                        <strong>Consultar Alertas ⚠️:</strong>
+                        <p className="mt-1">Ofrece tres modos de consulta inteligente:</p>
+                        <ul className="list-disc pl-5 mt-1 space-y-1">
+                            <li><strong>Ver todas las alertas ⚠️:</strong> Genera un reporte completo y detallado con semáforo (🔴 Crítico, 🟡 Advertencia) de todos los vehículos de la flota que tienen alertas o mantenimientos vencidos/próximos en tiempo real, sin necesidad de ingresar placa por placa.</li>
+                            <li><strong>Lista de activos con alertas 🚨:</strong> Analiza toda la flota y genera una lista consolidada rápida de las placas y cantidad de alertas activas para identificar cuáles vehículos requieren atención inmediata.</li>
+                            <li><strong>Buscar por placa 🔍:</strong> Muestra un reporte detallado individual con semáforo (🔴 Crítico, 🟡 Advertencia, 🟢 Al día) del cambio de aceite, RTV, permisos especiales y planes preventivos activos de un vehículo específico.</li>
+                        </ul>
+                    </li>
+                    <li>
+                        <strong>Historial Log 📋:</strong> Muestra los últimos 5 repostajes y 5 mantenimientos de un activo (incluyendo fechas, costos, kilometrajes, operarios y si tiene fotos/comprobantes adjuntos en el sistema).
+                    </li>
+                    <li>
+                        <strong>Permisos y Planes 📄:</strong> Desglosa los documentos vigentes (RTV, permisos especiales, etc.) y los planes de mantenimiento preventivo vigentes con su porcentaje de uso según el kilometraje u horas.
+                    </li>
+                </ul>
+
+                <h4 className="font-semibold text-lg pt-2 border-t">⚙️ 5. Administración y Monitoreo del Bot</h4>
+                <p>En el panel web <strong>Administración &gt; Automatizaciones &gt; Bot Telegram</strong>, los administradores de TI tienen pleno control operativo sobre el bot:</p>
+                <ul className="list-disc space-y-3 pl-6">
+                    <li><strong>Control de Webhook:</strong> Permite sincronizar y validar en vivo la comunicación segura con los servidores de Telegram.</li>
+                    <li><strong>Fotos Obligatorias:</strong> Switches de activación para forzar a los colaboradores a subir una foto antes de guardar un repostaje o mantenimiento.</li>
+                    <li><strong>Monitoreo de Sesiones Activas:</strong> Un panel en tiempo real que muestra el estado conversacional de los mecánicos y choferes (útil para ver en qué paso están y forzar un reinicio de conversación en caso de atascos).</li>
                 </ul>
             </div>
         )
@@ -581,9 +717,11 @@ export default function HelpPage() {
                     <li>
                         <strong>Validación de Campos:</strong> Al crear una nueva orden, el sistema ahora te avisará si olvidas seleccionar un cliente, un producto, o si la cantidad es cero, evitando errores.
                     </li>
+
                     <li>
                         <strong>Tooltips Informativos:</strong> Si un botón de acción (como &quot;Aprobar&quot; o &quot;Iniciar Progreso&quot;) está desactivado, ahora puedes pasar el cursor sobre él para ver un mensaje que explica por qué no está disponible (ej: &quot;Se requiere asignar una máquina&quot; o &quot;Solo para órdenes aprobadas&quot;).
                     </li>
+
                     <li>
                         <strong>Alertas y Solicitudes de Cambio:</strong>
                         <ul className="list-[circle] space-y-2 pl-5 mt-2 text-sm">
@@ -954,7 +1092,33 @@ export default function HelpPage() {
                     <p><strong>Síntoma:</strong> Después de guardar un cambio en la configuración o importar datos, la aplicación se reinicia o muestra un error &quot;aborted&quot;.</p>
                     <p><strong>Diagnóstico:</strong> El vigilante de archivos de `iisnode` está detectando cambios en las bases de datos (`.db`) y reinicia la aplicación de forma incorrecta.</p>
                     <p><strong>La Solución Definitiva (v2.0.0+):</strong> A partir de la versión 2.0.0, el proyecto incluye un archivo `web.config` en la raíz. Este archivo ya está configurado para decirle a IIS que **ignore** los cambios en la carpeta &quot;dbs/&quot;, solucionando el problema de raíz. Simplemente asegúrate de que este archivo se copie al servidor durante el despliegue.</p>
-                </div>
+                 </div>
+            </div>
+        )
+    },
+    {
+        title: "Guía de Diseño: Estándar Responsivo Premium (Desarrolladores)",
+        icon: <Palette className="mr-4 h-6 w-6 text-pink-500" />,
+        content: (
+            <div className="space-y-4">
+                <p>
+                Este sistema utiliza un estándar de diseño responsivo de alta gama para asegurar que todas las páginas complejas, formularios y tablas sean plenamente funcionales y hermosos en celulares y tablets.
+                </p>
+                <h4 className="font-semibold text-lg pt-2 border-t">Pilares del Estándar</h4>
+                <ul className="list-disc space-y-3 pl-6">
+                    <li>
+                        <strong>Menú de Acceso Vertical:</strong> En celulares, las barras de pestañas horizontales se ocultan y se reemplazan por tarjetas verticales con iconos y bordes muy redondeados (<code>rounded-2xl</code>) para una navegación más cómoda y táctil.
+                    </li>
+                    <li>
+                        <strong>Panel Inferior Desplizable (Bottom Sheet Drawer):</strong> Al tocar una pestaña, el contenido se abre dentro de una hoja deslizable inferior (<code>Sheet</code>) con altura de <code>92vh</code>, bordes curvos pronunciados y un scroll vertical aislado. Esto evita que los formularios anchos o tablas estiren horizontalmente la pantalla principal del dashboard.
+                    </li>
+                    <li>
+                        <strong>Botón de Cierre Ultra-Táctil Premium:</strong> La hoja deslizable cuenta con un botón de cierre circular ultra-llamativo de color rojo vibrante (<code>w-10 h-10 rounded-full bg-red-500 text-white shadow-md</code>) y una <strong>X</strong> con trazo grueso y tamaño aumentado a <code>h-5 w-5 stroke-[2.5]</code> para una visibilidad y facilidad de uso inigualable.
+                    </li>
+                </ul>
+                <p className="text-sm text-muted-foreground">
+                Para consultar las directrices y ejemplos técnicos de implementación en React, consulte el documento <code>docs/estandar_resposivo.txt</code> en la raíz del proyecto.
+                </p>
             </div>
         )
     },

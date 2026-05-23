@@ -1,68 +1,20 @@
 /**
  * @fileoverview Server-side functions for the cost assistant database.
- * This file handles all direct interactions with the `cost_assistant.db` SQLite database,
- * including schema initialization, migrations, and CRUD operations for settings and drafts.
+ * This file handles all direct interactions with the unified database.
  */
 "use server";
 
-import { connectDb } from '@/modules/core/lib/db';
+import { getDb } from '@/modules/core/lib/db';
 import type { CostAnalysisDraft, CostAssistantSettings } from '@/modules/core/types';
+import { COST_ASSISTANT_TABLES } from './schema';
+import { authorizeAction } from '@/modules/core/lib/auth-guard';
 
-const COST_ASSISTANT_DB_FILE = 'cost_assistant.db';
-
-/**
- * Initializes the database for the Cost Assistant module.
- * This function is called automatically when the DB is first created.
- * @param db - The database instance.
- */
-export async function initializeCostAssistantDb(db: import('better-sqlite3').Database) {
-    const schema = `
-        CREATE TABLE IF NOT EXISTS drafts (
-            id TEXT PRIMARY KEY,
-            userId INTEGER NOT NULL,
-            name TEXT NOT NULL,
-            createdAt TEXT NOT NULL,
-            data TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-    `;
-    db.exec(schema);
-    db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('nextDraftNumber', '1')`).run();
-    db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('draftPrefix', 'AC-')`).run();
-    console.log(`Database ${COST_ASSISTANT_DB_FILE} initialized for Cost Assistant.`);
-}
-
-/**
- * Checks for and applies necessary database schema migrations for the Cost Assistant module.
- * @param db - The database instance to migrate.
- */
-export async function runCostAssistantMigrations(db: import('better-sqlite3').Database) {
-    try {
-        const settingsTable = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='settings'`).get();
-        if (!settingsTable) {
-            console.log("MIGRATION (cost_assistant.db): Creating 'settings' table.");
-            db.exec(`
-                CREATE TABLE settings (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                );
-            `);
-            db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('nextDraftNumber', '1')`).run();
-            db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('draftPrefix', 'AC-')`).run();
-        }
-    } catch (error) {
-        console.error("Error during cost assistant migrations:", error);
-    }
-}
-
+// Unified DB configuration
 
 export async function getAllDrafts(userId: number): Promise<CostAnalysisDraft[]> {
-    const db = await connectDb(COST_ASSISTANT_DB_FILE);
+    const db = await getDb();
     try {
-        const rows = db.prepare(`SELECT * FROM drafts WHERE userId = ? ORDER BY createdAt DESC`).all(userId) as any[];
+        const rows = db.prepare(`SELECT * FROM ${COST_ASSISTANT_TABLES.drafts} WHERE userId = ? ORDER BY createdAt DESC`).all(userId) as any[];
         return rows.map(row => {
             const data = JSON.parse(row.data);
             return {
@@ -80,26 +32,28 @@ export async function getAllDrafts(userId: number): Promise<CostAnalysisDraft[]>
 }
 
 export async function saveDraft(draft: Omit<CostAnalysisDraft, 'id' | 'createdAt'>, draftPrefix: string, nextDraftNumber: number): Promise<CostAnalysisDraft> {
-    const db = await connectDb(COST_ASSISTANT_DB_FILE);
+    await authorizeAction('cost-assistant:drafts:read-write');
+    const db = await getDb();
     const id = `${draftPrefix}${String(nextDraftNumber).padStart(5, '0')}`;
     const createdAt = new Date().toISOString();
     
     const { userId, name, ...dataToStore } = draft;
 
     db.prepare(`
-        INSERT OR REPLACE INTO drafts (id, userId, name, data, createdAt)
+        INSERT OR REPLACE INTO ${COST_ASSISTANT_TABLES.drafts} (id, userId, name, data, createdAt)
         VALUES (?, ?, ?, ?, ?)
     `).run(id, userId, name, JSON.stringify(dataToStore), createdAt);
 
     // Increment the draft number
-    db.prepare(`UPDATE settings SET value = ? WHERE key = 'nextDraftNumber'`).run(nextDraftNumber + 1);
+    db.prepare(`UPDATE ${COST_ASSISTANT_TABLES.settings} SET value = ? WHERE key = 'nextDraftNumber'`).run(nextDraftNumber + 1);
     
     return { id, createdAt, ...draft };
 }
 
 export async function deleteDraft(id: string): Promise<void> {
-    const db = await connectDb(COST_ASSISTANT_DB_FILE);
-    db.prepare(`DELETE FROM drafts WHERE id = ?`).run(id);
+    await authorizeAction('cost-assistant:drafts:read-write');
+    const db = await getDb();
+    db.prepare(`DELETE FROM ${COST_ASSISTANT_TABLES.drafts} WHERE id = ?`).run(id);
 }
 
 
@@ -109,14 +63,10 @@ export async function getNextDraftNumber(): Promise<number> {
 }
 
 export async function getCostAssistantDbSettings(): Promise<Partial<CostAssistantSettings>> {
-    const db = await connectDb(COST_ASSISTANT_DB_FILE);
+    const db = await getDb();
     const settings: Partial<CostAssistantSettings> = {};
     try {
-        // Run migration logic directly here to ensure table exists before querying.
-        // This is a defensive check in case the main connection flow didn't run.
-        await runCostAssistantMigrations(db);
-
-        const rows = db.prepare(`SELECT key, value FROM settings`).all() as {key: string, value: string}[];
+        const rows = db.prepare(`SELECT key, value FROM ${COST_ASSISTANT_TABLES.settings}`).all() as {key: string, value: string}[];
         for (const row of rows) {
             if (row.key === 'draftPrefix') {
                 settings.draftPrefix = row.value;
@@ -133,13 +83,14 @@ export async function getCostAssistantDbSettings(): Promise<Partial<CostAssistan
 }
 
 export async function saveCostAssistantDbSettings(settings: Partial<CostAssistantSettings>): Promise<void> {
-    const db = await connectDb(COST_ASSISTANT_DB_FILE);
+    await authorizeAction('admin:settings:cost-assistant');
+    const db = await getDb();
     const transaction = db.transaction(() => {
         if (settings.draftPrefix !== undefined) {
-            db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('draftPrefix', ?)`).run(settings.draftPrefix);
+            db.prepare(`INSERT OR REPLACE INTO ${COST_ASSISTANT_TABLES.settings} (key, value) VALUES ('draftPrefix', ?)`).run(settings.draftPrefix);
         }
         if (settings.nextDraftNumber !== undefined) {
-            db.prepare(`INSERT OR REPLACE INTO settings (key, value) VALUES ('nextDraftNumber', ?)`).run(settings.nextDraftNumber);
+            db.prepare(`INSERT OR REPLACE INTO ${COST_ASSISTANT_TABLES.settings} (key, value) VALUES ('nextDraftNumber', ?)`).run(settings.nextDraftNumber);
         }
     });
     transaction();

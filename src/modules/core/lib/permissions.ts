@@ -32,6 +32,7 @@ export const permissionGroups = {
     ],
     "Centro de Operaciones y Trazabilidad (Nuevo)": ["operations:access", "operations:create", "operations:read:all", "operations:approve", "operations:sign"],
     "Herramientas de TI (Nuevo)": ["it-tools:access", "it-tools:notes:read", "it-tools:notes:create", "it-tools:notes:update", "it-tools:notes:delete"],
+    "Gestión de Flota (Nuevo)": ["fleet:access", "fleet:vehicles:read", "fleet:vehicles:create", "fleet:vehicles:update", "fleet:vehicles:delete", "fleet:fuel:create", "fleet:fuel:sync", "fleet:fuel:delete", "fleet:maintenance:create", "fleet:maintenance:delete", "fleet:settings:manage", "fleet:settings:brands", "fleet:settings:fuel", "fleet:settings:drivers", "fleet:settings:permits", "fleet:settings:maintenance", "fleet:settings:notifications"],
     "Gestión de Almacenes": [
         "warehouse:access", "warehouse:search:full", "warehouse:search:simple",
         "warehouse:receiving-wizard:use", "warehouse:population-wizard:use", "warehouse:inventory-count:create",
@@ -39,7 +40,7 @@ export const permissionGroups = {
         "warehouse:locations:create", "warehouse:locations:update", "warehouse:locations:delete",
         "warehouse:units:create", "warehouse:units:delete", "warehouse:locks:manage",
         "warehouse:correction:execute", "warehouse:correction:apply", "warehouse:labels:generate", 
-        "warehouse:explorer:read", "warehouse:cleanup:execute"
+        "warehouse:explorer:read", "warehouse:cleanup:execute", "warehouse:inventory-count:delete"
     ],
     "Consultas Hacienda": ["hacienda:query"],
     "Analíticas y Reportes": ["analytics:read", "analytics:purchase-suggestions:read", "analytics:purchase-report:read", "analytics:production-report:read", "analytics:transits-report:read", "analytics:user-permissions:read", "analytics:physical-inventory-report:read", "analytics:receiving-report:read", "analytics:item-assignments-report:read", "analytics:occupancy-report:read", "analytics:consignments-report:read"],
@@ -51,7 +52,8 @@ export const permissionGroups = {
         "admin:suggestions:read",
         "admin:import:run", "admin:import:files", "admin:import:sql", "admin:import:sql-config",
         "admin:logs:read", "admin:logs:clear",
-        "admin:maintenance:backup", "admin:maintenance:restore", "admin:maintenance:reset"
+        "admin:maintenance:backup", "admin:maintenance:restore", "admin:maintenance:reset",
+        "admin:settings:automations"
     ],
 };
 
@@ -77,12 +79,15 @@ export const permissionTranslations = {
     "consignments:closures:annul": "Consignación: Anular Cierres",
     "operations:access": "Operaciones: Acceso General", "operations:create": "Operaciones: Crear Documentos", "operations:read:all": "Operaciones: Ver Todos", "operations:approve": "Operaciones: Aprobar Documentos", "operations:sign": "Operaciones: Firmar Entregas/Recibos",
     "it-tools:access": "TI: Acceso General", "it-tools:notes:read": "TI: Ver Notas", "it-tools:notes:create": "TI: Crear Notas", "it-tools:notes:update": "TI: Editar Notas", "it-tools:notes:delete": "TI: Eliminar Notas",
+    "fleet:access": "Flota: Acceso General", "fleet:vehicles:read": "Flota: Ver Vehículos", "fleet:vehicles:create": "Flota: Registrar Vehículo", "fleet:vehicles:update": "Flota: Editar Vehículo", "fleet:vehicles:delete": "Flota: Eliminar Vehículo", "fleet:fuel:create": "Flota: Registrar Combustible", "fleet:fuel:sync": "Flota: Sincronizar con RECOPE", "fleet:fuel:delete": "Flota: Eliminar Repostaje", "fleet:maintenance:create": "Flota: Registrar Mantenimiento", "fleet:maintenance:delete": "Flota: Eliminar Mantenimiento", "fleet:settings:manage": "Flota: Gestionar Catálogos",
+    "fleet:settings:brands": "Flota: Catálogo de Marcas", "fleet:settings:fuel": "Flota: Catálogo de Combustibles", "fleet:settings:drivers": "Flota: Catálogo de Choferes", "fleet:settings:permits": "Flota: Catálogo de Permisos", "fleet:settings:maintenance": "Flota: Catálogo de Mantenimientos", "fleet:settings:notifications": "Flota: Catálogo de Notificaciones",
     "warehouse:access": "Almacén: Acceso General", "warehouse:search:full": "Almacén: Consulta Completa", "warehouse:search:simple": "Almacén: Búsqueda Rápida", 
     "warehouse:receiving-wizard:use": "Almacén: Usar Asist. Recepción", "warehouse:population-wizard:use": "Almacén: Usar Asist. Poblado", "warehouse:inventory-count:create": "Almacén: Registrar Conteo",
     "warehouse:item-assignment:create": "Almacén: Asignar Ubic./Prod.", "warehouse:item-assignment:delete": "Almacén: Eliminar Asignación",
     "warehouse:locations:create": "Almacén: Crear Ubicaciones", "warehouse:locations:update": "Almacén: Editar Ubicaciones", "warehouse:locations:delete": "Almacén: Eliminar Ubicaciones",
     "warehouse:units:create": "Almacén: Crear Lotes/QR", "warehouse:units:delete": "Almacén: Eliminar Lotes/QR", "warehouse:locks:manage": "Almacén: Gestionar Bloqueos",
     "warehouse:correction:execute": "Almacén: Corregir Ingreso", "warehouse:correction:apply": "Almacén: Aplicar Ingreso", "warehouse:labels:generate": "Almacén: Generar Etiquetas", "warehouse:explorer:read": "Almacén: Ver Explorador", "warehouse:cleanup:execute": "Almacén: Usar Herramientas de Limpieza",
+    "warehouse:inventory-count:delete": "Almacén: Borrar Toma de Inventario",
     "hacienda:query": "Hacienda: Realizar Consultas",
     "analytics:read": "Analíticas: Acceso", "analytics:purchase-suggestions:read": "Analíticas: Sugerencias Compra", "analytics:purchase-report:read": "Analíticas: Reporte Compras", "analytics:production-report:read": "Analíticas: Reporte Producción", "analytics:transits-report:read": "Analíticas: Reporte Tránsitos", "analytics:user-permissions:read": "Analíticas: Reporte Permisos", "analytics:physical-inventory-report:read": "Analíticas: Reporte Inv. Físico", "analytics:receiving-report:read": "Analíticas: Reporte Recepciones", "analytics:item-assignments-report:read": "Analíticas: Reporte Catálogo", "analytics:occupancy-report:read": "Analíticas: Reporte Ocupación", "analytics:consignments-report:read": "Analíticas: Reporte Consignación",
     "users:create": "Usuarios: Crear", "users:read": "Usuarios: Leer", "users:update": "Usuarios: Actualizar", "users:delete": "Usuarios: Eliminar",
@@ -92,6 +97,7 @@ export const permissionTranslations = {
     "admin:import:run": "Admin: Ejecutar Sincronización ERP", "admin:import:files": "Admin: Importar (Archivos)", "admin:import:sql": "Admin: Importar (SQL)", "admin:import:sql-config": "Admin: Configurar SQL",
     "admin:logs:read": "Admin: Ver Registros (Logs)", "admin:logs:clear": "Admin: Limpiar Registros (Logs)",
     "admin:maintenance:backup": "Admin: Mantenimiento (Backup)", "admin:maintenance:restore": "Admin: Mantenimiento (Restaurar)", "admin:maintenance:reset": "Admin: Mantenimiento (Resetear)",
+    "admin:settings:automations": "Admin: Automatizaciones y Alertas",
 } as const;
 
 export type AppPermission = keyof typeof permissionTranslations;
@@ -110,7 +116,7 @@ export const permissionTree: Partial<Record<AppPermission, AppPermission[]>> = {
     "dashboard:access": [
         "quotes:create", "invoices:access", "requests:read", "planner:read", "cost-assistant:access",
         "consignments:access", "warehouse:access", "hacienda:query",
-        "operations:access", "it-tools:access", "analytics:read", "admin:access"
+        "operations:access", "it-tools:access", "fleet:access", "analytics:read", "admin:access"
     ],
     
     // --- Admin ---
@@ -119,7 +125,8 @@ export const permissionTree: Partial<Record<AppPermission, AppPermission[]>> = {
         "admin:settings:planner", "admin:settings:requests", "admin:settings:warehouse", 
         "admin:settings:stock", "admin:settings:cost-assistant", "admin:settings:analytics",
         "admin:settings:consignments", "admin:suggestions:read", "admin:import:run", 
-        "admin:logs:read", "admin:maintenance:backup"
+        "admin:logs:read", "admin:maintenance:backup", "fleet:settings:manage",
+        "admin:settings:automations"
     ],
     "users:read": ["users:create", "users:update", "users:delete"],
     "roles:read": ["roles:create", "roles:update", "roles:delete"],
@@ -176,13 +183,20 @@ export const permissionTree: Partial<Record<AppPermission, AppPermission[]>> = {
     "it-tools:access": ["it-tools:notes:read"],
     "it-tools:notes:read": ["it-tools:notes:create", "it-tools:notes:update", "it-tools:notes:delete"],
     
+    // --- Fleet ---
+    "fleet:access": ["fleet:vehicles:read", "fleet:fuel:create", "fleet:fuel:sync", "fleet:maintenance:create"],
+    "fleet:vehicles:read": ["fleet:vehicles:create", "fleet:vehicles:update", "fleet:vehicles:delete"],
+    "fleet:fuel:create": ["fleet:fuel:delete"],
+    "fleet:maintenance:create": ["fleet:maintenance:delete"],
+    "fleet:settings:manage": ["fleet:settings:brands", "fleet:settings:fuel", "fleet:settings:drivers", "fleet:settings:permits", "fleet:settings:maintenance", "fleet:settings:notifications"],
+    
     // --- Warehouse ---
     "warehouse:access": [
         "warehouse:search:full", "warehouse:search:simple", "warehouse:receiving-wizard:use", 
         "warehouse:population-wizard:use", "warehouse:inventory-count:create", "warehouse:item-assignment:create", 
         "warehouse:locations:create", "warehouse:units:create", "warehouse:locks:manage", 
         "warehouse:correction:execute", "warehouse:labels:generate", "warehouse:explorer:read",
-        "warehouse:cleanup:execute"
+        "warehouse:cleanup:execute", "warehouse:inventory-count:delete"
     ],
     "warehouse:cleanup:execute": ["warehouse:item-assignment:delete"],
     "warehouse:item-assignment:delete": ["warehouse:item-assignment:create"],
@@ -191,3 +205,34 @@ export const permissionTree: Partial<Record<AppPermission, AppPermission[]>> = {
     "warehouse:units:delete": ["warehouse:units:create"],
     "warehouse:correction:apply": ["warehouse:correction:execute"],
 };
+
+/**
+ * Checks if a user has a specific permission, considering the hierarchy.
+ * If the user has a parent permission that grants the requested one, it returns true.
+ */
+export function checkPermissionInTree(userPermissions: string[], requiredPermission: string): boolean {
+    if (userPermissions.includes(requiredPermission)) return true;
+
+    // Check if any of the user's permissions is a parent of the required one in the permissionTree
+    for (const userPerm of userPermissions) {
+        const children = permissionTree[userPerm as AppPermission];
+        if (children && isPermissionChildOf(requiredPermission as AppPermission, children)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function isPermissionChildOf(target: AppPermission, children: AppPermission[]): boolean {
+    if (children.includes(target)) return true;
+
+    for (const child of children) {
+        const subChildren = permissionTree[child];
+        if (subChildren && isPermissionChildOf(target, subChildren)) {
+            return true;
+        }
+    }
+
+    return false;
+}

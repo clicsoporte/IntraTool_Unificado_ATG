@@ -11,8 +11,8 @@ import { useToast } from '@/modules/core/hooks/use-toast';
 import { logError, logInfo, logWarn } from '@/modules/core/lib/logger';
 import { usePageTitle } from '@/modules/core/hooks/usePageTitle';
 import { useAuthorization } from '@/modules/core/hooks/useAuthorization';
-import { getWarehouseSettings, saveWarehouseSettings, getLocations, addLocation, deleteLocation, updateLocation, addBulkLocations } from '@/modules/warehouse/lib/actions';
-import { PlusCircle, Trash2, Edit2, Save, ChevronDown, ChevronRight, Info, Wand2, Copy, List } from 'lucide-react';
+import { getWarehouseSettings, saveWarehouseSettings, getLocations, addLocation, deleteLocation, updateLocation, addBulkLocations, addLevelsToRack } from '@/modules/warehouse/lib/actions';
+import { PlusCircle, Trash2, Edit2, Save, ChevronDown, ChevronRight, Info, Wand2, Copy, List, Loader2 } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { WarehouseSettings, WarehouseLocation } from '@/modules/core/types';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -157,7 +157,17 @@ function LocationForm({ initialLocation, allLocations, settings, onSave, onCance
     );
 }
 
-function LocationTree({ locations, onEdit, onDelete }: { locations: WarehouseLocation[], onEdit: (loc: WarehouseLocation) => void, onDelete: (loc: WarehouseLocation) => void }) {
+function LocationTree({ 
+    locations, 
+    onEdit, 
+    onDelete, 
+    onAddLevels 
+}: { 
+    locations: WarehouseLocation[], 
+    onEdit: (loc: WarehouseLocation) => void, 
+    onDelete: (loc: WarehouseLocation) => void,
+    onAddLevels?: (loc: WarehouseLocation) => void
+}) {
     const [openNodes, setOpenNodes] = useState<Set<number>>(() => {
         const rootIds = locations.filter(l => !l.parentId).map(l => l.id);
         const secondLevelIds = locations.filter(l => l.parentId && rootIds.includes(l.parentId)).map(l => l.id);
@@ -199,6 +209,17 @@ function LocationTree({ locations, onEdit, onDelete }: { locations: WarehouseLoc
                         </div>
                     </div>
                     <div className="flex items-center gap-1">
+                        {location.type === 'rack' && onAddLevels && (
+                            <Button 
+                                variant="ghost" 
+                                size="icon" 
+                                className="h-7 w-7" 
+                                title="Agregar niveles adicionales"
+                                onClick={() => onAddLevels(location)}
+                            >
+                                <PlusCircle className="h-4 w-4 text-primary" />
+                            </Button>
+                        )}
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onEdit(location)}><Edit2 className="h-4 w-4" /></Button>
                         <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => onDelete(location)}>
                             <Trash2 className="h-4 w-4 text-destructive" />
@@ -240,6 +261,11 @@ export default function ManageLocationsClient() {
     const [isWizardOpen, setWizardOpen] = useState(false);
     const [wizardData, setWizardData] = useState(initialWizardState);
     const [cloneData, setCloneData] = useState(initialCloneState);
+
+    const [isAddLevelsOpen, setAddLevelsOpen] = useState(false);
+    const [rackForAddingLevels, setRackForAddingLevels] = useState<WarehouseLocation | null>(null);
+    const [numLevelsToAdd, setNumLevelsToAdd] = useState('1');
+    const [isSubmittingLevels, setIsSubmittingLevels] = useState(false);
 
     const fetchAllData = useCallback(async () => {
         setIsLoading(true);
@@ -379,6 +405,33 @@ export default function ManageLocationsClient() {
             toast({ title: 'Error al Clonar', description: error.message, variant: 'destructive' });
         }
     };
+
+    const handleOpenAddLevels = (rack: WarehouseLocation) => {
+        setRackForAddingLevels(rack);
+        setNumLevelsToAdd('1');
+        setAddLevelsOpen(true);
+    };
+
+    const handleAddLevelsSubmit = async () => {
+        const num = Number(numLevelsToAdd);
+        if (!rackForAddingLevels || isNaN(num) || num < 1) {
+            toast({ title: 'Entrada inválida', description: 'Por favor ingresa un número de niveles válido (mínimo 1).', variant: 'destructive' });
+            return;
+        }
+        setIsSubmittingLevels(true);
+        try {
+            await addLevelsToRack(rackForAddingLevels.id, num);
+            toast({ title: '¡Niveles Agregados!', description: `Se agregaron ${num} niveles a ${rackForAddingLevels.name}.` });
+            setAddLevelsOpen(false);
+            setNumLevelsToAdd('1');
+            await fetchAllData(); // Refresh the locations list
+        } catch (error: any) {
+            logError('Failed to add levels to rack', { error: error.message });
+            toast({ title: 'Error al agregar niveles', description: error.message, variant: 'destructive' });
+        } finally {
+            setIsSubmittingLevels(false);
+        }
+    };
     
     const rackOptions = locations
         .filter(l => l.type === 'rack')
@@ -457,7 +510,12 @@ export default function ManageLocationsClient() {
                                     </div>
                                 </div>
                                 <div>
-                                    <LocationTree locations={locations} onEdit={openLocationForm} onDelete={setLocationToDelete} />
+                                    <LocationTree 
+                                        locations={locations} 
+                                        onEdit={openLocationForm} 
+                                        onDelete={setLocationToDelete} 
+                                        onAddLevels={handleOpenAddLevels}
+                                    />
                                 </div>
                             </AccordionContent>
                         </AccordionItem>
@@ -581,6 +639,52 @@ export default function ManageLocationsClient() {
                         </AlertDialogFooter>
                     </AlertDialogContent>
                   </AlertDialog>
+
+                  <Dialog open={isAddLevelsOpen} onOpenChange={(open) => !open && !isSubmittingLevels && setAddLevelsOpen(false)}>
+                    <DialogContent>
+                        <DialogHeader>
+                            <DialogTitle>Agregar Niveles Adicionales</DialogTitle>
+                            <DialogDescription>
+                                Agrega nuevos niveles a la estructura del rack <strong>{rackForAddingLevels?.name} ({rackForAddingLevels?.code})</strong>.
+                            </DialogDescription>
+                        </DialogHeader>
+                        <div className="space-y-4 py-4">
+                            <div className="rounded-md bg-blue-50 dark:bg-blue-950/30 p-3 border border-blue-200 dark:border-blue-900/50 text-xs text-blue-800 dark:text-blue-300 flex items-start gap-2">
+                                <Info className="h-4 w-4 mt-0.5 shrink-0" />
+                                <div>
+                                    Los nuevos niveles respetarán de forma automática la estructura actual del rack: cantidad de posiciones, distribución de fondo/frente y tipos de ubicación, continuando la secuencia. El inventario actual no se verá afectado.
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <Label htmlFor="num-levels">Cantidad de niveles a añadir</Label>
+                                <Input 
+                                    id="num-levels" 
+                                    type="number" 
+                                    min="1" 
+                                    max="20"
+                                    value={numLevelsToAdd} 
+                                    onChange={e => setNumLevelsToAdd(e.target.value)} 
+                                    disabled={isSubmittingLevels}
+                                />
+                            </div>
+                        </div>
+                        <DialogFooter>
+                            <Button variant="ghost" type="button" onClick={() => setAddLevelsOpen(false)} disabled={isSubmittingLevels}>
+                                Cancelar
+                            </Button>
+                            <Button onClick={handleAddLevelsSubmit} disabled={isSubmittingLevels}>
+                                {isSubmittingLevels ? (
+                                    <>
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        Agregando...
+                                    </>
+                                ) : (
+                                    "Agregar Niveles"
+                                )}
+                            </Button>
+                        </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
             </div>
         </main>
     );

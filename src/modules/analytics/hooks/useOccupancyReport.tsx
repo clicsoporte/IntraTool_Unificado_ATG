@@ -229,6 +229,45 @@ export const useOccupancyReport = () => {
         });
     };
 
+    const handleExportDetailedExcel = () => {
+        const headers = ["Ubicación", "Estado", "Código Artículo", "Descripción Artículo", "Clasificación", "Cantidad", "Clientes"];
+        const dataToExport: any[][] = [];
+        
+        filteredData.forEach(item => {
+            if (item.items.length === 0) {
+                dataToExport.push([
+                    item.locationPath,
+                    item.status,
+                    "-",
+                    "-",
+                    "-",
+                    0,
+                    item.clients.map(c => c.clientName).join(', ') || "Venta General"
+                ]);
+            } else {
+                item.items.forEach(i => {
+                    dataToExport.push([
+                        item.locationPath,
+                        item.status,
+                        i.productId,
+                        i.productDescription,
+                        i.classification || "-",
+                        i.quantity !== undefined ? i.quantity : 0,
+                        item.clients.map(c => c.clientName).join(', ') || "Venta General"
+                    ]);
+                });
+            }
+        });
+        
+        exportToExcel({
+            fileName: 'reporte_ocupacion_almacen_detallado',
+            sheetName: 'Detalle Ocupacion',
+            headers,
+            data: dataToExport,
+            columnWidths: [40, 15, 20, 50, 20, 12, 40],
+        });
+    };
+
     return {
         state,
         actions: {
@@ -236,6 +275,7 @@ export const useOccupancyReport = () => {
             setSearchTerm: (term: string) => updateState({ searchTerm: term, currentPage: 0 }),
             handleSort,
             handleExportExcel,
+            handleExportDetailedExcel,
             setStatusFilter: (filter: StatusFilter) => updateState({ statusFilter: filter, currentPage: 0 }),
             setClassificationFilter: (filter: string[]) => updateState({ classificationFilter: filter, currentPage: 0 }),
             setClientFilter: (filter: string[]) => updateState({ clientFilter: filter, currentPage: 0 }),

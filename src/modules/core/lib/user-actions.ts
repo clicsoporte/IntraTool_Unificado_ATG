@@ -4,14 +4,13 @@
  */
 "use server";
 
-import { connectDb, getUserCount } from "@/modules/core/lib/db";
+import { getDb, getUserCount } from "@/modules/core/lib/db";
 import type { User } from "@/modules/core/types";
 import bcrypt from 'bcryptjs';
 import { logInfo, logError } from '@/modules/core/lib/logger';
 import { headers } from "next/headers";
 
 const SALT_ROUNDS = 10;
-const DB_FILE = 'intratool.db';
 
 /**
  * Creates the very first user in the system, assigning them the 'admin' role.
@@ -34,7 +33,7 @@ export async function createFirstUser(
   }
 
   // Connect to the database. It will be created if it doesn't exist.
-  const db = await connectDb(DB_FILE);
+  const db = await getDb();
   
   const hashedPassword = bcrypt.hashSync(userData.password, SALT_ROUNDS);
 
@@ -52,7 +51,7 @@ export async function createFirstUser(
   };
   
   const stmt = db.prepare(
-    `INSERT INTO users (id, name, email, password, phone, whatsapp, avatar, role, recentActivity, forcePasswordChange) 
+    `INSERT INTO core_users (id, name, email, password, phone, whatsapp, avatar, role, recentActivity, forcePasswordChange) 
      VALUES (@id, @name, @email, @password, @phone, @whatsapp, @avatar, @role, @recentActivity, @forcePasswordChange)`
   );
   

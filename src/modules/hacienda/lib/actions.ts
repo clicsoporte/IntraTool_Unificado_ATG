@@ -8,6 +8,7 @@
 
 import { logError } from '@/modules/core/lib/logger';
 import { getApiSettings, getCabysCatalog } from '@/modules/core/lib/db';
+import { authorizeAction } from '@/modules/core/lib/auth-guard';
 import type { HaciendaContributorInfo, HaciendaExemptionApiResponse, EnrichedExemptionInfo, EnrichedCabysItem } from '@/modules/core/types';
 
 // In-memory cache for CABYS data to avoid repeated DB queries.
@@ -48,6 +49,7 @@ loadCabysData().catch(console.error);
  * @returns {Promise<HaciendaContributorInfo | { error: boolean; message: string }>} The contributor data or an error object.
  */
 export async function getContributorInfo(taxpayerId: string): Promise<HaciendaContributorInfo | { error: boolean; message: string }> {
+    await authorizeAction('hacienda:query');
     if (!taxpayerId) {
         return { error: true, message: "El número de identificación es requerido." };
     }
@@ -79,6 +81,7 @@ export async function getContributorInfo(taxpayerId: string): Promise<HaciendaCo
  * @returns {Promise<HaciendaExemptionApiResponse | { error: boolean; message: string; status?: number }>} The exemption data or an error object.
  */
 export async function getExemptionStatus(authNumber: string): Promise<HaciendaExemptionApiResponse | { error: boolean; message: string; status?: number }> {
+    await authorizeAction('hacienda:query');
     if (!authNumber) {
         return { error: true, message: "El número de autorización es requerido." };
     }

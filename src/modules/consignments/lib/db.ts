@@ -4,7 +4,7 @@
  */
 "use server";
 
-import { connectDb, getCompanySettings, getAllProducts as getAllProductsFromMainDb } from '@/modules/core/lib/db';
+import { getDb, getCompanySettings, getAllProducts as getAllProductsFromMainDb } from '@/modules/core/lib/db';
 import { getAllUsers as getAllUsersFromMain } from '@/modules/core/lib/auth';
 import type { ConsignmentAgreement, ConsignmentProduct, RestockBoleta, BoletaLine, BoletaHistory, User, Product, RestockBoletaStatus, ConsignmentSettings, PeriodClosure, PhysicalCount, BoletaType, ConsignmentAdjustment, ConsignmentAdjustmentReason, ConsignmentReportRow, PeriodClosureStatus, ErpInvoiceHeader, ErpInvoiceLine } from '@/modules/core/types';
 import { logError, logInfo, logWarn } from '@/modules/core/lib/logger';
@@ -14,204 +14,16 @@ import { sendEmail } from '@/modules/core/lib/email-service';
 import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { getAllUsers } from '@/modules/core/lib/auth-client';
+import { CONSIGNMENTS_TABLES } from './schema';
 
 
-const CONSIGNMENTS_DB_FILE = 'consignments.db';
+// Unified DB configuration
 
 
-export async function initializeConsignmentsDb(db: import('better-sqlite3').Database) {
-    const schema = `
-        CREATE TABLE IF NOT EXISTS consignment_agreements (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            client_id TEXT UNIQUE NOT NULL,
-            client_name TEXT NOT NULL,
-            erp_warehouse_id TEXT,
-            next_boleta_number INTEGER NOT NULL DEFAULT 1,
-            notes TEXT,
-            is_active BOOLEAN NOT NULL DEFAULT 1,
-            has_initial_inventory BOOLEAN NOT NULL DEFAULT 0,
-            product_code_display_mode TEXT NOT NULL DEFAULT 'erp_only',
-            notification_user_ids TEXT,
-            operation_mode TEXT NOT NULL DEFAULT 'auto',
-            locked_by TEXT,
-            locked_by_user_id INTEGER,
-            locked_at TEXT
-        );
-
-        CREATE TABLE IF NOT EXISTS consignment_products (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            agreement_id INTEGER NOT NULL,
-            product_id TEXT NOT NULL,
-            client_product_code TEXT,
-            max_stock REAL NOT NULL,
-            price REAL NOT NULL,
-            FOREIGN KEY (agreement_id) REFERENCES consignment_agreements(id) ON DELETE CASCADE,
-            UNIQUE(agreement_id, product_id)
-        );
-
-        CREATE TABLE IF NOT EXISTS restock_boletas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            consecutive TEXT UNIQUE NOT NULL,
-            agreement_id INTEGER NOT NULL,
-            status TEXT NOT NULL,
-            type TEXT NOT NULL DEFAULT 'REPOSITION',
-            created_by TEXT,
-            submitted_by TEXT,
-            created_at TEXT,
-            approved_by TEXT,
-            approved_at TEXT,
-            erp_invoice_number TEXT,
-            erp_movement_id TEXT,
-            delivery_date TEXT,
-            notes TEXT,
-            previousStatus TEXT,
-            FOREIGN KEY (agreement_id) REFERENCES consignment_agreements(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS boleta_lines (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            boleta_id INTEGER NOT NULL,
-            product_id TEXT NOT NULL,
-            client_product_code TEXT,
-            product_description TEXT NOT NULL,
-            counted_quantity REAL NOT NULL,
-            replenish_quantity REAL NOT NULL,
-            max_stock REAL NOT NULL,
-            price REAL NOT NULL,
-            is_manually_edited BOOLEAN DEFAULT FALSE,
-            FOREIGN KEY (boleta_id) REFERENCES restock_boletas(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS boleta_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            boleta_id INTEGER NOT NULL,
-            timestamp TEXT NOT NULL,
-            status TEXT NOT NULL,
-            notes TEXT,
-            updatedBy TEXT NOT NULL,
-            FOREIGN KEY (boleta_id) REFERENCES restock_boletas(id) ON DELETE CASCADE
-        );
-         CREATE TABLE IF NOT EXISTS consignments_settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        );
-         CREATE TABLE IF NOT EXISTS physical_counts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            agreement_id INTEGER NOT NULL,
-            product_id TEXT NOT NULL,
-            quantity REAL NOT NULL,
-            counted_at TEXT NOT NULL,
-            counted_by TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS period_closures (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            consecutive TEXT UNIQUE NOT NULL,
-            agreement_id INTEGER NOT NULL,
-            status TEXT NOT NULL, -- pending, approved, rejected, invoiced, annulled
-            is_initial_inventory BOOLEAN NOT NULL DEFAULT 0,
-            closure_boleta_id INTEGER,
-            physical_count_ref TEXT,
-            previous_closure_id INTEGER,
-            created_at TEXT NOT NULL,
-            created_by TEXT NOT NULL,
-            approved_at TEXT,
-            approved_by TEXT,
-            notes TEXT,
-            erp_invoice_number TEXT,
-            invoiced_at TEXT,
-            FOREIGN KEY (agreement_id) REFERENCES consignment_agreements(id),
-            FOREIGN KEY (closure_boleta_id) REFERENCES restock_boletas(id),
-            FOREIGN KEY (previous_closure_id) REFERENCES period_closures(id)
-        );
-        CREATE TABLE IF NOT EXISTS consignment_adjustments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            agreement_id INTEGER NOT NULL,
-            product_id TEXT NOT NULL,
-            quantity INTEGER NOT NULL,
-            reason TEXT NOT NULL,
-            notes TEXT,
-            created_at TEXT NOT NULL,
-            created_by TEXT NOT NULL,
-            FOREIGN KEY (agreement_id) REFERENCES consignment_agreements(id)
-        );
-    `;
-    db.exec(schema);
-
-    const defaultPdfColumns = ['product_id', 'product_description', 'counted_quantity', 'max_stock', 'replenish_quantity'];
-    db.prepare(`INSERT OR IGNORE INTO consignments_settings (key, value) VALUES ('pdfTopLegend', 'Documento de Reposición')`).run();
-    db.prepare(`INSERT OR IGNORE INTO consignments_settings (key, value) VALUES ('pdfExportColumns', ?)`).run(JSON.stringify(defaultPdfColumns));
-    db.prepare(`INSERT OR IGNORE INTO consignments_settings (key, value) VALUES ('next_closure_number', '1')`).run();
-    db.prepare(`INSERT OR IGNORE INTO consignments_settings (key, value) VALUES ('next_adjustment_number', '1')`).run();
-
-    console.log(`Database ${CONSIGNMENTS_DB_FILE} initialized for Consignments module.`);
-}
-
-export async function runConsignmentsMigrations(db: import('better-sqlite3').Database) {
-    try {
-        const agreementsTableInfo = db.prepare(`PRAGMA table_info(consignment_agreements)`).all() as { name: string }[];
-        if (agreementsTableInfo.length > 0) {
-            const agreementColumns = new Set(agreementsTableInfo.map(c => c.name));
-            if (!agreementColumns.has('operation_mode')) db.exec(`ALTER TABLE consignment_agreements ADD COLUMN operation_mode TEXT NOT NULL DEFAULT 'auto'`);
-            if (!agreementColumns.has('locked_by')) db.exec(`ALTER TABLE consignment_agreements ADD COLUMN locked_by TEXT`);
-            if (!agreementColumns.has('locked_by_user_id')) db.exec(`ALTER TABLE consignment_agreements ADD COLUMN locked_by_user_id INTEGER`);
-            if (!agreementColumns.has('locked_at')) db.exec(`ALTER TABLE consignment_agreements ADD COLUMN locked_at TEXT`);
-            if (!agreementColumns.has('has_initial_inventory')) db.exec(`ALTER TABLE consignment_agreements ADD COLUMN has_initial_inventory BOOLEAN NOT NULL DEFAULT 0`);
-        }
-
-        const boletasTableInfo = db.prepare(`PRAGMA table_info(restock_boletas)`).all() as { name: string }[];
-        if (boletasTableInfo.length > 0) {
-            const boletaColumns = new Set(boletasTableInfo.map(c => c.name));
-            if (!boletaColumns.has('type')) db.exec(`ALTER TABLE restock_boletas ADD COLUMN type TEXT NOT NULL DEFAULT 'REPOSITION'`);
-            if (!boletaColumns.has('submitted_by')) db.exec(`ALTER TABLE restock_boletas ADD COLUMN submitted_by TEXT`);
-        }
-        
-        const physicalCountsTable = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='physical_counts'`).get();
-        if (!physicalCountsTable) {
-            db.exec(`CREATE TABLE physical_counts (id INTEGER PRIMARY KEY AUTOINCREMENT, agreement_id INTEGER NOT NULL, product_id TEXT NOT NULL, quantity REAL NOT NULL, counted_at TEXT NOT NULL, counted_by TEXT NOT NULL)`);
-        }
-
-        const periodClosuresTable = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='period_closures'`).get();
-        if (!periodClosuresTable) {
-            db.exec(`CREATE TABLE period_closures (id INTEGER PRIMARY KEY AUTOINCREMENT, consecutive TEXT UNIQUE NOT NULL, agreement_id INTEGER NOT NULL, status TEXT NOT NULL, is_initial_inventory BOOLEAN NOT NULL DEFAULT 0, closure_boleta_id INTEGER, physical_count_ref TEXT, previous_closure_id INTEGER, created_at TEXT NOT NULL, created_by TEXT NOT NULL, approved_at TEXT, approved_by TEXT, notes TEXT, erp_invoice_number TEXT, invoiced_at TEXT, FOREIGN KEY (agreement_id) REFERENCES consignment_agreements(id), FOREIGN KEY (closure_boleta_id) REFERENCES restock_boletas(id), FOREIGN KEY (previous_closure_id) REFERENCES period_closures(id))`);
-        } else {
-             const closureTableInfo = db.prepare(`PRAGMA table_info(period_closures)`).all() as { name: string }[];
-             const closureColumns = new Set(closureTableInfo.map(c => c.name));
-             if (!closureColumns.has('closure_boleta_id')) {
-                 db.exec(`ALTER TABLE period_closures ADD COLUMN closure_boleta_id INTEGER REFERENCES restock_boletas(id)`);
-             }
-             if (!closureColumns.has('physical_count_ref')) {
-                 db.exec(`ALTER TABLE period_closures ADD COLUMN physical_count_ref TEXT`);
-             }
-             if (!closureColumns.has('is_initial_inventory')) {
-                db.exec(`ALTER TABLE period_closures ADD COLUMN is_initial_inventory BOOLEAN NOT NULL DEFAULT 0`);
-             }
-             if (!closureColumns.has('erp_invoice_number')) db.exec('ALTER TABLE period_closures ADD COLUMN erp_invoice_number TEXT');
-             if (!closureColumns.has('invoiced_at')) db.exec('ALTER TABLE period_closures ADD COLUMN invoiced_at TEXT');
-        }
-        
-        const settingsTable = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='consignments_settings'`).get();
-        if (settingsTable) {
-             const nextClosureRow = db.prepare(`SELECT key FROM consignments_settings WHERE key = 'next_closure_number'`).get();
-            if (!nextClosureRow) {
-                db.prepare(`INSERT OR IGNORE INTO consignments_settings (key, value) VALUES ('next_closure_number', '1')`).run();
-            }
-             if (!db.prepare(`SELECT key FROM consignments_settings WHERE key = 'next_adjustment_number'`).get()) {
-                db.prepare(`INSERT OR IGNORE INTO consignments_settings (key, value) VALUES ('next_adjustment_number', '1')`).run();
-            }
-        }
-
-        const adjustmentsTable = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='consignment_adjustments'`).get();
-        if (!adjustmentsTable) {
-            db.exec(`CREATE TABLE consignment_adjustments (id INTEGER PRIMARY KEY AUTOINCREMENT, agreement_id INTEGER NOT NULL, product_id TEXT NOT NULL, quantity INTEGER NOT NULL, reason TEXT NOT NULL, notes TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL, FOREIGN KEY (agreement_id) REFERENCES consignment_agreements(id));`);
-        }
-
-    } catch(error) {
-        logError('Error running consignments migrations', { error: (error as Error).message });
-    }
-}
+// Database initialization is now handled by the central orchestrator in core/lib/db.ts
 // Keep other functions from original file
 export async function getSettings(): Promise<ConsignmentSettings> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
     const defaults: ConsignmentSettings = {
         pdfTopLegend: 'Documento de Reposición',
         pdfExportColumns: ['product_id', 'product_description', 'counted_quantity', 'max_stock', 'replenish_quantity'],
@@ -221,7 +33,7 @@ export async function getSettings(): Promise<ConsignmentSettings> {
         next_adjustment_number: 1,
     };
     try {
-        const rows = db.prepare(`SELECT key, value FROM consignments_settings`).all() as { key: string; value: string }[];
+        const rows = db.prepare(`SELECT key, value FROM ${CONSIGNMENTS_TABLES.settings}`).all() as { key: string; value: string }[];
         if (rows.length === 0) return defaults;
         
         const settings: Partial<ConsignmentSettings> = {};
@@ -241,13 +53,14 @@ export async function getSettings(): Promise<ConsignmentSettings> {
 }
 
 export async function saveSettings(settings: ConsignmentSettings): Promise<void> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    await authorizeAction('admin:settings:consignments');
+    const db = await getDb();
     const transaction = db.transaction((settingsToUpdate: ConsignmentSettings) => {
         const keys: (keyof ConsignmentSettings)[] = ['pdfTopLegend', 'pdfExportColumns', 'notificationUserIds', 'additionalNotificationEmails', 'next_closure_number', 'next_adjustment_number'];
         for (const key of keys) {
             if (settingsToUpdate[key] !== undefined) {
                 const value = typeof settingsToUpdate[key] === 'object' ? JSON.stringify(settingsToUpdate[key]) : String(settingsToUpdate[key]);
-                db.prepare(`INSERT OR REPLACE INTO consignments_settings (key, value) VALUES (?, ?)`).run(key, value);
+                db.prepare(`INSERT OR REPLACE INTO ${CONSIGNMENTS_TABLES.settings} (key, value) VALUES (?, ?)`).run(key, value);
             }
         }
     });
@@ -255,14 +68,14 @@ export async function saveSettings(settings: ConsignmentSettings): Promise<void>
 }
 
 export async function getAgreements(): Promise<(ConsignmentAgreement & { product_count?: number; boleta_count?: number })[]> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
     const agreements = db.prepare(`
         SELECT 
             ca.*, 
             COUNT(DISTINCT cp.id) as product_count,
-            (SELECT COUNT(*) FROM restock_boletas rb WHERE rb.agreement_id = ca.id) as boleta_count
-        FROM consignment_agreements ca
-        LEFT JOIN consignment_products cp ON ca.id = cp.agreement_id
+            (SELECT COUNT(*) FROM ${CONSIGNMENTS_TABLES.boletas} rb WHERE rb.agreement_id = ca.id) as boleta_count
+        FROM ${CONSIGNMENTS_TABLES.agreements} ca
+        LEFT JOIN ${CONSIGNMENTS_TABLES.products} cp ON ca.id = cp.agreement_id
         GROUP BY ca.id
         ORDER BY ca.client_name
     `).all() as (ConsignmentAgreement & { product_count?: number; boleta_count?: number })[];
@@ -271,46 +84,49 @@ export async function getAgreements(): Promise<(ConsignmentAgreement & { product
 
 
 export async function saveAgreement(agreement: Omit<ConsignmentAgreement, 'id' | 'next_boleta_number'> & { id?: number }, products: Omit<ConsignmentProduct, 'id' | 'agreement_id'>[]) {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    await authorizeAction('consignments:setup');
+    const db = await getDb();
     const transaction = db.transaction(() => {
         let agreementId = agreement.id;
         const notificationUserIdsJson = JSON.stringify(agreement.notification_user_ids || []);
+        const clientId = agreement.client_id.toUpperCase();
         if (agreementId) { // Update
-            db.prepare('UPDATE consignment_agreements SET client_id = ?, client_name = ?, erp_warehouse_id = ?, notes = ?, is_active = ?, product_code_display_mode = ?, notification_user_ids = ?, operation_mode = ? WHERE id = ?')
-              .run(agreement.client_id, agreement.client_name, agreement.erp_warehouse_id, agreement.notes, agreement.is_active, agreement.product_code_display_mode, notificationUserIdsJson, agreement.operation_mode || 'auto', agreementId);
+            db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.agreements} SET client_id = ?, client_name = ?, erp_warehouse_id = ?, notes = ?, is_active = ?, product_code_display_mode = ?, notification_user_ids = ?, operation_mode = ? WHERE id = ?`)
+              .run(clientId, agreement.client_name, agreement.erp_warehouse_id, agreement.notes, agreement.is_active, agreement.product_code_display_mode, notificationUserIdsJson, agreement.operation_mode || 'auto', agreementId);
         } else { // Create
-            const info = db.prepare('INSERT INTO consignment_agreements (client_id, client_name, erp_warehouse_id, notes, is_active, product_code_display_mode, notification_user_ids, operation_mode, has_initial_inventory) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)')
-              .run(agreement.client_id, agreement.client_name, agreement.erp_warehouse_id, agreement.notes, agreement.is_active, agreement.product_code_display_mode, notificationUserIdsJson, agreement.operation_mode || 'auto');
+            const info = db.prepare(`INSERT INTO ${CONSIGNMENTS_TABLES.agreements} (client_id, client_name, erp_warehouse_id, notes, is_active, product_code_display_mode, notification_user_ids, operation_mode, has_initial_inventory) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`)
+              .run(clientId, agreement.client_name, agreement.erp_warehouse_id, agreement.notes, agreement.is_active, agreement.product_code_display_mode, notificationUserIdsJson, agreement.operation_mode || 'auto');
             agreementId = info.lastInsertRowid as number;
         }
 
         if (products && products.length >= 0) {
-            db.prepare('DELETE FROM consignment_products WHERE agreement_id = ?').run(agreementId);
-            const insertProduct = db.prepare('INSERT INTO consignment_products (agreement_id, product_id, max_stock, price, client_product_code) VALUES (@agreement_id, @product_id, @max_stock, @price, @client_product_code)');
+            db.prepare(`DELETE FROM ${CONSIGNMENTS_TABLES.products} WHERE agreement_id = ?`).run(agreementId);
+            const insertProduct = db.prepare(`INSERT INTO ${CONSIGNMENTS_TABLES.products} (agreement_id, product_id, max_stock, price, client_product_code) VALUES (@agreement_id, @product_id, @max_stock, @price, @client_product_code)`);
             for (const product of products) {
                 insertProduct.run({
                     agreement_id: agreementId,
-                    product_id: product.product_id,
+                    product_id: product.product_id.toUpperCase(),
                     max_stock: product.max_stock,
                     price: product.price,
                     client_product_code: product.client_product_code || null,
                 });
             }
         }
-        return db.prepare('SELECT * FROM consignment_agreements WHERE id = ?').get(agreementId) as ConsignmentAgreement;
+        return db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.agreements} WHERE id = ?`).get(agreementId) as ConsignmentAgreement;
     });
     return transaction();
 }
 
 export async function deleteAgreement(agreementId: number): Promise<{ success: boolean; message: string }> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    await authorizeAction('consignments:setup');
+    const db = await getDb();
     try {
-        const boletaCount = db.prepare('SELECT COUNT(*) as count FROM restock_boletas WHERE agreement_id = ?').get(agreementId) as { count: number };
+        const boletaCount = db.prepare(`SELECT COUNT(*) as count FROM ${CONSIGNMENTS_TABLES.boletas} WHERE agreement_id = ?`).get(agreementId) as { count: number };
         if (boletaCount.count > 0) {
             return { success: false, message: `No se puede eliminar. El acuerdo tiene ${boletaCount.count} boleta(s) asociada(s). Por favor, elimínelas primero.` };
         }
 
-        const deleteResult = db.prepare('DELETE FROM consignment_agreements WHERE id = ?').run(agreementId);
+        const deleteResult = db.prepare(`DELETE FROM ${CONSIGNMENTS_TABLES.agreements} WHERE id = ?`).run(agreementId);
         
         if (deleteResult.changes === 0) {
             return { success: false, message: 'No se encontró el acuerdo a eliminar.' };
@@ -327,15 +143,15 @@ export async function deleteAgreement(agreementId: number): Promise<{ success: b
 
 
 export async function getAgreementDetails(agreementId: number): Promise<{ agreement: ConsignmentAgreement, products: ConsignmentProduct[] } | null> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
-    const agreement = db.prepare('SELECT * FROM consignment_agreements WHERE id = ?').get(agreementId) as ConsignmentAgreement | undefined;
+    const db = await getDb();
+    const agreement = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.agreements} WHERE id = ?`).get(agreementId) as ConsignmentAgreement | undefined;
     if (!agreement) return null;
     if (agreement.notification_user_ids && typeof agreement.notification_user_ids === 'string') {
         agreement.notification_user_ids = JSON.parse(agreement.notification_user_ids);
     } else {
         agreement.notification_user_ids = [];
     }
-    const products = db.prepare('SELECT * FROM consignment_products WHERE agreement_id = ?').all(agreementId) as ConsignmentProduct[];
+    const products = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.products} WHERE agreement_id = ?`).all(agreementId) as ConsignmentProduct[];
     return JSON.parse(JSON.stringify({ agreement, products }));
 }
 
@@ -345,13 +161,13 @@ export async function getBoletas(filters: {
     type?: BoletaType,
     agreementId?: number
 }) {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
     let query = `
         SELECT 
             rb.*,
             SUM(bl.replenish_quantity) as total_replenish_quantity
-        FROM restock_boletas rb
-        LEFT JOIN boleta_lines bl ON rb.id = bl.boleta_id
+        FROM ${CONSIGNMENTS_TABLES.boletas} rb
+        LEFT JOIN ${CONSIGNMENTS_TABLES.boletaLines} bl ON rb.id = bl.boleta_id
     `;
     const params: any[] = [];
     const whereClauses: string[] = [];
@@ -382,11 +198,27 @@ export async function getBoletas(filters: {
 }
 
 export async function updateBoletaStatus(payload: { boletaId: number, status: string, notes: string, updatedBy: string, erpInvoiceNumber?: string, erpMovementId?: string }): Promise<RestockBoleta> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
     const { boletaId, status, notes, updatedBy, erpInvoiceNumber, erpMovementId } = payload;
+
+    // Dynamic permission check based on target status
+    const permissionMap: Record<string, any> = {
+        'pending': 'consignments:boleta:send',
+        'approved': 'consignments:boleta:approve',
+        'sent': 'consignments:boleta:send',
+        'invoiced': 'consignments:boleta:invoice',
+        'canceled': 'consignments:boleta:cancel',
+    };
+
+    if (permissionMap[status]) {
+        await authorizeAction(permissionMap[status]);
+    } else {
+        await authorizeAction('consignments:access');
+    }
+
+    const db = await getDb();
     
     const transaction = db.transaction(() => {
-        const currentBoleta = db.prepare('SELECT * FROM restock_boletas WHERE id = ?').get(boletaId) as RestockBoleta | undefined;
+        const currentBoleta = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.boletas} WHERE id = ?`).get(boletaId) as RestockBoleta | undefined;
         if (!currentBoleta) {
             throw new Error("La boleta que intentas actualizar no fue encontrada. Es posible que haya sido eliminada.");
         }
@@ -394,7 +226,7 @@ export async function updateBoletaStatus(payload: { boletaId: number, status: st
         if (status === 'pending' && (!erpMovementId || !erpMovementId.trim())) {
             throw new Error("El número de movimiento de inventario del ERP es requerido para poder enviar a aprobación.");
         }
-        const lines = db.prepare('SELECT * FROM boleta_lines WHERE boleta_id = ?').all(boletaId) as BoletaLine[];
+        const lines = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.boletaLines} WHERE boleta_id = ?`).all(boletaId) as BoletaLine[];
         const totalReplenish = lines.reduce((sum, line) => sum + line.replenish_quantity, 0);
 
         if (status === 'pending' && totalReplenish <= 0) {
@@ -454,13 +286,13 @@ export async function updateBoletaStatus(payload: { boletaId: number, status: st
             setClauses.push('erp_invoice_number = NULL');
         }
         
-        const updateQuery = `UPDATE restock_boletas SET ${setClauses.join(', ')} WHERE id = @id`;
+        const updateQuery = `UPDATE ${CONSIGNMENTS_TABLES.boletas} SET ${setClauses.join(', ')} WHERE id = @id`;
         db.prepare(updateQuery).run(updateParams);
         
-        db.prepare('INSERT INTO boleta_history (boleta_id, timestamp, status, updatedBy, notes) VALUES (?, datetime(\'now\'), ?, ?, ?)')
+        db.prepare(`INSERT INTO ${CONSIGNMENTS_TABLES.boletaHistory} (boleta_id, timestamp, status, updatedBy, notes) VALUES (?, datetime('now'), ?, ?, ?)`)
           .run(boletaId, status, updatedBy, notes);
         
-        return db.prepare('SELECT * FROM restock_boletas WHERE id = ?').get(boletaId) as RestockBoleta;
+        return db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.boletas} WHERE id = ?`).get(boletaId) as RestockBoleta;
     });
 
     return transaction();
@@ -468,40 +300,40 @@ export async function updateBoletaStatus(payload: { boletaId: number, status: st
 
 // ... rest of the file remains unchanged. I'll include it in the final output.
 export async function getBoletaDetails(boletaId: number): Promise<{ boleta: RestockBoleta, lines: BoletaLine[], history: BoletaHistory[] } | null> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
-    const boleta = db.prepare('SELECT * FROM restock_boletas WHERE id = ?').get(boletaId) as RestockBoleta | undefined;
+    const db = await getDb();
+    const boleta = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.boletas} WHERE id = ?`).get(boletaId) as RestockBoleta | undefined;
     if (!boleta) return null;
 
-    const lines = db.prepare('SELECT * FROM boleta_lines WHERE boleta_id = ?').all(boletaId) as BoletaLine[];
-    const history = db.prepare('SELECT * FROM boleta_history WHERE boleta_id = ? ORDER BY timestamp DESC').all(boletaId) as BoletaHistory[];
+    const lines = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.boletaLines} WHERE boleta_id = ?`).all(boletaId) as BoletaLine[];
+    const history = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.boletaHistory} WHERE boleta_id = ? ORDER BY timestamp DESC`).all(boletaId) as BoletaHistory[];
 
     return JSON.parse(JSON.stringify({ boleta, lines, history }));
 }
 
 export async function updateBoleta(boleta: RestockBoleta, lines: BoletaLine[], updatedBy: string): Promise<RestockBoleta> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
     
     const transaction = db.transaction(() => {
-        db.prepare('UPDATE restock_boletas SET notes = ?, delivery_date = ?, erp_movement_id = ? WHERE id = ?').run(boleta.notes, boleta.delivery_date, boleta.erp_movement_id, boleta.id);
+        db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.boletas} SET notes = ?, delivery_date = ?, erp_movement_id = ? WHERE id = ?`).run(boleta.notes, boleta.delivery_date, boleta.erp_movement_id, boleta.id);
         
-        const updateLineStmt = db.prepare('UPDATE boleta_lines SET replenish_quantity = ?, max_stock = ?, price = ?, is_manually_edited = ? WHERE id = ?');
+        const updateLineStmt = db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.boletaLines} SET replenish_quantity = ?, max_stock = ?, price = ?, is_manually_edited = ? WHERE id = ?`);
         for (const line of lines) {
             updateLineStmt.run(line.replenish_quantity, line.max_stock, line.price, line.is_manually_edited ? 1 : 0, line.id);
         }
         
-        db.prepare('INSERT INTO boleta_history (boleta_id, timestamp, status, updatedBy, notes) VALUES (?, datetime(\'now\'), ?, ?, ?)')
+        db.prepare(`INSERT INTO ${CONSIGNMENTS_TABLES.boletaHistory} (boleta_id, timestamp, status, updatedBy, notes) VALUES (?, datetime('now'), ?, ?, ?)`)
           .run(boleta.id, boleta.status, updatedBy, 'Líneas de boleta editadas y recalculadas.');
 
-        return db.prepare('SELECT * FROM restock_boletas WHERE id = ?').get(boleta.id) as RestockBoleta;
+        return db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.boletas} WHERE id = ?`).get(boleta.id) as RestockBoleta;
     });
     
     return transaction();
 }
 
 export async function getBoletasByDateRange(agreementId: string, dateRange: { from: Date; to: Date }, statuses?: RestockBoletaStatus[], type?: BoletaType): Promise<(RestockBoleta & { lines: BoletaLine[]; history: BoletaHistory[]; })[]> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
     
-    let query = 'SELECT * FROM restock_boletas WHERE agreement_id = ?';
+    let query = `SELECT * FROM ${CONSIGNMENTS_TABLES.boletas} WHERE agreement_id = ?`;
     const params: any[] = [agreementId];
 
     if (dateRange?.from && dateRange.to) {
@@ -528,8 +360,8 @@ export async function getBoletasByDateRange(agreementId: string, dateRange: { fr
     const boletaIds = boletas.map(b => b.id);
     const placeholders = boletaIds.map(() => '?').join(',');
 
-    const allLines = db.prepare(`SELECT * FROM boleta_lines WHERE boleta_id IN (${placeholders})`).all(...boletaIds) as BoletaLine[];
-    const allHistory = db.prepare(`SELECT * FROM boleta_history WHERE boleta_id IN (${placeholders})`).all(...boletaIds) as BoletaHistory[];
+    const allLines = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.boletaLines} WHERE boleta_id IN (${placeholders})`).all(...boletaIds) as BoletaLine[];
+    const allHistory = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.boletaHistory} WHERE boleta_id IN (${placeholders})`).all(...boletaIds) as BoletaHistory[];
 
     const historyMap = new Map<number, BoletaHistory[]>();
     allHistory.forEach(h => {
@@ -550,9 +382,9 @@ export async function getBoletasByDateRange(agreementId: string, dateRange: { fr
 
 
 export async function getLatestBoletaBeforeDate(agreementId: number, date: Date): Promise<(RestockBoleta & { lines: BoletaLine[] }) | null> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
     const boleta = db.prepare(`
-        SELECT * FROM restock_boletas
+        SELECT * FROM ${CONSIGNMENTS_TABLES.boletas}
         WHERE agreement_id = ? AND created_at < ? AND type = 'INVENTORY_COUNT'
         ORDER BY created_at DESC
         LIMIT 1
@@ -560,20 +392,20 @@ export async function getLatestBoletaBeforeDate(agreementId: number, date: Date)
 
     if (!boleta) return null;
 
-    const lines = db.prepare('SELECT * FROM boleta_lines WHERE boleta_id = ?').all(boleta.id) as BoletaLine[];
+    const lines = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.boletaLines} WHERE boleta_id = ?`).all(boleta.id) as BoletaLine[];
 
     return JSON.parse(JSON.stringify({ ...boleta, lines }));
 }
 
 
 export async function savePhysicalCount(agreementId: number, lines: { productId: string; quantity: number }[], userName: string) {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
     const transaction = db.transaction(() => {
         // Here we just save, we don't delete. The "last" is determined by timestamp.
-        const stmt = db.prepare('INSERT INTO physical_counts (agreement_id, product_id, quantity, counted_at, counted_by) VALUES (?, ?, ?, ?, ?)');
+        const stmt = db.prepare(`INSERT INTO ${CONSIGNMENTS_TABLES.counts} (agreement_id, product_id, quantity, counted_at, counted_by) VALUES (?, ?, ?, ?, ?)`);
         const now = new Date().toISOString();
         for (const line of lines) {
-            stmt.run(agreementId, line.productId, line.quantity, now, userName);
+            stmt.run(agreementId, line.productId.toUpperCase(), line.quantity, now, userName);
         }
     });
     transaction();
@@ -589,7 +421,7 @@ function getSettingsTx(db: import('better-sqlite3').Database): ConsignmentSettin
         next_adjustment_number: 1,
     };
     try {
-        const rows = db.prepare(`SELECT key, value FROM consignments_settings`).all() as { key: string; value: string }[];
+        const rows = db.prepare(`SELECT key, value FROM ${CONSIGNMENTS_TABLES.settings}`).all() as { key: string; value: string }[];
         if (rows.length === 0) return defaults;
         
         const settings: Partial<ConsignmentSettings> = {};
@@ -609,15 +441,16 @@ function getSettingsTx(db: import('better-sqlite3').Database): ConsignmentSettin
 }
 
 export async function createClosureFromCount(agreementId: number, lines: { productId: string; quantity: number }[], userName: string): Promise<PeriodClosure> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    await authorizeAction('consignments:closures:create');
+    const db = await getDb();
     
     return db.transaction(() => {
-        const existingPending = db.prepare(`SELECT id FROM period_closures WHERE agreement_id = ? AND status = 'pending'`).get(agreementId);
+        const existingPending = db.prepare(`SELECT id FROM ${CONSIGNMENTS_TABLES.closures} WHERE agreement_id = ? AND status = 'pending'`).get(agreementId);
         if (existingPending) {
             throw new Error(`Ya existe un cierre pendiente para este cliente.`);
         }
 
-        const agreement = db.prepare('SELECT has_initial_inventory FROM consignment_agreements WHERE id = ?').get(agreementId) as { has_initial_inventory: 0 | 1 };
+        const agreement = db.prepare(`SELECT has_initial_inventory FROM ${CONSIGNMENTS_TABLES.agreements} WHERE id = ?`).get(agreementId) as { has_initial_inventory: 0 | 1 };
         if (!agreement) {
             throw new Error("El acuerdo de consignación para este cliente no fue encontrado o está inactivo.");
         }
@@ -631,36 +464,36 @@ export async function createClosureFromCount(agreementId: number, lines: { produ
         const countRef = new Date().toISOString();
 
         // Save this count to physical_counts table, which will be used if approved
-        const stmt = db.prepare('INSERT INTO physical_counts (agreement_id, product_id, quantity, counted_at, counted_by) VALUES (?, ?, ?, ?, ?)');
+        const stmt = db.prepare(`INSERT INTO ${CONSIGNMENTS_TABLES.counts} (agreement_id, product_id, quantity, counted_at, counted_by) VALUES (?, ?, ?, ?, ?)`);
         for (const line of lines) {
-            stmt.run(agreementId, line.productId, line.quantity, countRef, userName);
+            stmt.run(agreementId, line.productId.toUpperCase(), line.quantity, countRef, userName);
         }
 
-        const closureInfo = db.prepare('INSERT INTO period_closures (consecutive, agreement_id, status, is_initial_inventory, physical_count_ref, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        const closureInfo = db.prepare(`INSERT INTO ${CONSIGNMENTS_TABLES.closures} (consecutive, agreement_id, status, is_initial_inventory, physical_count_ref, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)`)
             .run(closureConsecutive, agreementId, 'pending', isInitial ? 1 : 0, countRef, new Date().toISOString(), userName);
         
-        db.prepare(`INSERT OR REPLACE INTO consignments_settings (key, value) VALUES ('next_closure_number', ?)`).run(nextClosureNumber + 1);
+        db.prepare(`INSERT OR REPLACE INTO ${CONSIGNMENTS_TABLES.settings} (key, value) VALUES ('next_closure_number', ?)`).run(nextClosureNumber + 1);
 
-        return db.prepare('SELECT * FROM period_closures WHERE id = ?').get(closureInfo.lastInsertRowid) as PeriodClosure;
+        return db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.closures} WHERE id = ?`).get(closureInfo.lastInsertRowid) as PeriodClosure;
     })();
 }
 
 export async function createBoletaFromCount(agreementId: number, counts: Record<string, string>, userName: string): Promise<RestockBoleta> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
-    const mainDb = await connectDb();
+    await authorizeAction('consignments:count');
+    const db = await getDb();
 
     return db.transaction(() => {
-        const agreement = db.prepare('SELECT * FROM consignment_agreements WHERE id = ?').get(agreementId) as ConsignmentAgreement;
+        const agreement = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.agreements} WHERE id = ?`).get(agreementId) as ConsignmentAgreement;
         if (!agreement) throw new Error("Acuerdo de consignación no encontrado.");
 
         const consecutive = `${agreement.client_id}-${String(agreement.next_boleta_number).padStart(4, '0')}`;
-        const boletaInfo = db.prepare(`INSERT INTO restock_boletas (consecutive, agreement_id, status, created_by, submitted_by, created_at, type) VALUES (?, ?, 'review', ?, ?, datetime('now'), 'REPOSITION')`)
+        const boletaInfo = db.prepare(`INSERT INTO ${CONSIGNMENTS_TABLES.boletas} (consecutive, agreement_id, status, created_by, submitted_by, created_at, type) VALUES (?, ?, 'review', ?, ?, datetime('now'), 'REPOSITION')`)
             .run(consecutive, agreement.id, userName, userName);
         const boletaId = boletaInfo.lastInsertRowid as number;
 
-        const allProducts = mainDb.prepare('SELECT * FROM products').all() as Product[];
-        const agreementProducts = db.prepare('SELECT * FROM consignment_products WHERE agreement_id = ?').all(agreementId) as ConsignmentProduct[];
-        const insertLine = db.prepare('INSERT INTO boleta_lines (boleta_id, product_id, product_description, client_product_code, counted_quantity, replenish_quantity, max_stock, price, is_manually_edited) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)');
+        const allProducts = db.prepare('SELECT * FROM core_products').all() as Product[];
+        const agreementProducts = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.products} WHERE agreement_id = ?`).all(agreementId) as ConsignmentProduct[];
+        const insertLine = db.prepare(`INSERT INTO ${CONSIGNMENTS_TABLES.boletaLines} (boleta_id, product_id, product_description, client_product_code, counted_quantity, replenish_quantity, max_stock, price, is_manually_edited) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`);
         
         let hasLinesToReplenish = false;
 
@@ -684,33 +517,33 @@ export async function createBoletaFromCount(agreementId: number, counts: Record<
             throw new Error("No hay productos que necesiten reposición según el conteo y los stocks máximos.");
         }
 
-        db.prepare(`UPDATE consignment_agreements SET next_boleta_number = ? WHERE id = ?`).run(agreement.next_boleta_number + 1, agreement.id);
+        db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.agreements} SET next_boleta_number = ? WHERE id = ?`).run(agreement.next_boleta_number + 1, agreement.id);
         
-        const historyStmt = db.prepare('INSERT INTO boleta_history (boleta_id, timestamp, status, updatedBy, notes) VALUES (?, datetime(\'now\'), ?, ?, ?)');
+        const historyStmt = db.prepare(`INSERT INTO ${CONSIGNMENTS_TABLES.boletaHistory} (boleta_id, timestamp, status, updatedBy, notes) VALUES (?, datetime('now'), ?, ?, ?)`);
         historyStmt.run(boletaId, 'review', userName, 'Boleta generada desde conteo de campo.');
         
-        return db.prepare('SELECT * FROM restock_boletas WHERE id = ?').get(boletaId) as RestockBoleta;
+        return db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.boletas} WHERE id = ?`).get(boletaId) as RestockBoleta;
     })();
 }
 
 export async function getLatestPhysicalCount(agreementId: number): Promise<PhysicalCount[] | null> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
-    const latestTimestamp = db.prepare('SELECT MAX(counted_at) as last_date FROM physical_counts WHERE agreement_id = ?').get(agreementId) as { last_date: string | null };
+    const db = await getDb();
+    const latestTimestamp = db.prepare(`SELECT MAX(counted_at) as last_date FROM ${CONSIGNMENTS_TABLES.counts} WHERE agreement_id = ?`).get(agreementId) as { last_date: string | null };
     if (!latestTimestamp.last_date) return null;
     
-    const counts = db.prepare('SELECT * FROM physical_counts WHERE agreement_id = ? AND counted_at = ?').all(agreementId, latestTimestamp.last_date) as PhysicalCount[];
+    const counts = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.counts} WHERE agreement_id = ? AND counted_at = ?`).all(agreementId, latestTimestamp.last_date) as PhysicalCount[];
     return counts.length > 0 ? counts : null;
 }
 
 export async function getPhysicalCountByRef(agreementId: number, countedAt: string): Promise<PhysicalCount[]> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
-    const counts = db.prepare('SELECT * FROM physical_counts WHERE agreement_id = ? AND counted_at = ?').all(agreementId, countedAt) as PhysicalCount[];
+    const db = await getDb();
+    const counts = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.counts} WHERE agreement_id = ? AND counted_at = ?`).all(agreementId, countedAt) as PhysicalCount[];
     return JSON.parse(JSON.stringify(counts));
 }
 
 export async function getPeriodClosures(filters: { agreementId?: number } = {}): Promise<(PeriodClosure & { client_name: string; client_id: string; is_initial_inventory: boolean; })[]> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
-    let query = 'SELECT pc.*, ca.client_name, ca.client_id FROM period_closures pc JOIN consignment_agreements ca ON pc.agreement_id = ca.id';
+    const db = await getDb();
+    let query = `SELECT pc.*, ca.client_name, ca.client_id FROM ${CONSIGNMENTS_TABLES.closures} pc JOIN ${CONSIGNMENTS_TABLES.agreements} ca ON pc.agreement_id = ca.id`;
     const params: any[] = [];
     if (filters.agreementId) {
         query += ' WHERE pc.agreement_id = ?';
@@ -730,33 +563,33 @@ export async function getPeriodClosures(filters: { agreementId?: number } = {}):
 }
 
 export async function getPeriodClosureDetails(closureId: number): Promise<PeriodClosure | null> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
-    const closure = db.prepare('SELECT * FROM period_closures WHERE id = ?').get(closureId) as PeriodClosure | undefined;
+    const db = await getDb();
+    const closure = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.closures} WHERE id = ?`).get(closureId) as PeriodClosure | undefined;
     return closure ? JSON.parse(JSON.stringify(closure)) : null;
 }
 
 export async function approvePeriodClosure(closureId: number, previousClosureId: number | null, updatedBy: string): Promise<PeriodClosure> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
-    const mainDb = await connectDb();
+    await authorizeAction('consignments:boleta:approve'); // Closure approval linked to boleta approval
+    const db = await getDb();
 
     return db.transaction(() => {
-        const closure = db.prepare('SELECT * FROM period_closures WHERE id = ?').get(closureId) as PeriodClosure | undefined;
+        const closure = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.closures} WHERE id = ?`).get(closureId) as PeriodClosure | undefined;
         if (!closure || !closure.physical_count_ref) throw new Error("El cierre es inválido o no tiene un conteo físico de referencia para poder ser aprobado.");
         
-        const counts = db.prepare('SELECT * FROM physical_counts WHERE agreement_id = ? AND counted_at = ?').all(closure.agreement_id, closure.physical_count_ref) as PhysicalCount[];
+        const counts = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.counts} WHERE agreement_id = ? AND counted_at = ?`).all(closure.agreement_id, closure.physical_count_ref) as PhysicalCount[];
         if (counts.length === 0) throw new Error("Error de consistencia: Los datos del conteo físico para este cierre se han perdido o están corruptos.");
         
-        const agreement = db.prepare('SELECT * FROM consignment_agreements WHERE id = ?').get(closure.agreement_id) as ConsignmentAgreement;
+        const agreement = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.agreements} WHERE id = ?`).get(closure.agreement_id) as ConsignmentAgreement;
 
         // Create the official boleta from the physical counts
         const boletaConsecutive = `CIERRE-B-${closure.consecutive}`;
-        const boletaInfo = db.prepare(`INSERT INTO restock_boletas (consecutive, agreement_id, status, created_by, created_at, type) VALUES (?, ?, 'approved', ?, ?, 'INVENTORY_COUNT')`)
+        const boletaInfo = db.prepare(`INSERT INTO ${CONSIGNMENTS_TABLES.boletas} (consecutive, agreement_id, status, created_by, created_at, type) VALUES (?, ?, 'approved', ?, ?, 'INVENTORY_COUNT')`)
             .run(boletaConsecutive, closure.agreement_id, updatedBy, closure.created_at);
         const boletaId = boletaInfo.lastInsertRowid as number;
 
-        const allProducts = mainDb.prepare('SELECT * FROM products').all() as Product[];
-        const agreementProducts = db.prepare('SELECT * FROM consignment_products WHERE agreement_id = ?').all(closure.agreement_id) as ConsignmentProduct[];
-        const insertLine = db.prepare('INSERT INTO boleta_lines (boleta_id, product_id, product_description, client_product_code, counted_quantity, replenish_quantity, max_stock, price, is_manually_edited) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)');
+        const allProducts = db.prepare('SELECT * FROM core_products').all() as Product[];
+        const agreementProducts = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.products} WHERE agreement_id = ?`).all(closure.agreement_id) as ConsignmentProduct[];
+        const insertLine = db.prepare(`INSERT INTO ${CONSIGNMENTS_TABLES.boletaLines} (boleta_id, product_id, product_description, client_product_code, counted_quantity, replenish_quantity, max_stock, price, is_manually_edited) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`);
         
         for (const count of counts) {
             const agreementProduct = agreementProducts.find(p => p.product_id === count.product_id);
@@ -767,31 +600,31 @@ export async function approvePeriodClosure(closureId: number, previousClosureId:
         }
         
         // Update the closure to link it to the newly created boleta
-        db.prepare('UPDATE period_closures SET status = ?, previous_closure_id = ?, approved_at = ?, approved_by = ?, closure_boleta_id = ? WHERE id = ?')
+        db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.closures} SET status = ?, previous_closure_id = ?, approved_at = ?, approved_by = ?, closure_boleta_id = ? WHERE id = ?`)
           .run('approved', previousClosureId, new Date().toISOString(), updatedBy, boletaId, closureId);
 
         // **CRITICAL LOGIC**: If this is an initial inventory closure, update the agreement flag.
         if (closure.is_initial_inventory) {
-            db.prepare('UPDATE consignment_agreements SET has_initial_inventory = 1 WHERE id = ?').run(closure.agreement_id);
+            db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.agreements} SET has_initial_inventory = 1 WHERE id = ?`).run(closure.agreement_id);
         }
 
-        return db.prepare('SELECT * FROM period_closures WHERE id = ?').get(closureId) as PeriodClosure;
+        return db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.closures} WHERE id = ?`).get(closureId) as PeriodClosure;
     })();
 }
 
 export async function rejectPeriodClosure(closureId: number, notes: string, updatedBy: string): Promise<PeriodClosure> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
-    db.prepare('UPDATE period_closures SET status = ?, notes = ?, approved_by = ?, approved_at = ? WHERE id = ?')
+    const db = await getDb();
+    db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.closures} SET status = ?, notes = ?, approved_by = ?, approved_at = ? WHERE id = ?`)
       .run('rejected', notes, updatedBy, new Date().toISOString(), closureId);
-    return db.prepare('SELECT * FROM period_closures WHERE id = ?').get(closureId) as PeriodClosure;
+    return db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.closures} WHERE id = ?`).get(closureId) as PeriodClosure;
 }
 
 export async function annulPeriodClosure(closureId: number, updatedBy: string): Promise<PeriodClosure> {
     await authorizeAction('consignments:closures:annul');
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
 
     return db.transaction(() => {
-        const closureToAnnul = db.prepare('SELECT * FROM period_closures WHERE id = ?').get(closureId) as (Omit<PeriodClosure, 'is_initial_inventory'> & { is_initial_inventory: 0 | 1; }) | undefined;
+        const closureToAnnul = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.closures} WHERE id = ?`).get(closureId) as (Omit<PeriodClosure, 'is_initial_inventory'> & { is_initial_inventory: 0 | 1; }) | undefined;
 
         if (!closureToAnnul) {
             throw new Error("El cierre que intentas anular no fue encontrado.");
@@ -824,13 +657,12 @@ export async function annulPeriodClosure(closureId: number, updatedBy: string): 
 }
 
 export async function getConsignmentsBillingReportData(closureId: number): Promise<{ reportRows: ConsignmentReportRow[], boletas: (RestockBoleta & { lines: BoletaLine[]; history: BoletaHistory[]; })[], currentClosure: (PeriodClosure & { client_name: string; }), previousClosure: PeriodClosure | null; } | { error: string; }> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
-    const mainDb = await connectDb();
+    const db = await getDb();
 
     const currentClosure = db.prepare(`
         SELECT pc.*, ca.client_name 
-        FROM period_closures pc
-        JOIN consignment_agreements ca ON pc.agreement_id = ca.id
+        FROM ${CONSIGNMENTS_TABLES.closures} pc
+        JOIN ${CONSIGNMENTS_TABLES.agreements} ca ON pc.agreement_id = ca.id
         WHERE pc.id = ? AND pc.status IN ('approved', 'invoiced')
     `).get(closureId) as (PeriodClosure & { client_name: string }) | undefined;
 
@@ -839,7 +671,7 @@ export async function getConsignmentsBillingReportData(closureId: number): Promi
     }
 
     const previousClosure = currentClosure.previous_closure_id 
-        ? db.prepare('SELECT * FROM period_closures WHERE id = ?').get(currentClosure.previous_closure_id) as PeriodClosure
+        ? db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.closures} WHERE id = ?`).get(currentClosure.previous_closure_id) as PeriodClosure
         : null;
 
     const startDate = previousClosure ? parseISO(previousClosure.created_at) : new Date(0);
@@ -848,13 +680,13 @@ export async function getConsignmentsBillingReportData(closureId: number): Promi
     const boletasInPeriod = await getBoletasByDateRange(String(currentClosure.agreement_id), { from: startDate, to: endDate }, ['approved', 'sent', 'invoiced'], 'REPOSITION');
     const adjustmentsInPeriod = await getAdjustmentsInPeriod(currentClosure.agreement_id, { from: startDate, to: endDate });
     const agreementDetails = await getAgreementDetails(currentClosure.agreement_id);
-    const allProducts = await mainDb.prepare('SELECT * FROM products').all() as Product[];
+    const allProducts = db.prepare('SELECT * FROM core_products').all() as Product[];
     const productMap = new Map(allProducts.map(p => [p.id, p.description]));
 
     const getStockFromClosure = (closure: PeriodClosure | null): Map<string, number> => {
         const stockMap = new Map<string, number>();
         if (closure?.physical_count_ref) {
-            const counts = db.prepare('SELECT product_id, quantity FROM physical_counts WHERE agreement_id = ? AND counted_at = ?').all(closure.agreement_id, closure.physical_count_ref) as { product_id: string, quantity: number }[];
+            const counts = db.prepare(`SELECT product_id, quantity FROM ${CONSIGNMENTS_TABLES.counts} WHERE agreement_id = ? AND counted_at = ?`).all(closure.agreement_id, closure.physical_count_ref) as { product_id: string, quantity: number }[];
             counts.forEach(c => stockMap.set(c.product_id, c.quantity));
         }
         return stockMap;
@@ -938,13 +770,12 @@ export async function getConsignmentsReportData(
     allBoletasForClient: RestockBoleta[];
     allClosuresForClient: (PeriodClosure & { client_name: string; is_initial_inventory: boolean; previous_closure_consecutive?: string; })[];
 }> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
-    const mainDb = await connectDb();
+    const db = await getDb();
     const agreementIdNum = Number(agreementId);
 
     const [allClosuresForClient, allBoletasForClient] = await Promise.all([
-        (db.prepare('SELECT pc.*, ca.client_name FROM period_closures pc JOIN consignment_agreements ca ON pc.agreement_id = ca.id WHERE pc.agreement_id = ? AND pc.status = \'approved\' ORDER BY pc.created_at DESC').all(agreementIdNum) as (PeriodClosure & {client_name: string})[]),
-        (db.prepare('SELECT * FROM restock_boletas WHERE agreement_id = ? ORDER BY created_at DESC').all(agreementIdNum) as RestockBoleta[])
+        (db.prepare(`SELECT pc.*, ca.client_name FROM ${CONSIGNMENTS_TABLES.closures} pc JOIN ${CONSIGNMENTS_TABLES.agreements} ca ON pc.agreement_id = ca.id WHERE pc.agreement_id = ? AND pc.status = 'approved' ORDER BY pc.created_at DESC`).all(agreementIdNum) as (PeriodClosure & {client_name: string})[]),
+        (db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.boletas} WHERE agreement_id = ? ORDER BY created_at DESC`).all(agreementIdNum) as RestockBoleta[])
     ]);
 
     let effectiveStartDate: Date, effectiveEndDate: Date;
@@ -952,11 +783,11 @@ export async function getConsignmentsReportData(
     let finalStockClosure: PeriodClosure | null = null;
 
     if (filters.closureId) {
-        finalStockClosure = db.prepare('SELECT * FROM period_closures WHERE id = ?').get(filters.closureId) as PeriodClosure;
+        finalStockClosure = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.closures} WHERE id = ?`).get(filters.closureId) as PeriodClosure;
         if (!finalStockClosure) throw new Error('Cierre final no encontrado');
         
         initialStockClosure = finalStockClosure.previous_closure_id
-            ? db.prepare('SELECT * FROM period_closures WHERE id = ?').get(finalStockClosure.previous_closure_id) as PeriodClosure
+            ? db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.closures} WHERE id = ?`).get(finalStockClosure.previous_closure_id) as PeriodClosure
             : null;
         
         effectiveStartDate = initialStockClosure ? parseISO(initialStockClosure.created_at) : new Date(0);
@@ -1055,41 +886,41 @@ export async function getConsignmentsReportData(
 
 
 export async function saveReplenishmentBoleta(agreementId: number, lines: { productId: string; quantity: number }[], userName: string): Promise<RestockBoleta> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
-    const mainDb = await connectDb();
+    const db = await getDb();
     
     return db.transaction(() => {
-        const agreement = db.prepare('SELECT * FROM consignment_agreements WHERE id = ?').get(agreementId) as ConsignmentAgreement;
+        const agreement = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.agreements} WHERE id = ?`).get(agreementId) as ConsignmentAgreement;
         if (!agreement) throw new Error("El acuerdo de consignación no fue encontrado. No se puede crear la solicitud de reposición.");
 
         const consecutive = `${agreement.client_id}-${String(agreement.next_boleta_number).padStart(4, '0')}`;
-        const boletaInfo = db.prepare(`INSERT INTO restock_boletas (consecutive, agreement_id, status, created_by, submitted_by, created_at, type) VALUES (?, ?, 'review', ?, ?, datetime('now'), 'REPOSITION')`)
+        const boletaInfo = db.prepare(`INSERT INTO ${CONSIGNMENTS_TABLES.boletas} (consecutive, agreement_id, status, created_by, submitted_by, created_at, type) VALUES (?, ?, 'review', ?, ?, datetime('now'), 'REPOSITION')`)
             .run(consecutive, agreement.id, userName, userName);
         const boletaId = boletaInfo.lastInsertRowid as number;
 
-        const allProducts = mainDb.prepare('SELECT * FROM products').all() as Product[];
-        const agreementProducts = db.prepare('SELECT * FROM consignment_products WHERE agreement_id = ?').all(agreementId) as ConsignmentProduct[];
-        const insertLine = db.prepare('INSERT INTO boleta_lines (boleta_id, product_id, product_description, client_product_code, counted_quantity, replenish_quantity, max_stock, price, is_manually_edited) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)');
+        const allProducts = db.prepare('SELECT * FROM core_products').all() as Product[];
+        const agreementProducts = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.products} WHERE agreement_id = ?`).all(agreementId) as ConsignmentProduct[];
+        const insertLine = db.prepare(`INSERT INTO ${CONSIGNMENTS_TABLES.boletaLines} (boleta_id, product_id, product_description, client_product_code, counted_quantity, replenish_quantity, max_stock, price, is_manually_edited) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`);
         
         for (const line of lines) {
-            const agreementProduct = agreementProducts.find(p => p.product_id === line.productId);
+            const normalizedProductId = line.productId.toUpperCase();
+            const agreementProduct = agreementProducts.find(p => p.product_id === normalizedProductId);
             if (!agreementProduct) continue;
             
-            const productDescription = allProducts.find(p => p.id === line.productId)?.description || 'Desconocido';
+            const productDescription = allProducts.find(p => p.id === normalizedProductId)?.description || 'Desconocido';
             
-            insertLine.run(boletaId, line.productId, productDescription, agreementProduct.client_product_code, 0, line.quantity, agreementProduct.max_stock, agreementProduct.price);
+            insertLine.run(boletaId, normalizedProductId, productDescription, agreementProduct.client_product_code, 0, line.quantity, agreementProduct.max_stock, agreementProduct.price);
         }
 
-        db.prepare(`UPDATE consignment_agreements SET next_boleta_number = ? WHERE id = ?`).run(agreement.next_boleta_number + 1, agreement.id);
+        db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.agreements} SET next_boleta_number = ? WHERE id = ?`).run(agreement.next_boleta_number + 1, agreement.id);
         
-        return db.prepare('SELECT * FROM restock_boletas WHERE id = ?').get(boletaId) as RestockBoleta;
+        return db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.boletas} WHERE id = ?`).get(boletaId) as RestockBoleta;
     })();
 }
 
 export async function getLatestApprovedClosure(agreementId: number): Promise<PeriodClosure | null> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
     const closure = db.prepare(`
-        SELECT * FROM period_closures
+        SELECT * FROM ${CONSIGNMENTS_TABLES.closures}
         WHERE agreement_id = ? AND status = 'approved'
         ORDER BY created_at DESC
         LIMIT 1
@@ -1098,9 +929,9 @@ export async function getLatestApprovedClosure(agreementId: number): Promise<Per
 }
 
 export async function getAdjustmentsInPeriod(agreementId: number, dateRange: { from: Date; to: Date }): Promise<ConsignmentAdjustment[]> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
     const adjustments = db.prepare(`
-        SELECT * FROM consignment_adjustments 
+        SELECT * FROM ${CONSIGNMENTS_TABLES.adjustments} 
         WHERE agreement_id = ? AND created_at BETWEEN ? AND ?
         ORDER BY created_at ASC
     `).all(agreementId, dateRange.from.toISOString(), dateRange.to.toISOString()) as ConsignmentAdjustment[];
@@ -1115,21 +946,22 @@ export async function saveAdjustment(payload: {
     notes?: string;
     userName: string;
 }): Promise<void> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
-    const { agreementId, productId, quantity, reason, notes, userName } = payload;
+    const db = await getDb();
+    const { agreementId, productId: rawProductId, quantity, reason, notes, userName } = payload;
+    const productId = rawProductId.toUpperCase();
     
-    db.prepare(
-        'INSERT INTO consignment_adjustments (agreement_id, product_id, quantity, reason, notes, created_at, created_by) VALUES (?, ?, ?, ?, ?, datetime(\'now\'), ?)'
-    ).run(agreementId, productId, quantity, reason, notes || null, userName);
+    db.prepare(`
+        INSERT INTO ${CONSIGNMENTS_TABLES.adjustments} (agreement_id, product_id, quantity, reason, notes, created_at, created_by) VALUES (?, ?, ?, ?, ?, datetime('now'), ?)
+    `).run(agreementId, productId, quantity, reason, notes || null, userName);
     
     logInfo('Consignment adjustment saved', { ...payload });
 }
 
 export async function getPhysicalCountHistory(agreementId: number): Promise<{ counted_at: string, counted_by: string }[]> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
     const history = db.prepare(`
         SELECT counted_at, counted_by
-        FROM physical_counts
+        FROM ${CONSIGNMENTS_TABLES.counts}
         WHERE agreement_id = ?
         GROUP BY counted_at, counted_by
         ORDER BY counted_at DESC
@@ -1139,10 +971,10 @@ export async function getPhysicalCountHistory(agreementId: number): Promise<{ co
 }
 
 export async function getRecentPhysicalCounts(agreementId: number): Promise<{ counted_at: string; counted_by: string }[]> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
     const counts = db.prepare(`
         SELECT counted_at, counted_by 
-        FROM physical_counts 
+        FROM ${CONSIGNMENTS_TABLES.counts} 
         WHERE agreement_id = ? 
         GROUP BY counted_at, counted_by
         ORDER BY counted_at DESC 
@@ -1152,50 +984,50 @@ export async function getRecentPhysicalCounts(agreementId: number): Promise<{ co
 }
 
 export async function lockAgreement(agreementId: number, userId: number, userName: string): Promise<{ success: boolean, locked: boolean, message: string }> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
-    const agreement = db.prepare('SELECT * FROM consignment_agreements WHERE id = ?').get(agreementId) as (ConsignmentAgreement & { locked_by?: string });
+    const db = await getDb();
+    const agreement = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.agreements} WHERE id = ?`).get(agreementId) as (ConsignmentAgreement & { locked_by?: string });
     if (!agreement) {
         return { success: false, locked: false, message: 'Acuerdo no encontrado.' };
     }
     if (agreement.locked_by && agreement.locked_by !== userName) {
         return { success: false, locked: true, message: `El acuerdo está siendo usado por ${agreement.locked_by}.` };
     }
-    db.prepare('UPDATE consignment_agreements SET locked_by = ?, locked_by_user_id = ?, locked_at = datetime(\'now\') WHERE id = ?').run(userName, userId, agreementId);
+    db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.agreements} SET locked_by = ?, locked_by_user_id = ?, locked_at = datetime('now') WHERE id = ?`).run(userName, userId, agreementId);
     return { success: true, locked: false, message: 'Acuerdo bloqueado para ti.' };
 }
 
 export async function forceRelayLock(agreementId: number, userId: number, userName: string): Promise<void> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
     logWarn(`Lock for agreement ${agreementId} was force-relayed to ${userName}.`);
-    db.prepare('UPDATE consignment_agreements SET locked_by = ?, locked_by_user_id = ?, locked_at = datetime(\'now\') WHERE id = ?').run(userName, userId, agreementId);
+    db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.agreements} SET locked_by = ?, locked_by_user_id = ?, locked_at = datetime('now') WHERE id = ?`).run(userName, userId, agreementId);
 }
 
 export async function releaseAgreementLock(agreementId: number, userId: number): Promise<void> {
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
     // Only release locks that belong to the current user's session
-    db.prepare('UPDATE consignment_agreements SET locked_by = NULL, locked_by_user_id = NULL, locked_at = NULL WHERE id = ? AND locked_by_user_id = ?').run(agreementId, userId);
+    db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.agreements} SET locked_by = NULL, locked_by_user_id = NULL, locked_at = NULL WHERE id = ? AND locked_by_user_id = ?`).run(agreementId, userId);
 }
 
 
 export async function linkInvoiceToClosure(closureId: number, invoiceNumber: string, userName: string): Promise<void> {
     await authorizeAction('consignments:boleta:invoice');
-    const db = await connectDb(CONSIGNMENTS_DB_FILE);
+    const db = await getDb();
 
     db.transaction(() => {
-        const closure = db.prepare('SELECT * FROM period_closures WHERE id = ?').get(closureId) as PeriodClosure | undefined;
+        const closure = db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.closures} WHERE id = ?`).get(closureId) as PeriodClosure | undefined;
         if (!closure || closure.status !== 'approved') {
             throw new Error("El cierre no fue encontrado o no está aprobado.");
         }
 
         const previousClosure = closure.previous_closure_id 
-            ? db.prepare('SELECT * FROM period_closures WHERE id = ?').get(closure.previous_closure_id) as PeriodClosure
+            ? db.prepare(`SELECT * FROM ${CONSIGNMENTS_TABLES.closures} WHERE id = ?`).get(closure.previous_closure_id) as PeriodClosure
             : null;
 
         const startDate = previousClosure ? parseISO(previousClosure.created_at) : new Date(0);
         const endDate = parseISO(closure.created_at);
 
         const boletasToUpdate = db.prepare(`
-            SELECT id FROM restock_boletas
+            SELECT id FROM ${CONSIGNMENTS_TABLES.boletas}
             WHERE agreement_id = ? 
             AND created_at > ? 
             AND created_at <= ?
@@ -1205,10 +1037,10 @@ export async function linkInvoiceToClosure(closureId: number, invoiceNumber: str
         if (boletasToUpdate.length > 0) {
             const boletaIds = boletasToUpdate.map(b => b.id);
             const placeholders = boletaIds.map(() => '?').join(',');
-            db.prepare(`UPDATE restock_boletas SET erp_invoice_number = ? WHERE id IN (${placeholders})`).run(invoiceNumber, ...boletaIds);
+            db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.boletas} SET erp_invoice_number = ? WHERE id IN (${placeholders})`).run(invoiceNumber, ...boletaIds);
         }
 
-        db.prepare("UPDATE period_closures SET erp_invoice_number = ?, invoiced_at = datetime('now'), status = 'invoiced' WHERE id = ?")
+        db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.closures} SET erp_invoice_number = ?, invoiced_at = datetime('now'), status = 'invoiced' WHERE id = ?`)
             .run(invoiceNumber, closureId);
 
         logInfo(`Linked invoice ${invoiceNumber} to closure ${closure.consecutive}`, { user: userName, closureId, boletasUpdated: boletasToUpdate.length });

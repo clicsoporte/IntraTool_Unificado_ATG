@@ -30,7 +30,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/
 const defaultColors = [ '#8884d8', '#82ca9d', '#ffc658', '#ff8042', '#ff7300', '#0088fe', '#00c49f', '#ffbb28', '#F44336', '#9C27B0', '#3F51B5', '#009688' ];
 
 export default function WarehouseSettingsPage() {
-    useAuthorization(['admin:settings:warehouse', 'admin:settings:stock']);
+    const { isAuthorized, isLoading: isAuthLoading } = useAuthorization(['admin:settings:warehouse', 'admin:settings:stock']);
     const { setTitle } = usePageTitle();
     const { toast } = useToast();
     const router = useRouter();
@@ -64,8 +64,10 @@ export default function WarehouseSettingsPage() {
     
     useEffect(() => {
         setTitle("Configuración de Almacenes e Inventario");
-        fetchAllData();
-    }, [setTitle, fetchAllData]);
+        if (isAuthorized) {
+            fetchAllData();
+        }
+    }, [setTitle, fetchAllData, isAuthorized]);
 
     const handleSaveAllSettings = async () => {
         if (!warehouseSettings || !stockSettings) return;
@@ -122,6 +124,35 @@ export default function WarehouseSettingsPage() {
         if (!stockSettings) return;
         setStockSettings(prev => prev ? { ...prev, warehouses: prev.warehouses.filter(w => w.id !== id) } : null);
     };
+
+    if (isAuthLoading) {
+        return (
+            <main className="flex-1 p-4 md:p-6 lg:p-8">
+                <div className="mx-auto max-w-4xl space-y-6">
+                    <Skeleton className="h-64 w-full" />
+                    <Skeleton className="h-64 w-full" />
+                </div>
+            </main>
+        );
+    }
+
+    if (!isAuthorized) {
+        return (
+             <main className="flex flex-col items-center justify-center min-h-[60vh] p-4 md:p-6 lg:p-8">
+                <div className="text-center max-w-md p-6 bg-card border rounded-xl shadow-lg space-y-4">
+                    <div className="w-12 h-12 bg-destructive/10 text-destructive rounded-full flex items-center justify-center mx-auto">
+                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                    </div>
+                    <h2 className="text-xl font-semibold">Acceso Denegado</h2>
+                    <p className="text-sm text-muted-foreground">
+                        No tienes los permisos necesarios para acceder a la configuración de almacenes e inventario.
+                    </p>
+                </div>
+            </main>
+        );
+    }
 
     if (isLoading || !warehouseSettings || !stockSettings) {
         return (

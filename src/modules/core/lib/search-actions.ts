@@ -3,7 +3,7 @@
  * These functions perform efficient, debounced searches on the database.
  */
 'use server';
-import { connectDb } from '@/modules/core/lib/db';
+import { getDb } from '@/modules/core/lib/db';
 import type { Product, Customer } from '@/modules/core/types';
 
 const SEARCH_LIMIT = 50;
@@ -16,9 +16,9 @@ const SEARCH_LIMIT = 50;
  */
 export async function searchProducts(term: string, onlyActive: boolean = true): Promise<Product[]> {
     if (!term || term.length < 2) return [];
-    const db = await connectDb();
+    const db = await getDb();
     const searchTerm = `%${term}%`;
-    let query = `SELECT * FROM products 
+    let query = `SELECT * FROM core_products 
                  WHERE (id LIKE @term OR description LIKE @term OR barcode LIKE @term)`;
     if (onlyActive) {
         query += ` AND active = 'S'`;
@@ -37,9 +37,9 @@ export async function searchProducts(term: string, onlyActive: boolean = true): 
  */
 export async function searchCustomers(term: string, onlyActive: boolean = true): Promise<Customer[]> {
     if (!term || term.length < 2) return [];
-    const db = await connectDb();
+    const db = await getDb();
     const searchTerm = `%${term}%`;
-    let query = `SELECT * FROM customers
+    let query = `SELECT * FROM core_customers
                  WHERE (id LIKE @term OR name LIKE @term OR taxId LIKE @term)`;
     if (onlyActive) {
         query += ` AND active = 'S'`;

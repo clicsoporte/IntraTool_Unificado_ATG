@@ -19,6 +19,7 @@ import * as XLSX from 'xlsx';
 import path from 'path';
 import fs from 'fs';
 import { getUserPreferences, saveUserPreferences } from '@/modules/core/lib/db';
+import { authorizeAction } from '@/modules/core/lib/auth-guard';
 
 type ColumnVisibility = CostAssistantSettings['columnVisibility'];
 
@@ -222,6 +223,7 @@ async function parseInvoice(xmlContent: string, fileIndex: number): Promise<Invo
 }
 
 export async function processInvoiceXmls(xmlContents: string[]): Promise<{ lines: Omit<CostAssistantLine, 'displayMargin' | 'displayTaxRate' | 'displayUnitCost' | 'displayUnitsPerPack' | 'finalSellPrice' | 'profitPerLine' | 'sellPriceWithoutTax' | 'isCostEdited'>[], processedInvoices: ProcessedInvoiceInfo[] }> {
+    await authorizeAction('cost-assistant:access');
     let allLines: Omit<CostAssistantLine, 'displayMargin' | 'displayTaxRate' | 'displayUnitCost' | 'displayUnitsPerPack' | 'finalSellPrice' | 'profitPerLine' | 'sellPriceWithoutTax' | 'isCostEdited'>[] = [];
     const processedInvoices: ProcessedInvoiceInfo[] = [];
 
@@ -316,6 +318,7 @@ export async function getNextDraftNumber(): Promise<number> {
 }
 
 export async function exportForERP(lines: CostAssistantLine[], columnVisibility: ColumnVisibility): Promise<string> {
+    await authorizeAction('invoices:reporter:export');
     const visibleColumns = ALL_EXPORT_COLUMNS.filter(col => columnVisibility[col.id as keyof ColumnVisibility]);
     
     if (visibleColumns.length === 0) {

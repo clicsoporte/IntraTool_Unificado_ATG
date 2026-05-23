@@ -2,49 +2,42 @@
  * @fileoverview Hook to manage the state and logic for the receiving wizard.
  */
 'use client';
-
-import { useState, useEffect, useCallback, useMemo } from 'react';
+ 
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useToast } from '@/modules/core/hooks/use-toast';
 import { usePageTitle } from '@/modules/core/hooks/usePageTitle';
 import { useAuthorization } from '@/modules/core/hooks/useAuthorization';
-import { logError, logInfo } from '@/modules/core/lib/logger';
-import { getLocations, getAllItemLocations, addInventoryUnit, getSelectableLocations, assignItemToLocation, checkAssignmentConflict } from '@/modules/warehouse/lib/actions';
-import type { Product, WarehouseLocation, ItemLocation, InventoryUnit } from '@/modules/core/types';
+import { logError } from '@/modules/core/lib/logger';
+import { 
+    addInventoryUnit, 
+    assignItemToLocation, 
+    checkAssignmentConflict,
+    searchLocations,
+    getSuggestedLocations,
+    getLocationsByParent,
+    lockEntity
+} from '@/modules/warehouse/lib/actions';
+import type { Product, WarehouseLocation, InventoryUnit } from '@/modules/core/types';
 import { useAuth } from '@/modules/core/hooks/useAuth';
 import { useDebounce } from 'use-debounce';
 import jsPDF from "jspdf";
 import QRCode from 'qrcode';
 import JsBarcode from 'jsbarcode';
 import { format } from 'date-fns';
-
+ 
 type WizardStep = 'select_product' | 'select_location' | 'confirm_suggested' | 'confirm_new' | 'finished';
-
-const renderLocationPathAsString = (locationId: number | null, locations: WarehouseLocation[]): string => {
-    if (!locationId) return '';
-    const path: WarehouseLocation[] = [];
-    let current: WarehouseLocation | undefined = locations.find(l => l.id === locationId);
-    while (current) {
-        path.unshift(current);
-        const parentId = current.parentId;
-        if (!parentId) break;
-        current = locations.find(l => l.id === parentId);
-    }
-    return path.map(l => l.name).join(' > ');
-};
-
+ 
 export const useReceivingWizard = () => {
     useAuthorization(['warehouse:receiving-wizard:use']);
     const { setTitle } = usePageTitle();
     const { toast } = useToast();
     const { user, companyData, products: authProducts, isAuthReady } = useAuth();
-
+ 
     const [state, setState] = useState({
         isLoading: true,
         isSubmitting: false,
         step: 'select_product' as WizardStep,
-        allLocations: [] as WarehouseLocation[],
         selectableLocations: [] as WarehouseLocation[],
-        allItemLocations: [] as ItemLocation[],
         selectedProduct: null as Product | null,
         suggestedLocations: [] as WarehouseLocation[],
         selectedLocationId: null as number | null,
@@ -60,7 +53,6 @@ export const useReceivingWizard = () => {
         locationSearchTerm: '',
         isLocationSearchOpen: false,
         saveAsDefault: true,
-        // Conflict dialogs
         isMixedLocationConfirmOpen: false,
         conflictingItems: [] as Product[],
         isTargetLocationMixed: false,
@@ -68,36 +60,42 @@ export const useReceivingWizard = () => {
         moveAndMixConfirmOpen: false,
     });
     
+    const isSubmittingRef = useRef(false);
     const [debouncedProductSearch] = useDebounce(state.productSearchTerm, companyData?.searchDebounceTime ?? 500);
     const [debouncedLocationSearch] = useDebounce(state.locationSearchTerm, companyData?.searchDebounceTime ?? 500);
-
+ 
     const updateState = useCallback((newState: Partial<typeof state>) => {
         setState(prevState => ({ ...prevState, ...newState }));
     }, []);
-
+ 
     useEffect(() => {
         setTitle("Asistente de Recepción");
         const loadInitialData = async () => {
             updateState({ isLoading: true });
             try {
-                const [locs, itemLocs] = await Promise.all([getLocations(), getAllItemLocations()]);
-                updateState({
-                    allLocations: locs,
-                    selectableLocations: getSelectableLocations(locs),
-                    allItemLocations: itemLocs,
-                });
+                const rootLocs = await getLocationsByParent(null);
+                updateState({ selectableLocations: rootLocs, isLoading: false });
             } catch (error: any) {
                 logError("Failed to load initial receiving data", { error: error.message });
-                toast({ title: "Error de Carga", variant: "destructive" });
-            } finally {
                 updateState({ isLoading: false });
             }
         };
-        if (isAuthReady) {
-            loadInitialData();
-        }
-    }, [setTitle, isAuthReady, toast, updateState]);
+        if (isAuthReady) loadInitialData();
+    }, [setTitle, isAuthReady, updateState]);
     
+    useEffect(() => {
+        if (!debouncedLocationSearch || debouncedLocationSearch.length < 2) return;
+        const performSearch = async () => {
+            try {
+                const results = await searchLocations(debouncedLocationSearch, 20);
+                updateState({ selectableLocations: results });
+            } catch (error) {
+                logError("Location search failed", { error });
+            }
+        };
+        performSearch();
+    }, [debouncedLocationSearch, updateState]);
+ 
     const productOptions = useMemo(() => {
         if (debouncedProductSearch.length < 2) return [];
         const searchLower = debouncedProductSearch.toLowerCase();
@@ -105,172 +103,59 @@ export const useReceivingWizard = () => {
             .filter(p => p.id.toLowerCase().includes(searchLower) || p.description.toLowerCase().includes(searchLower) || (p.barcode || '').toLowerCase().includes(searchLower))
             .map(p => ({ value: p.id, label: `[${p.id}] ${p.description}` }));
     }, [authProducts, debouncedProductSearch]);
-
+ 
     const locationOptions = useMemo(() => {
-        const searchTerm = debouncedLocationSearch.trim().toLowerCase();
-        if (searchTerm === '*' || searchTerm === '') return state.selectableLocations.map(l => ({ value: String(l.id), label: renderLocationPathAsString(l.id, state.allLocations) }));
-        return state.selectableLocations
-            .filter(l => renderLocationPathAsString(l.id, state.allLocations).toLowerCase().includes(searchTerm))
-            .map(l => ({ value: String(l.id), label: renderLocationPathAsString(l.id, state.allLocations) }));
-    }, [state.allLocations, state.selectableLocations, debouncedLocationSearch]);
-
-    const handleSelectProduct = useCallback((productId: string) => {
+        return state.selectableLocations.map(l => ({ 
+            value: String(l.id), 
+            label: l.cached_full_path || l.name 
+        }));
+    }, [state.selectableLocations]);
+ 
+    const handleSelectProduct = useCallback(async (productId: string) => {
         const product = authProducts.find(p => p.id === productId);
         if (!product) return;
-
-        const suggestedLocIds = state.allItemLocations
-            .filter(il => il.itemId === productId)
-            .map(il => il.locationId);
-        
-        const suggested = state.allLocations.filter(loc => suggestedLocIds.includes(loc.id));
-        
-        updateState({
-            selectedProduct: product,
-            productSearchTerm: '',
-            suggestedLocations: suggested,
-            step: 'select_location',
-            isProductSearchOpen: false,
-            saveAsDefault: suggested.length === 0, // CRITICAL: Set switch to ON if no suggestions exist
-        });
-    }, [authProducts, state.allItemLocations, state.allLocations, updateState]);
-    
-    const handleProductSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === 'Enter' && productOptions.length > 0) {
-            e.preventDefault();
-            handleSelectProduct(productOptions[0].value);
+ 
+        updateState({ isLoading: true });
+        try {
+            const suggested = await getSuggestedLocations(productId);
+            updateState({
+                selectedProduct: product,
+                productSearchTerm: '',
+                suggestedLocations: suggested,
+                step: 'select_location',
+                isProductSearchOpen: false,
+                saveAsDefault: suggested.length === 0,
+            });
+        } catch (error) {
+            logError("Failed to fetch suggested locations", { error });
+        } finally {
+            updateState({ isLoading: false });
         }
-    };
+    }, [authProducts, updateState]);
     
     const handleUseSuggestedLocation = (locationId: number) => {
+        const location = state.suggestedLocations.find(l => l.id === locationId);
         updateState({
             selectedLocationId: locationId,
             newLocationId: locationId,
+            locationSearchTerm: location?.cached_full_path || location?.name || '',
             step: 'confirm_suggested',
-            saveAsDefault: false, // Turn off when using an existing suggestion
+            saveAsDefault: false,
         });
     };
     
-    const handleAssignNewLocation = () => updateState({ step: 'confirm_new' });
-    
-    const handleSelectLocation = (locationIdStr: string) => {
-        const id = Number(locationIdStr);
-        updateState({
-            newLocationId: id,
-            isLocationSearchOpen: false,
-            locationSearchTerm: renderLocationPathAsString(id, state.allLocations),
-        });
-    };
-
-    const handleGoBack = () => {
-        if (state.step === 'finished' || state.step === 'select_product') return;
-        if (state.step === 'select_location') {
-            updateState({ step: 'select_product', selectedProduct: null, productSearchTerm: '' });
-        } else {
-            // When going back from confirm_new, reset saveAsDefault based on original suggestions
-            const hadSuggestions = state.suggestedLocations.length > 0;
-            updateState({ step: 'select_location', newLocationId: null, locationSearchTerm: '', saveAsDefault: !hadSuggestions });
-        }
-    };
-    
-    const handleReset = () => {
-        updateState({
-            step: 'select_product',
-            selectedProduct: null,
-            productSearchTerm: '',
-            suggestedLocations: [],
-            selectedLocationId: null,
-            newLocationId: null,
-            locationSearchTerm: '',
-            quantity: '1',
-            humanReadableId: '',
-            documentId: '',
-            erpDocumentId: '',
-            notes: '',
-            lastCreatedUnit: null,
-            saveAsDefault: true,
-        });
-    };
-
-    const handlePrintLabel = async (unit: InventoryUnit | null) => {
-        if (!unit || !state.selectedProduct || !companyData) {
-            toast({ title: 'Error de Datos', description: 'No hay información suficiente para imprimir la etiqueta.', variant: 'destructive'});
-            return;
-        }
-
-        try {
-            const canvas = document.createElement('canvas');
-            JsBarcode(canvas, unit.unitCode!, { format: 'CODE128', displayValue: false });
-            const barcodeDataUrl = canvas.toDataURL('image/png');
-
-            const qrCodeDataUrl = await QRCode.toDataURL(unit.unitCode!, { errorCorrectionLevel: 'H', width: 200 });
-
-            const doc = new jsPDF({ orientation: 'landscape', unit: 'in', format: [4, 3] });
-            
-            const margin = 0.2;
-            const contentWidth = 4 - (margin * 2);
-            
-            // --- Left Column (QR and Barcode) ---
-            const leftColX = margin;
-            const leftColWidth = 1.2;
-            doc.addImage(qrCodeDataUrl, 'PNG', leftColX, margin, leftColWidth, leftColWidth);
-            doc.addImage(barcodeDataUrl, 'PNG', leftColX, margin + leftColWidth + 0.1, leftColWidth, 0.4);
-            doc.setFontSize(10).text(unit.unitCode!, leftColX + leftColWidth / 2, margin + leftColWidth + 0.1 + 0.4 + 0.15, { align: 'center' });
-
-            // --- Right Column (Text Info) ---
-            const rightColX = leftColX + leftColWidth + 0.2;
-            const rightColWidth = contentWidth - leftColWidth - 0.2;
-
-            let currentY = margin + 0.1;
-            doc.setFontSize(12).setFont('Helvetica', 'bold').text(`Producto: ${unit.productId}`, rightColX, currentY);
-            currentY += 0.2;
-            
-            doc.setFontSize(9).setFont('Helvetica', 'normal');
-            const descLines = doc.splitTextToSize(state.selectedProduct.description, rightColWidth);
-            doc.text(descLines, rightColX, currentY);
-            currentY += (descLines.length * 0.15) + 0.2;
-            
-            doc.setFontSize(10).setFont('Helvetica', 'bold').text(`Lote/ID: ${unit.humanReadableId || 'N/A'}`, rightColX, currentY);
-            currentY += 0.15;
-            doc.text(`Documento: ${unit.documentId || 'N/A'}`, rightColX, currentY);
-            currentY += 0.15;
-            doc.text(`Doc. ERP: ${unit.erpDocumentId || 'N/A'}`, rightColX, currentY);
-            currentY += 0.25;
-
-            doc.setFontSize(10).setFont('Helvetica', 'bold').text(`Ubicación:`, rightColX, currentY);
-            currentY += 0.15;
-            
-            doc.setFontSize(9).setFont('Helvetica', 'normal');
-            const locLines = doc.splitTextToSize(renderLocationPathAsString(unit.locationId, state.allLocations), rightColWidth);
-            doc.text(locLines, rightColX, currentY);
-            
-            // --- Footer ---
-            const footerY = 3 - margin;
-            doc.setFontSize(8).setTextColor(150);
-            doc.text(`Creado: ${format(new Date(), 'dd/MM/yyyy')} por ${user?.name || 'Sistema'}`, 4 - margin, footerY, { align: 'right' });
-
-
-            doc.save(`etiqueta_unidad_${unit.unitCode}.pdf`);
-
-        } catch (error: any) {
-             logError('Failed to generate label', { error: error.message, unitCode: unit.unitCode });
-            toast({ title: 'Error al Imprimir', description: 'No se pudo generar la etiqueta PDF.', variant: 'destructive' });
-        }
-    };
-    
-    const refreshItemLocations = useCallback(async () => {
-        try {
-            const itemLocs = await getAllItemLocations();
-            updateState({ allItemLocations: itemLocs });
-        } catch (error) {
-            logError("Failed to refresh item locations in wizard", { error });
-        }
-    }, [updateState]);
-
     const performRegistration = useCallback(async (mode?: 'move' | 'add' | 'add_and_mix' | 'move_and_mix') => {
         if (!user || !state.selectedProduct || !state.newLocationId || !state.quantity) return;
         updateState({ isSubmitting: true });
         
         try {
+            // Re-lock just before actual database modification to ensure atomicity
+            const lockResult = await lockEntity({ entityIds: [state.newLocationId], userName: user.name, userId: user.id });
+            if (lockResult.locked) {
+                toast({ title: "Ubicación Ocupada", description: "Otro usuario está usando esta ubicación ahora mismo. Intenta nuevamente en unos segundos.", variant: "destructive" });
+                return;
+            }
+
             if (state.saveAsDefault) {
                  await assignItemToLocation({
                     itemId: state.selectedProduct.id,
@@ -280,10 +165,8 @@ export const useReceivingWizard = () => {
                     isExclusive: 0,
                     requiresCertificate: 0,
                 }, mode);
-                // Re-fetch item locations to update suggestions for the next run
-                await refreshItemLocations();
             }
-
+ 
             const newUnit = await addInventoryUnit({
                 productId: state.selectedProduct.id,
                 locationId: state.newLocationId,
@@ -294,40 +177,45 @@ export const useReceivingWizard = () => {
                 notes: state.notes,
                 createdBy: user.name,
             });
-
+ 
             updateState({ lastCreatedUnit: newUnit, step: 'finished' });
             
         } catch (error: any) {
             logError('Failed to register new unit', { error: error.message });
             toast({ title: "Error al Registrar", description: error.message, variant: "destructive" });
         } finally {
+            if (state.newLocationId && user?.id) {
+                const { releaseLock } = await import('@/modules/warehouse/lib/actions');
+                await releaseLock([state.newLocationId], user.id);
+            }
+            isSubmittingRef.current = false;
             updateState({ isSubmitting: false, isMixedLocationConfirmOpen: false, moveAndMixConfirmOpen: false, moveProductConfirmOpen: false });
         }
-    }, [user, state.selectedProduct, state.newLocationId, state.quantity, state.humanReadableId, state.documentId, state.erpDocumentId, state.notes, state.saveAsDefault, toast, updateState, refreshItemLocations]);
-
+    }, [user, state.selectedProduct, state.newLocationId, state.quantity, state.humanReadableId, state.documentId, state.erpDocumentId, state.notes, state.saveAsDefault, toast, updateState]);
+ 
     const handleConfirmAndRegister = async () => {
-        if (!user || !state.selectedProduct || !state.newLocationId || !state.quantity) {
-            toast({ title: 'Datos faltantes', variant: 'destructive'});
-            return;
-        }
-
+        if (!user || !state.selectedProduct || !state.newLocationId || !state.quantity || isSubmittingRef.current) return;
         const quantityNum = parseFloat(state.quantity);
         if (isNaN(quantityNum) || quantityNum <= 0) {
             toast({ title: 'Cantidad Inválida', description: 'La cantidad debe ser un número mayor a cero.', variant: 'destructive' });
             return;
         }
         
+        isSubmittingRef.current = true;
         updateState({ isSubmitting: true });
-
         try {
-            const conflictResult = await checkAssignmentConflict({ itemId: state.selectedProduct.id, locationId: state.newLocationId });
-    
-            if (conflictResult.isLocked) {
-                toast({ title: "Ubicación Bloqueada", description: `Esta ubicación está siendo modificada por ${conflictResult.lockedBy || 'otro usuario'}. Intenta de nuevo más tarde.`, variant: "destructive" });
+            // 1. Lock the location atomically to prevent race conditions from other users
+            const lockResult = await lockEntity({ entityIds: [state.newLocationId], userName: user.name, userId: user.id });
+            if (lockResult.locked) {
+                toast({ title: "Ubicación Ocupada", description: "Otro usuario está recibiendo en esta ubicación en este momento.", variant: "destructive" });
+                isSubmittingRef.current = false;
                 updateState({ isSubmitting: false });
                 return;
             }
 
+            // 2. Perform conflict check inside the lock
+            const conflictResult = await checkAssignmentConflict({ itemId: state.selectedProduct.id, locationId: state.newLocationId });
+            
             if (conflictResult.productHasOtherLocations && conflictResult.locationHasOtherProducts) {
                 updateState({ moveAndMixConfirmOpen: true });
             } else if (conflictResult.productHasOtherLocations) {
@@ -335,33 +223,39 @@ export const useReceivingWizard = () => {
             } else if (conflictResult.locationHasOtherProducts) {
                 updateState({ 
                     conflictingItems: [conflictResult.conflictingProduct!].filter(Boolean), 
-                    isMixedLocationConfirmOpen: true,
-                    isTargetLocationMixed: state.allLocations.find(l => l.id === state.newLocationId)?.is_mixed === 1,
+                    isMixedLocationConfirmOpen: true 
                 });
             } else {
                 await performRegistration('add'); 
             }
-             if(conflictResult.productHasOtherLocations || conflictResult.locationHasOtherProducts) {
-                updateState({ isSubmitting: false });
-            }
         } catch (e: any) {
-            logError('Conflict check failed in receiving wizard', { error: e.message });
-            toast({ title: 'Error de Verificación', description: e.message, variant: 'destructive' });
+            logError('Conflict check failed', { error: e.message });
+            // Release lock on error
+            if (state.newLocationId && user?.id) {
+                const { releaseLock } = await import('@/modules/warehouse/lib/actions');
+                await releaseLock([state.newLocationId], user.id);
+            }
+            isSubmittingRef.current = false;
             updateState({ isSubmitting: false });
         }
     };
-    
-
+ 
     return {
         state,
         actions: {
             handleSelectProduct,
             handleUseSuggestedLocation,
-            handleAssignNewLocation,
-            handleSelectLocation,
+            handleAssignNewLocation: () => updateState({ step: 'confirm_new' }),
+            handleSelectLocation: (idStr: string) => {
+                const loc = state.selectableLocations.find(l => l.id === Number(idStr));
+                updateState({ newLocationId: Number(idStr), isLocationSearchOpen: false, locationSearchTerm: loc?.cached_full_path || loc?.name || '' });
+            },
             handleConfirmAndRegister,
-            handleReset,
-            handleGoBack,
+            handleReset: () => updateState({ step: 'select_product', selectedProduct: null, productSearchTerm: '', suggestedLocations: [], selectedLocationId: null, newLocationId: null, locationSearchTerm: '', quantity: '1', humanReadableId: '', documentId: '', erpDocumentId: '', notes: '', lastCreatedUnit: null, saveAsDefault: true }),
+            handleGoBack: () => {
+                if (state.step === 'select_location') updateState({ step: 'select_product', selectedProduct: null });
+                else updateState({ step: 'select_location', newLocationId: null, locationSearchTerm: '' });
+            },
             setProductSearchTerm: (term: string) => updateState({ productSearchTerm: term }),
             setProductSearchOpen: (isOpen: boolean) => updateState({ isProductSearchOpen: isOpen }),
             setLocationSearchTerm: (term: string) => updateState({ locationSearchTerm: term }),
@@ -371,18 +265,34 @@ export const useReceivingWizard = () => {
             setDocumentId: (id: string) => updateState({ documentId: id }),
             setErpDocumentId: (id: string) => updateState({ erpDocumentId: id }),
             setSaveAsDefault: (save: boolean) => updateState({ saveAsDefault: save }),
-            handleProductSearchKeyDown,
-            handlePrintLabel,
+            setNotes: (notes: string) => updateState({ notes }),
+            handleProductSearchKeyDown: (e: React.KeyboardEvent) => {
+                if (e.key === 'Enter' && productOptions.length > 0) handleSelectProduct(productOptions[0].value);
+            },
+            handlePrintLabel: async (unit: InventoryUnit | null) => {
+                if (!unit || !state.selectedProduct) return;
+                const canvas = document.createElement('canvas');
+                JsBarcode(canvas, unit.unitCode!, { format: 'CODE128' });
+                const barcodeDataUrl = canvas.toDataURL('image/png');
+                const qrCodeDataUrl = await QRCode.toDataURL(unit.unitCode!);
+                const doc = new jsPDF({ orientation: 'landscape', unit: 'in', format: [4, 3] });
+                doc.addImage(qrCodeDataUrl, 'PNG', 0.2, 0.2, 1.2, 1.2);
+                doc.addImage(barcodeDataUrl, 'PNG', 0.2, 1.5, 1.2, 0.4);
+                doc.text(`ID: ${unit.productId}`, 1.6, 0.5);
+                doc.save(`label_${unit.unitCode}.pdf`);
+            },
             setIsMixedLocationConfirmOpen: (open: boolean) => updateState({ isMixedLocationConfirmOpen: open }),
             setMoveProductConfirmOpen: (open: boolean) => updateState({ moveProductConfirmOpen: open }),
             setMoveAndMixConfirmOpen: (open: boolean) => updateState({ moveAndMixConfirmOpen: open }),
-            setNotes: (notes: string) => updateState({ notes: notes }),
             performRegistration,
         },
         selectors: {
             productOptions,
             locationOptions,
-            renderLocationPath: (locationId: number) => renderLocationPathAsString(locationId, state.allLocations),
+            renderLocationPath: (id: number) => {
+                const loc = [...state.selectableLocations, ...state.suggestedLocations].find(l => l.id === id);
+                return loc?.cached_full_path || loc?.name || String(id);
+            },
         },
     };
 };

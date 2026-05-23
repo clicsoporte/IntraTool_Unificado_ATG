@@ -11,7 +11,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Loader2, Save, List, ScanLine, CheckCircle } from 'lucide-react';
+import { Loader2, Save, List, ScanLine, CheckCircle, Trash2 } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { useInventoryCount, CountMode } from '@/modules/warehouse/hooks/useInventoryCount';
 import { SearchInput } from '@/components/ui/search-input';
@@ -160,6 +160,18 @@ export default function InventoryCountPage() {
                         onCheckedChange={(checked) => actions.setMode(checked ? 'scanner' : 'manual')}
                     />
                     <Label htmlFor="mode-switch" className={mode === 'scanner' ? 'font-bold' : ''}>Modo Escáner</Label>
+                </div>
+
+                <div className="flex justify-end pb-4">
+                    <Button 
+                        variant="destructive" 
+                        size="sm" 
+                        onClick={actions.handleClearAllCounts}
+                        disabled={state.isSubmitting}
+                    >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        Borrar Toda la Toma Actual
+                    </Button>
                 </div>
                  <div className="flex items-center justify-center">
                     {mode === 'manual' ? <ManualMode /> : <ScannerMode />}

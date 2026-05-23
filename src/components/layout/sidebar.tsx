@@ -34,6 +34,7 @@ import {
   FileSignature,
   Cpu,
   Container,
+  Truck,
 } from "lucide-react";
 import type { Tool } from "@/modules/core/types";
 import { UserNav } from "./user-nav";
@@ -108,6 +109,14 @@ const navLinks: Tool[] = [
     bgColor: "bg-lime-500",
   },
   {
+    id: "fleet:access",
+    name: "Gestión de Flota",
+    description: "Control de combustible, mantenimiento y eficiencia de activos.",
+    href: "/dashboard/fleet",
+    icon: Truck,
+    bgColor: "bg-blue-600",
+  },
+  {
     id: "warehouse:access",
     name: "Almacén",
     description: "Consultar ubicaciones, gestionar unidades y registrar conteos.",
@@ -160,6 +169,9 @@ export function AppSidebar() {
     if (!pathname) return false;
     if (href === '/dashboard') {
         return pathname === href;
+    }
+    if (href === '/dashboard/operations') {
+        return pathname === '/dashboard/operations' || pathname.startsWith('/dashboard/operations/');
     }
     return pathname.startsWith(href);
   };
