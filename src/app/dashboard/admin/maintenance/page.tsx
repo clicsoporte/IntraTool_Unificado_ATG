@@ -562,40 +562,63 @@ export default function MaintenancePage() {
                                             <div 
                                                 key={r.table} 
                                                 className={cn(
-                                                    "group p-4 rounded-xl border transition-all duration-300 hover:shadow-md",
+                                                    "group p-4 rounded-xl border transition-all duration-300 hover:shadow-md flex flex-col justify-between",
                                                     r.status === 'ok' 
                                                         ? 'bg-green-50/30 border-green-200 hover:border-green-400' 
                                                         : 'bg-red-50/30 border-red-200 hover:border-red-400'
                                                 )}
                                             >
-                                                <div className="flex justify-between items-center mb-2">
-                                                    <span className="font-bold text-sm tracking-wider opacity-70 group-hover:opacity-100 transition-opacity">
-                                                        {r.table.toUpperCase()}
-                                                    </span>
-                                                    <div className={cn(
-                                                        "p-1.5 rounded-full",
-                                                        r.status === 'ok' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'
-                                                    )}>
-                                                        {r.status === 'ok' ? <CheckCircle className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
-                                                    </div>
-                                                </div>
-                                                
-                                                {r.status !== 'ok' && (
-                                                    <div className="mt-3 space-y-2">
-                                                        <div className="text-[10px] font-bold uppercase tracking-widest text-red-500/70">Faltan:</div>
-                                                        <div className="flex flex-wrap gap-1">
-                                                            {r.missingColumns.map(col => (
-                                                                <span key={col} className="px-2 py-0.5 rounded-md bg-red-100 text-red-700 text-[10px] font-mono border border-red-200">
-                                                                    {col}
-                                                                </span>
-                                                            ))}
+                                                <div>
+                                                    <div className="flex justify-between items-start gap-2 mb-2 min-w-0">
+                                                        <span 
+                                                            className="font-bold text-xs tracking-wider opacity-70 group-hover:opacity-100 transition-opacity break-words flex-1 min-w-0 pr-1"
+                                                            title={r.table.toUpperCase()}
+                                                        >
+                                                            {r.table.toUpperCase()}
+                                                        </span>
+                                                        <div className={cn(
+                                                            "p-1.5 rounded-full shrink-0",
+                                                            r.status === 'ok' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'
+                                                        )}>
+                                                            {r.status === 'ok' ? <CheckCircle className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
                                                         </div>
                                                     </div>
-                                                )}
+                                                    
+                                                    {r.status !== 'ok' && (
+                                                        <div className="mt-3 space-y-2">
+                                                            <div className="text-[10px] font-bold uppercase tracking-widest text-red-500/70">Faltan:</div>
+                                                            <div className="flex flex-wrap gap-1">
+                                                                {r.missingColumns.map(col => (
+                                                                    <span key={col} className="px-2 py-0.5 rounded-md bg-red-100 text-red-700 text-[10px] font-mono border border-red-200">
+                                                                        {col}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
 
-                                                {r.status === 'ok' && (
-                                                    <p className="text-[10px] text-green-600/70 italic">Esquema verificado e íntegro</p>
-                                                )}
+                                                <div className={cn(
+                                                    "mt-4 pt-2.5 border-t border-dashed flex flex-col gap-1.5",
+                                                    r.status === 'ok' ? 'border-green-200/50' : 'border-red-200/50'
+                                                )}>
+                                                    <div className="flex items-center justify-between text-[11px]">
+                                                        <span className="text-muted-foreground font-medium">Registros:</span>
+                                                        <span className={cn(
+                                                            "font-mono font-bold px-2 py-0.5 rounded text-[10px] border",
+                                                            r.status === 'ok' 
+                                                                ? 'bg-green-100/50 text-green-800 border-green-200/40' 
+                                                                : 'bg-red-100/50 text-red-800 border-red-200/40'
+                                                        )}>
+                                                            {r.recordCount !== undefined ? r.recordCount.toLocaleString() : '0'}
+                                                        </span>
+                                                    </div>
+                                                    {r.status === 'ok' ? (
+                                                        <p className="text-[10px] text-green-600/70 italic mt-0.5">Esquema verificado e íntegro</p>
+                                                    ) : (
+                                                        <p className="text-[10px] text-red-600/70 italic mt-0.5">Requiere reparación</p>
+                                                    )}
+                                                </div>
                                             </div>
                                         ))}
                                     </div>

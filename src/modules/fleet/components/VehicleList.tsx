@@ -20,7 +20,7 @@ export default function VehicleList({ vehicles }: { vehicles: any[] }) {
     
     const expiringLegal = vehicles.filter((v: any) => {
         const rtvDate = v.rtvExpiration ? new Date(v.rtvExpiration) : null;
-        const rtvNear = rtvDate && (v.status === 'active') && (rtvDate.getTime() - new Date().getTime() < 30 * 24 * 60 * 60 * 1000);
+        const rtvNear = rtvDate && (rtvDate.getTime() - new Date().getTime() < 30 * 24 * 60 * 60 * 1000);
         return rtvNear || (v.expiringPermitsCount > 0);
     }).length;
 
@@ -40,7 +40,7 @@ export default function VehicleList({ vehicles }: { vehicles: any[] }) {
         }
         if (filter === 'legal') {
             const rtvDate = v.rtvExpiration ? new Date(v.rtvExpiration) : null;
-            const rtvNear = rtvDate && (v.status === 'active') && (rtvDate.getTime() - new Date().getTime() < 30 * 24 * 60 * 60 * 1000);
+            const rtvNear = rtvDate && (rtvDate.getTime() - new Date().getTime() < 30 * 24 * 60 * 60 * 1000);
             return rtvNear || (v.expiringPermitsCount > 0);
         }
         
@@ -158,7 +158,7 @@ export default function VehicleList({ vehicles }: { vehicles: any[] }) {
                     const hasOilAlert = vehicle.currentMileage >= vehicle.lastOilChangeMileage + vehicle.oilChangeInterval;
                     
                     const rtvDate = vehicle.rtvExpiration ? new Date(vehicle.rtvExpiration) : null;
-                    const hasRtvAlert = rtvDate && (vehicle.status === 'active') && (rtvDate.getTime() - new Date().getTime() < 30 * 24 * 60 * 60 * 1000);
+                    const hasRtvAlert = rtvDate && (rtvDate.getTime() - new Date().getTime() < 30 * 24 * 60 * 60 * 1000);
                     
                     const hasPermitAlert = vehicle.expiringPermitsCount > 0;
 

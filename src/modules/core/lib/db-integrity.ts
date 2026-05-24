@@ -5,6 +5,7 @@ export type AuditResult = {
     table: string;
     status: 'ok' | 'missing_table' | 'missing_columns';
     missingColumns: string[];
+    recordCount?: number;
 };
 
 /**
@@ -21,7 +22,8 @@ export function auditDatabaseInstance(db: any): AuditResult[] {
                 results.push({ 
                     table: tableName, 
                     status: 'missing_table', 
-                    missingColumns: expectedColumns 
+                    missingColumns: expectedColumns,
+                    recordCount: 0
                 });
                 continue;
             }
@@ -29,24 +31,35 @@ export function auditDatabaseInstance(db: any): AuditResult[] {
             const actualColumns = new Set(tableInfo.map((c: any) => c.name));
             const missing = expectedColumns.filter(col => !actualColumns.has(col));
 
+            let recordCount = 0;
+            try {
+                const countRow = db.prepare(`SELECT COUNT(*) as count FROM ${tableName}`).get() as { count: number } | undefined;
+                recordCount = countRow ? countRow.count : 0;
+            } catch (e) {
+                console.error(`Error fetching record count for table ${tableName}:`, e);
+            }
+
             if (missing.length > 0) {
                 results.push({ 
                     table: tableName, 
                     status: 'missing_columns', 
-                    missingColumns: missing 
+                    missingColumns: missing,
+                    recordCount
                 });
             } else {
                 results.push({ 
                     table: tableName, 
                     status: 'ok', 
-                    missingColumns: [] 
+                    missingColumns: [],
+                    recordCount
                 });
             }
         } catch (error: any) {
             results.push({ 
                 table: tableName, 
                 status: 'missing_table', 
-                missingColumns: expectedColumns 
+                missingColumns: expectedColumns,
+                recordCount: 0
             });
         }
     }

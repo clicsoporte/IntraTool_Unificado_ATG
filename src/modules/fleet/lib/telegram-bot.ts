@@ -74,6 +74,31 @@ export async function deleteTelegramState(chatId: string): Promise<void> {
   }
 }
 
+export async function saveTelegramBotLog(
+  db: any,
+  vehicleId: number,
+  actionType: 'fuel' | 'maintenance' | 'rtv',
+  driverName: string,
+  message: string,
+  details?: any
+): Promise<void> {
+  try {
+    db.prepare(`
+      INSERT INTO ${FLEET_TABLES.telegramBotLogs} (vehicleId, timestamp, actionType, driverName, message, details)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      vehicleId,
+      new Date().toISOString(),
+      actionType,
+      driverName,
+      message,
+      details ? JSON.stringify(details) : null
+    );
+  } catch (error) {
+    console.error("Error saving Telegram bot log:", error);
+  }
+}
+
 export async function getAllActiveBotStates(): Promise<any[]> {
   const db = await getDb();
   try {
@@ -336,6 +361,13 @@ export async function saveTelegramFuelLog(log: any, userName: string) {
             `).run(data.mileageBefore, data.vehicleId);
         });
         transaction(logWithUser);
+        await saveTelegramBotLog(
+            db,
+            log.vehicleId,
+            'fuel',
+            userName,
+            `Se registró un repostaje de ${log.liters.toFixed(2)} L (Odómetro: ${log.mileageBefore.toLocaleString()} | Costo: CRC ${log.cost?.toLocaleString()})`
+        );
         await logInfo(`Fuel log registered via Telegram Bot for vehicle ${log.vehicleId}`);
     } catch (error: any) {
         console.error("Error saving fuel log in Telegram Bot", error);
@@ -433,6 +465,13 @@ export async function saveTelegramMaintenanceLog(log: any, userName: string) {
             `).run(data.mileage, data.vehicleId, data.type);
         });
         transaction(logWithUser);
+        await saveTelegramBotLog(
+            db,
+            log.vehicleId,
+            'maintenance',
+            userName,
+            `Se registró mantenimiento [${log.type}] (Odómetro: ${log.mileage.toLocaleString()} | Costo: CRC ${log.cost?.toLocaleString()} | Realizado por: ${log.performedBy || 'N/D'})`
+        );
         await logInfo(`Maintenance log (${log.type}) registered via Telegram Bot for vehicle ${log.vehicleId}`);
     } catch (error: any) {
         console.error("Error saving maintenance log in Telegram Bot", error);

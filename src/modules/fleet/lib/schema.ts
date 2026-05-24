@@ -11,7 +11,8 @@ export const FLEET_TABLES = {
     fuelPriceHistory: 'fleet_fuel_price_history',
     migrations: '_fleet_migrations',
     telegramStates: 'fleet_telegram_bot_states',
-    telegramLinkages: 'fleet_telegram_linkages'
+    telegramLinkages: 'fleet_telegram_linkages',
+    telegramBotLogs: 'fleet_telegram_bot_logs'
 } as const;
 
 export async function initializeFleetSchema(db: Database) {
@@ -211,6 +212,20 @@ export async function initializeFleetSchema(db: Database) {
             username TEXT,
             activationCode TEXT UNIQUE,
             createdAt TEXT
+        )
+    `);
+
+    // 10. Telegram Bot Logs (Dedicated Table - Immune to Admin Logs Deletion)
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS ${FLEET_TABLES.telegramBotLogs} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vehicleId INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            actionType TEXT NOT NULL, -- 'fuel', 'maintenance', 'rtv'
+            driverName TEXT NOT NULL,
+            message TEXT NOT NULL,
+            details TEXT, -- JSON blob with additional data
+            FOREIGN KEY (vehicleId) REFERENCES ${FLEET_TABLES.vehicles}(id) ON DELETE CASCADE
         )
     `);
 

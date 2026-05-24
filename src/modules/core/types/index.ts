@@ -693,6 +693,7 @@ export type AuditResult = {
     table: string;
     status: 'ok' | 'missing_table' | 'missing_columns';
     missingColumns: string[];
+    recordCount?: number;
 };
 
 export type WizardSession = {

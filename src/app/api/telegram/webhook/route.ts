@@ -4,6 +4,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { getDb } from '@/modules/core/lib/db';
 import { getNotificationConfig } from '@/modules/notifications/lib/db';
+import { logInfo, logError } from '@/modules/core/lib/logger';
 import { 
   getLinkageByChatId, 
   getTelegramState, 
@@ -14,7 +15,8 @@ import {
   getMaintenanceTypes, 
   getTelegramBotSettings, 
   saveTelegramFuelLog, 
-  saveTelegramMaintenanceLog 
+  saveTelegramMaintenanceLog,
+  saveTelegramBotLog
 } from '@/modules/fleet/lib/telegram-bot';
 
 // Telegram Keyboards
@@ -24,7 +26,8 @@ const menuKeyboard = {
     [{ text: "2. Registrar Mantenimiento 🔧" }],
     [{ text: "3. Consultar Alertas ⚠️" }],
     [{ text: "4. Historial Log 📋" }],
-    [{ text: "5. Permisos y Planes 📄" }]
+    [{ text: "5. Permisos y Planes 📄" }],
+    [{ text: "6. Renovar RTV 🚙" }]
   ],
   resize_keyboard: true,
   one_time_keyboard: false
@@ -365,6 +368,9 @@ export async function POST(req: NextRequest) {
       } else if (text.includes("Permisos") || text.toLowerCase() === '5') {
         await saveTelegramState(chatIdStr, 'permits_plans', 'permits_plans_plate', {});
         await sendTelegramMessage(botToken, chatId, "✍️ Por favor, escribe la <b>placa</b> del vehículo para consultar sus permisos y planes:", cancelOnlyKeyboard);
+      } else if (text.includes("Renovar RTV") || text.toLowerCase() === '6' || text.toLowerCase() === '/rtv') {
+        await saveTelegramState(chatIdStr, 'rtv_renewal', 'rtv_plate', {});
+        await sendTelegramMessage(botToken, chatId, "✍️ Por favor, escribe la <b>placa</b> del vehículo para renovar su RTV:", cancelOnlyKeyboard);
       } else {
         await sendTelegramMessage(
           botToken, 
@@ -1143,6 +1149,199 @@ export async function POST(req: NextRequest) {
           } catch (err) {
             console.error("Error generating permits and plans report:", err);
             await sendTelegramMessage(botToken, chatId, "❌ Ocurrió un error al procesar el reporte. Por favor intenta de nuevo.", menuKeyboard);
+            await deleteTelegramState(chatIdStr);
+          }
+          break;
+        }
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    // F. RENOVACION DE RTV FLOW
+    if (state.currentFlow === 'rtv_renewal') {
+      if (text === 'Cancelar ❌' || text.toLowerCase() === 'cancelar' || text.toLowerCase() === '/cancelar') {
+        await deleteTelegramState(chatIdStr);
+        await sendTelegramMessage(botToken, chatId, "❌ Operación cancelada.", menuKeyboard);
+        return NextResponse.json({ ok: true });
+      }
+
+      switch (state.step) {
+        case 'rtv_plate': {
+          const vehicle = await getVehicleByPlate(text);
+          if (!vehicle) {
+            await sendTelegramMessage(
+              botToken, 
+              chatId, 
+              `❌ Vehículo con placa <b>"${text}"</b> no encontrado. Por favor, ingresa una placa válida o presiona Cancelar:`, 
+              cancelOnlyKeyboard
+            );
+            return NextResponse.json({ ok: true });
+          }
+
+          tempData.vehicleId = vehicle.id;
+          tempData.plate = vehicle.plate;
+          tempData.brand = vehicle.brand;
+          tempData.model = vehicle.model;
+          tempData.rtvExpiration = vehicle.rtvExpiration;
+
+          if (vehicle.rtvExpiration) {
+            const dateParts = vehicle.rtvExpiration.substring(0, 10).split('-');
+            if (dateParts.length === 3) {
+              const year = parseInt(dateParts[0], 10);
+              const month = dateParts[1];
+              const day = dateParts[2];
+              const nextYear = year + 1;
+              const proposedDate = `${nextYear}-${month}-${day}`;
+              const formattedProposed = `${day}/${month}/${nextYear}`;
+
+              tempData.proposedDate = proposedDate;
+              tempData.formattedProposed = formattedProposed;
+
+              await saveTelegramState(chatIdStr, 'rtv_renewal', 'rtv_confirm', tempData);
+
+              const rtvConfirmKeyboard = {
+                keyboard: [
+                  [{ text: `Sí, renovar al ${formattedProposed} ✅` }],
+                  [{ text: "✍️ Ingresar otra fecha" }],
+                  [{ text: "Cancelar ❌" }]
+                ],
+                resize_keyboard: true,
+                one_time_keyboard: true
+              };
+
+              await sendTelegramMessage(
+                botToken,
+                chatId,
+                `🚙 <b>${vehicle.brand} ${vehicle.model} (${vehicle.plate})</b>\n` +
+                `RTV actual: <b>${formatDate(vehicle.rtvExpiration)}</b>\n\n` +
+                `¿Deseas renovar el RTV sumando un año para el <b>${formattedProposed}</b>?`,
+                rtvConfirmKeyboard
+              );
+              return NextResponse.json({ ok: true });
+            }
+          }
+
+          // If no current RTV date, ask to input manually
+          await saveTelegramState(chatIdStr, 'rtv_renewal', 'rtv_date_input', tempData);
+          await sendTelegramMessage(
+            botToken,
+            chatId,
+            `🚙 <b>${vehicle.brand} ${vehicle.model} (${vehicle.plate})</b> no tiene fecha de RTV registrada.\n\n` +
+            `Por favor, escribe la fecha de vencimiento de RTV en formato <b>DD/MM/AAAA</b> (ej: 01/05/2027):`,
+            cancelOnlyKeyboard
+          );
+          break;
+        }
+
+        case 'rtv_confirm': {
+          if (text.startsWith('Sí, renovar') || text.includes('Confirmar') || text.includes('Sí')) {
+            try {
+              const db = await getDb();
+              db.prepare(`UPDATE fleet_vehicles SET rtvExpiration = ? WHERE id = ?`).run(tempData.proposedDate, tempData.vehicleId);
+
+              // Save bot log
+              await saveTelegramBotLog(
+                db,
+                tempData.vehicleId,
+                'rtv',
+                linkage.employeeName || 'Telegram Bot',
+                `Se renovó el RTV sumando 1 año hasta el ${tempData.formattedProposed}`
+              );
+
+              await deleteTelegramState(chatIdStr);
+              await sendTelegramMessage(
+                botToken,
+                chatId,
+                `✅ RTV del vehículo <b>${tempData.plate}</b> renovado con éxito al <b>${tempData.formattedProposed}</b>.`,
+                menuKeyboard
+              );
+            } catch (err: any) {
+              console.error("Error updating RTV via Telegram confirmation", err);
+              await sendTelegramMessage(botToken, chatId, "❌ Error al actualizar la base de datos. Intente de nuevo.", menuKeyboard);
+              await deleteTelegramState(chatIdStr);
+            }
+          } else if (text.includes("Ingresar otra fecha") || text.includes("Ingresar")) {
+            await saveTelegramState(chatIdStr, 'rtv_renewal', 'rtv_date_input', tempData);
+            await sendTelegramMessage(
+              botToken,
+              chatId,
+              `✍️ Por favor, escribe la fecha de vencimiento en formato <b>DD/MM/AAAA</b> (ej: 01/05/2027):`,
+              cancelOnlyKeyboard
+            );
+          } else {
+            await sendTelegramMessage(
+              botToken,
+              chatId,
+              "Por favor, selecciona una de las opciones válidas:",
+              {
+                keyboard: [
+                  [{ text: `Sí, renovar al ${tempData.formattedProposed} ✅` }],
+                  [{ text: "✍️ Ingresar otra fecha" }],
+                  [{ text: "Cancelar ❌" }]
+                ],
+                resize_keyboard: true,
+                one_time_keyboard: true
+              }
+            );
+          }
+          break;
+        }
+
+        case 'rtv_date_input': {
+          const dateRegex = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+          const match = text.trim().match(dateRegex);
+
+          if (!match) {
+            await sendTelegramMessage(
+              botToken,
+              chatId,
+              "⚠️ Formato incorrecto. Por favor, ingresa la fecha en formato <b>DD/MM/AAAA</b> (ej: 01/05/2027) o presiona Cancelar:",
+              cancelOnlyKeyboard
+            );
+            return NextResponse.json({ ok: true });
+          }
+
+          const day = parseInt(match[1], 10);
+          const month = parseInt(match[2], 10);
+          const year = parseInt(match[3], 10);
+
+          const dateObj = new Date(year, month - 1, day);
+          if (dateObj.getFullYear() !== year || dateObj.getMonth() !== month - 1 || dateObj.getDate() !== day) {
+            await sendTelegramMessage(
+              botToken,
+              chatId,
+              "⚠️ Fecha inválida. Por favor, ingresa una fecha real y válida (ej: 01/05/2027):",
+              cancelOnlyKeyboard
+            );
+            return NextResponse.json({ ok: true });
+          }
+
+          const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+          const formattedDate = `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+
+          try {
+            const db = await getDb();
+            db.prepare(`UPDATE fleet_vehicles SET rtvExpiration = ? WHERE id = ?`).run(isoDate, tempData.vehicleId);
+
+            // Save bot log
+            await saveTelegramBotLog(
+              db,
+              tempData.vehicleId,
+              'rtv',
+              linkage.employeeName || 'Telegram Bot',
+              `Se renovó el RTV manualmente hasta el ${formattedDate}`
+            );
+
+            await deleteTelegramState(chatIdStr);
+            await sendTelegramMessage(
+              botToken,
+              chatId,
+              `✅ RTV del vehículo <b>${tempData.plate}</b> actualizado con éxito al <b>${formattedDate}</b>.`,
+              menuKeyboard
+            );
+          } catch (err: any) {
+            console.error("Error updating RTV via Telegram manual input", err);
+            await sendTelegramMessage(botToken, chatId, "❌ Error al actualizar la base de datos. Intente de nuevo.", menuKeyboard);
             await deleteTelegramState(chatIdStr);
           }
           break;

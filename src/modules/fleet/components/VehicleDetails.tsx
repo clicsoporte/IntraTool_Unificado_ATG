@@ -5,7 +5,7 @@ import {
     Truck, Gauge, Fuel, Wrench, Calendar, 
     User, DollarSign, Plus, ArrowLeft, 
     FileText, Activity, TrendingUp, AlertCircle, Settings, Trash2, CheckCircle, Clock, MoreVertical,
-    Camera, Loader2
+    Camera, Loader2, MessageSquare
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -15,7 +15,7 @@ import { Progress } from '@/components/ui/progress';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { saveFuelLogAction, saveMaintenanceLogAction, savePermitAction, deleteVehicleAction, deletePermitAction, savePreventativePlanAction, deletePreventativePlanAction, deleteFuelLogAction, deleteMaintenanceLogAction } from '../lib/actions';
+import { saveFuelLogAction, saveMaintenanceLogAction, savePermitAction, deleteVehicleAction, deletePermitAction, savePreventativePlanAction, deletePreventativePlanAction, deleteFuelLogAction, deleteMaintenanceLogAction, updateVehicleRtvAction, getTelegramBotLogsAction } from '../lib/actions';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/modules/core/hooks/use-toast';
 import Image from 'next/image';
@@ -115,6 +115,9 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
     const [preventativeDialogOpen, setPreventativeDialogOpen] = useState(false);
     const [photoModalOpen, setPhotoModalOpen] = useState(false);
     const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+    const [rtvDialogOpen, setRtvDialogOpen] = useState(false);
+    const [rtvDateValue, setRtvDateValue] = useState(vehicle.rtvExpiration || '');
+    const [rtvLoading, setRtvLoading] = useState(false);
     const [mobileSheetOpen, setMobileSheetOpen] = useState(false);
     const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
     
@@ -122,6 +125,30 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
     const [fuelPage, setFuelPage] = useState(1);
     const [maintPage, setMaintPage] = useState(1);
     const ITEMS_PER_PAGE = 5;
+
+    const [botLogs, setBotLogs] = useState<any[]>([]);
+    const [botLogsLoading, setBotLogsLoading] = useState(true);
+    const [botPage, setBotPage] = useState(1);
+
+    useEffect(() => {
+        async function loadBotLogs() {
+            setBotLogsLoading(true);
+            try {
+                const logs = await getTelegramBotLogsAction(vehicle.id);
+                setBotLogs(logs);
+            } catch (e) {
+                console.error("Error loading bot logs:", e);
+            } finally {
+                setBotLogsLoading(false);
+            }
+        }
+        loadBotLogs();
+    }, [vehicle.id, rtvDialogOpen]);
+
+    const paginatedBotLogs = useMemo(() => {
+        const startIndex = (botPage - 1) * ITEMS_PER_PAGE;
+        return botLogs.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+    }, [botLogs, botPage]);
 
     const paginatedFuelLogs = useMemo(() => {
         const startIndex = (fuelPage - 1) * ITEMS_PER_PAGE;
@@ -265,6 +292,21 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
             setLoading(false);
         }
      }
+
+    async function handleUpdateRtv(e: React.FormEvent<HTMLFormElement>) {
+        e.preventDefault();
+        setRtvLoading(true);
+        try {
+            await updateVehicleRtvAction(vehicle.id, rtvDateValue || null);
+            toast({ title: "Éxito", description: "RTV actualizado correctamente." });
+            setRtvDialogOpen(false);
+            router.refresh();
+        } catch (error: any) {
+            toast({ variant: "destructive", title: "Error", description: error.message || "No se pudo actualizar el RTV." });
+        } finally {
+            setRtvLoading(false);
+        }
+    }
 
      async function handleDeleteFuelLog(logId: number) {
         if (!confirm("¿Está seguro de que desea eliminar este registro de repostaje?")) return;
@@ -1631,6 +1673,99 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                                 </div>
                             </CardContent>
                         </Card>
+
+                        {/* Dedicated Permanent Telegram Bot Logs Card (Full Width) */}
+                        <Card className="lg:col-span-2 border-t-4 border-t-[#0088cc] shadow-sm">
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-lg flex items-center gap-2 text-[#0088cc]">
+                                    <MessageSquare className="w-5 h-5" /> Historial de Registros vía Bot Telegram
+                                </CardTitle>
+                                <CardDescription className="text-xs">
+                                    Registros permanentes realizados por los choferes desde el asistente de Telegram.
+                                </CardDescription>
+                            </CardHeader>
+                            <CardContent>
+                                {botLogsLoading ? (
+                                    <div className="flex items-center justify-center py-10">
+                                        <Loader2 className="w-6 h-6 animate-spin text-[#0088cc]" />
+                                        <span className="ml-2 text-sm text-muted-foreground">Cargando registros...</span>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-4 mt-2">
+                                        {paginatedBotLogs.map((log) => {
+                                            let actionEmoji = '🤖';
+                                            let actionColor = 'bg-slate-100 text-slate-700 border-slate-200';
+                                            if (log.actionType === 'fuel') {
+                                                actionEmoji = '⛽';
+                                                actionColor = 'bg-emerald-50 text-emerald-700 border-emerald-200';
+                                            } else if (log.actionType === 'maintenance') {
+                                                actionEmoji = '🔧';
+                                                actionColor = 'bg-blue-50 text-blue-700 border-blue-200';
+                                            } else if (log.actionType === 'rtv') {
+                                                actionEmoji = '🚙';
+                                                actionColor = 'bg-purple-50 text-purple-700 border-purple-200';
+                                            }
+
+                                            return (
+                                                <div key={log.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 rounded-xl bg-slate-50/50 dark:bg-slate-900/30 border border-slate-100 dark:border-slate-800 gap-3 hover:bg-slate-50 transition-colors duration-150">
+                                                    <div className="space-y-1 flex-1">
+                                                        <div className="flex items-center gap-2 flex-wrap">
+                                                            <Badge variant="outline" className={`${actionColor} font-bold rounded-lg px-2 py-0.5 text-xs`}>
+                                                                {actionEmoji} {log.actionType === 'fuel' ? 'Repostaje' : log.actionType === 'maintenance' ? 'Mantenimiento' : 'Renovación RTV'}
+                                                            </Badge>
+                                                            <span className="text-[10px] text-muted-foreground font-medium flex items-center gap-1">
+                                                                <Calendar className="w-3.5 h-3.5" />
+                                                                {format(parseISO(log.timestamp), 'dd/MM/yyyy HH:mm', { locale: es })}
+                                                            </span>
+                                                        </div>
+                                                        <p className="text-sm font-medium text-slate-800 dark:text-slate-200 mt-1.5 leading-relaxed">
+                                                            {log.message}
+                                                        </p>
+                                                    </div>
+                                                    <div className="flex items-center justify-between sm:justify-end gap-3 border-t sm:border-t-0 pt-2 sm:pt-0 shrink-0">
+                                                        <div className="text-right">
+                                                            <span className="text-[10px] bg-sky-50 text-sky-800 border border-sky-100 px-2 py-0.5 rounded-lg font-bold">
+                                                                Chofer: {log.driverName}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                        {botLogs.length === 0 && (
+                                            <p className="text-center py-12 text-muted-foreground italic text-sm">
+                                                No hay registros permanentes de Telegram para este vehículo.
+                                            </p>
+                                        )}
+                                        {botLogs.length > ITEMS_PER_PAGE && (
+                                            <div className="flex items-center justify-between pt-4 border-t border-dashed border-slate-200">
+                                                <Button 
+                                                    variant="outline" 
+                                                    size="sm" 
+                                                    onClick={() => setBotPage(prev => Math.max(1, prev - 1))}
+                                                    disabled={botPage === 1}
+                                                    className="text-xs h-8"
+                                                >
+                                                    Anterior
+                                                </Button>
+                                                <span className="text-xs text-muted-foreground font-semibold">
+                                                    Pág. {botPage} de {Math.ceil(botLogs.length / ITEMS_PER_PAGE)}
+                                                </span>
+                                                <Button 
+                                                    variant="outline" 
+                                                    size="sm" 
+                                                    onClick={() => setBotPage(prev => Math.min(Math.ceil(botLogs.length / ITEMS_PER_PAGE), prev + 1))}
+                                                    disabled={botPage === Math.ceil(botLogs.length / ITEMS_PER_PAGE)}
+                                                    className="text-xs h-8"
+                                                >
+                                                    Siguiente
+                                                </Button>
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </CardContent>
+                        </Card>
                     </div>
                 </TabsContent>
 
@@ -1793,12 +1928,54 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                 {/* Permits Tab */}
                 <TabsContent value="permits" className="pt-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        <Card className="border-l-4 border-l-purple-500">
+                        <Card className="border-l-4 border-l-purple-500 relative hover:shadow-md transition-all duration-200">
+                            <Dialog open={rtvDialogOpen} onOpenChange={setRtvDialogOpen}>
+                                <DialogTrigger asChild>
+                                    <Button 
+                                        variant="ghost" 
+                                        size="icon" 
+                                        className="h-8 w-8 text-muted-foreground hover:text-blue-600 absolute top-2 right-2 rounded-full transition-colors"
+                                        onClick={() => setRtvDateValue(vehicle.rtvExpiration || '')}
+                                    >
+                                        <Clock className="h-4 w-4" />
+                                    </Button>
+                                </DialogTrigger>
+                                <DialogContent className="sm:max-w-[425px] rounded-2xl">
+                                    <form onSubmit={handleUpdateRtv} className="space-y-4">
+                                        <DialogHeader>
+                                            <DialogTitle className="text-lg font-bold">Actualizar Vencimiento RTV</DialogTitle>
+                                            <DialogDescription>
+                                                Configure la fecha de la Revisión Técnica Vehicular.
+                                            </DialogDescription>
+                                        </DialogHeader>
+                                        <div className="space-y-2">
+                                            <Label htmlFor="rtvExpiration">Fecha de Vencimiento</Label>
+                                            <Input 
+                                                id="rtvExpiration" 
+                                                type="date" 
+                                                value={rtvDateValue} 
+                                                onChange={(e) => setRtvDateValue(e.target.value)} 
+                                            />
+                                        </div>
+                                        <div className="flex justify-end gap-2 pt-2">
+                                            <Button type="button" variant="outline" onClick={() => setRtvDialogOpen(false)} disabled={rtvLoading}>
+                                                Cancelar
+                                            </Button>
+                                            <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white" disabled={rtvLoading}>
+                                                {rtvLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+                                                Guardar
+                                            </Button>
+                                        </div>
+                                    </form>
+                                </DialogContent>
+                            </Dialog>
                             <CardHeader className="pb-2">
                                 <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">RTV (Revisión Técnica)</CardTitle>
                             </CardHeader>
                             <CardContent>
-                                <div className="text-2xl font-bold">{vehicle.rtvExpiration ? new Date(vehicle.rtvExpiration).toLocaleDateString() : 'No registrada'}</div>
+                                <div className="text-2xl font-bold">
+                                    {vehicle.rtvExpiration ? format(parseISO(vehicle.rtvExpiration), 'dd/MM/yyyy') : 'No registrada'}
+                                </div>
                                 {vehicle.rtvExpiration && (
                                     <p className="text-xs text-muted-foreground mt-1">
                                         Vence {new Date(vehicle.rtvExpiration) < new Date() ? 'HACE' : 'EN'} {Math.abs(Math.floor((new Date(vehicle.rtvExpiration).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24)))} días

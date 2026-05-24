@@ -560,3 +560,40 @@ export async function deleteMaintenanceLogAction(id: number, vehicleId: number) 
         throw error;
     }
 }
+
+export async function updateVehicleRtvAction(vehicleId: number, rtvExpiration: string | null) {
+    try {
+        const db = await getDb();
+        db.prepare(`UPDATE fleet_vehicles SET rtvExpiration = ? WHERE id = ?`).run(rtvExpiration, vehicleId);
+        const user = await getCurrentUser();
+        await logInfo(`Fecha de RTV actualizada para vehículo ID: ${vehicleId}`, {
+            user: user?.name,
+            vehicleId,
+            rtvExpiration
+        });
+        revalidatePath(`/dashboard/fleet/vehicles/${vehicleId}`);
+        revalidatePath('/dashboard/fleet');
+    } catch (error: any) {
+        const user = await getCurrentUser();
+        await logError(`Error al actualizar RTV para vehículo ID: ${vehicleId}`, {
+            error: error.message,
+            user: user?.name
+        });
+        throw new Error("No se pudo actualizar la fecha de RTV.");
+    }
+}
+
+export async function getTelegramBotLogsAction(vehicleId: number) {
+    try {
+        const db = await getDb();
+        const rows = db.prepare(`
+            SELECT * FROM fleet_telegram_bot_logs 
+            WHERE vehicleId = ? 
+            ORDER BY timestamp DESC
+        `).all(vehicleId) as any[];
+        return JSON.parse(JSON.stringify(rows));
+    } catch (error: any) {
+        console.error("Error fetching Telegram bot logs:", error);
+        return [];
+    }
+}

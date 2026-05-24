@@ -21,22 +21,30 @@ export async function getExchangeRate(): Promise<any> {
             throw new Error("Exchange rate API URL not configured in settings.");
         }
 
+        // Crear controlador de aborto con un límite estricto de 3 segundos
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
+
         // Use no-store to always get the freshest data from the API endpoint itself
         const response = await fetch(apiSettings.exchangeRateApi, {
-            cache: 'no-store'
+            cache: 'no-store',
+            signal: controller.signal
         });
+        clearTimeout(timeoutId);
 
         if (!response.ok) {
             const errorPayload = { status: response.status, statusText: response.statusText, url: apiSettings.exchangeRateApi };
-            await logError("Error fetching exchange rate from external API", errorPayload);
+            // Usar advertencia en consola para evitar spam en DB de servidores offline/intranet
+            console.warn("Error fetching exchange rate from external API:", errorPayload);
             return { error: true, message: `Error de API externa (${response.status})`, status: response.status };
         }
 
         const data = await response.json();
         return data;
     } catch (error: any) {
-        await logError("Failed to fetch exchange rate", { error: error.message });
-        return { error: true, message: "Error interno al consultar la API de tipo de cambio." };
+        // Evitar persistencia pesada en DB por fallos de red rutinarios en entornos aislados
+        console.warn("Failed to fetch exchange rate:", error.message);
+        return { error: true, message: "Error interno al consultar la API de tipo de cambio o tiempo de espera agotado." };
     }
 }
 

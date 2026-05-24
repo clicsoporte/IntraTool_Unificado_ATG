@@ -100,6 +100,8 @@ export function AuthForm({ initialHasUsers, initialCompanyName, initialSystemVer
         toast({ title: "Credenciales Incorrectas", variant: "destructive" });
       }
     } catch (error: any) {
+      // Guardar el fallo de autenticación de forma persistente en los logs operativos
+      await logError("Error de Inicio de Sesión", { error: error.message, email });
       toast({ title: "Error de Inicio de Sesión", description: error.message, variant: "destructive" });
     } finally {
       setIsProcessing(false);
@@ -125,7 +127,7 @@ export function AuthForm({ initialHasUsers, initialCompanyName, initialSystemVer
       await logInfo(`Password for user ${userForPasswordChange.name} was changed successfully (forced).`);
       setAuthStep("recovery_success");
     } catch (error: any) {
-      logError("Failed to set new password", { error: error.message });
+      await logError("Failed to set new password", { error: error.message });
       toast({ title: "Error", description: "No se pudo actualizar la contraseña.", variant: "destructive" });
     } finally {
       setIsProcessing(false);
@@ -141,7 +143,7 @@ export function AuthForm({ initialHasUsers, initialCompanyName, initialSystemVer
       setRecoveryDialogOpen(false);
       setRecoveryEmail("");
     } catch (error: any) {
-      logError("Password recovery failed", { error: error.message, email: recoveryEmail });
+      await logError("Password recovery failed", { error: error.message, email: recoveryEmail });
       toast({ title: "Error de Recuperación", description: error.message, variant: "destructive" });
     } finally {
       setIsProcessing(false);
