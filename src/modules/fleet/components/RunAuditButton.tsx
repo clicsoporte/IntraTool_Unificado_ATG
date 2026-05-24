@@ -74,7 +74,7 @@ export default function RunAuditButton() {
             </Button>
 
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-                <DialogContent className="sm:max-w-md border-indigo-100">
+                <DialogContent className="sm:max-w-[540px] border-indigo-100">
                     <DialogHeader>
                         <DialogTitle className="flex items-center gap-2 text-indigo-700 font-bold text-lg">
                             <ShieldCheck className="w-5 h-5 text-indigo-600 animate-pulse" />

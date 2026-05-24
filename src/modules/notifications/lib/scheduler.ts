@@ -8,34 +8,104 @@ import { logInfo, logError } from '@/modules/core/lib/logger';
  * Main runner for automated tasks.
  * Can be triggered by instrumentation (startup) or by a user-based cron trigger.
  */
-export async function runSystemAudits() {
+export async function runSystemAudits(force: boolean = false, targetTaskId?: string) {
     try {
         const tasks = await getAllScheduledTasks();
         const enabledTasks = tasks.filter(t => t.enabled);
+        const executedTasks: string[] = [];
 
         for (const task of enabledTasks) {
-            if (shouldRunTask(task)) {
+            const isTarget = targetTaskId ? task.taskId === targetTaskId : true;
+            if (isTarget && (force || shouldRunTask(task))) {
                 logInfo(`Executing scheduled task: ${task.name}`);
                 await executeTask(task.taskId);
                 await updateTaskLastRun(task.taskId);
+                executedTasks.push(task.name);
             }
         }
+        return { success: true, executedTasks };
     } catch (error: any) {
         logError('Scheduler execution failed', { error: error.message });
+        return { success: false, executedTasks: [], error: error.message };
     }
 }
 
 /**
  * Simple logic to check if a task should run today.
- * For now, we assume tasks are daily and we check if they ran today already.
+ * Parses standard 5-field simple cron expressions (minute hour day_of_month month day_of_week).
  */
 function shouldRunTask(task: any): boolean {
-    if (!task.lastRun) return true;
+    const now = new Date();
     
-    const lastRunDate = new Date(task.lastRun).toDateString();
-    const today = new Date().toDateString();
+    // 1. Check if it already ran today to prevent duplicate runs
+    if (task.lastRun) {
+        const lastRunDate = new Date(task.lastRun).toDateString();
+        if (lastRunDate === now.toDateString()) {
+            return false; // Already ran today
+        }
+    }
     
-    return lastRunDate !== today;
+    // 2. Parse simple cron expression
+    const schedule = task.schedule;
+    if (!schedule) return true;
+    
+    try {
+        const parts = schedule.trim().split(/\s+/);
+        if (parts.length === 5) {
+            const [min, hour, dom, month, dow] = parts;
+            
+            // Check day of week (dow)
+            if (dow !== '*') {
+                const currentDayOfWeek = now.getDay(); // 0 is Sunday, 1 is Monday, ..., 6 is Saturday
+                const allowedDays = dow.split(',').flatMap((d: string) => {
+                    if (d.includes('-')) {
+                        const [start, end] = d.split('-').map(Number);
+                        const days = [];
+                        for (let i = start; i <= end; i++) {
+                            days.push(i === 7 ? 0 : i);
+                        }
+                        return days;
+                    }
+                    const num = parseInt(d, 10);
+                    if (isNaN(num)) {
+                        // Support MON, TUE, etc.
+                        const mapping: Record<string, number> = {
+                            'SUN': 0, 'MON': 1, 'TUE': 2, 'WED': 3, 'THU': 4, 'FRI': 5, 'SAT': 6
+                        };
+                        const mapped = mapping[d.toUpperCase()];
+                        return mapped !== undefined ? [mapped] : [];
+                    }
+                    return [num === 7 ? 0 : num];
+                });
+                
+                if (!allowedDays.includes(currentDayOfWeek)) {
+                    return false; // Day of week doesn't match
+                }
+            }
+            
+            // Check day of month (dom)
+            if (dom !== '*') {
+                const currentDayOfMonth = now.getDate();
+                const allowedDaysOfMonth = dom.split(',').map(Number);
+                if (!allowedDaysOfMonth.includes(currentDayOfMonth)) {
+                    return false; // Day of month doesn't match
+                }
+            }
+            
+            // Check month
+            if (month !== '*') {
+                const currentMonth = now.getMonth() + 1; // 1-indexed
+                const allowedMonths = month.split(',').map(Number);
+                if (!allowedMonths.includes(currentMonth)) {
+                    return false; // Month doesn't match
+                }
+            }
+        }
+    } catch (e) {
+        console.error('Error parsing cron schedule for task:', task.taskId, e);
+    }
+    
+    return true;
 }
 
 async function executeTask(taskId: string) {
@@ -273,8 +343,11 @@ export async function runWeeklyFuelReport() {
         plate: string;
         brandModel: string;
         maxMileage: number;
+        minMileage: number;
         totalLiters: number;
         totalCost: number;
+        odometerUnit: string;
+        logsCount: number;
     }> = {};
 
     weeklyLogs.forEach(log => {
@@ -285,15 +358,22 @@ export async function runWeeklyFuelReport() {
                 plate: vehicle?.plate || `ID: ${vId}`,
                 brandModel: vehicle ? `${vehicle.brand} ${vehicle.model}` : 'Desconocido',
                 maxMileage: 0,
+                minMileage: Infinity,
                 totalLiters: 0,
-                totalCost: 0
+                totalCost: 0,
+                odometerUnit: vehicle?.odometerUnit || 'km',
+                logsCount: 0
             };
         }
         const stat = vehicleWeeklyStats[vId];
         stat.totalLiters += (log.liters || 0);
         stat.totalCost += (log.cost || 0);
+        stat.logsCount += 1;
         if (log.mileageBefore > stat.maxMileage) {
             stat.maxMileage = log.mileageBefore;
+        }
+        if (log.mileageBefore < stat.minMileage) {
+            stat.minMileage = log.mileageBefore;
         }
     });
     
@@ -302,12 +382,18 @@ export async function runWeeklyFuelReport() {
     const statsList = Object.values(vehicleWeeklyStats);
     if (statsList.length > 0) {
         statsList.forEach(stat => {
+            const distance = stat.logsCount > 1 ? (stat.maxMileage - stat.minMileage) : 0;
+            const efficiency = (stat.totalLiters > 0 && distance > 0) ? (distance / stat.totalLiters) : 0;
+            const unit = stat.odometerUnit === 'hr' ? 'Hr/L' : stat.odometerUnit === 'mi' ? 'Mi/L' : 'Km/L';
+            const efficiencyStr = efficiency > 0 ? `${efficiency.toFixed(2)} ${unit}` : 'N/D';
+
             tableRows += `
                 <tr style="border-bottom: 1px solid #edf2f7;">
                     <td style="padding: 12px 15px; font-weight: bold; color: #1a365d; text-align: left;">${stat.plate}</td>
                     <td style="padding: 12px 15px; color: #4a5568; text-align: left;">${stat.brandModel}</td>
                     <td style="padding: 12px 15px; text-align: right; color: #4a5568;">${stat.maxMileage > 0 ? stat.maxMileage.toLocaleString() : 'N/D'}</td>
                     <td style="padding: 12px 15px; text-align: right; font-weight: bold; color: #3182ce;">${stat.totalLiters.toFixed(2)} L</td>
+                    <td style="padding: 12px 15px; text-align: right; font-weight: bold; color: #38a169;">${efficiencyStr}</td>
                     <td style="padding: 12px 15px; text-align: right; font-weight: bold; color: #2d3748;">¢${stat.totalCost.toLocaleString()}</td>
                 </tr>
             `;
@@ -315,7 +401,7 @@ export async function runWeeklyFuelReport() {
     } else {
         tableRows = `
             <tr>
-                <td colspan="5" style="padding: 24px; text-align: center; color: #a0aec0; font-style: italic;">
+                <td colspan="6" style="padding: 24px; text-align: center; color: #a0aec0; font-style: italic;">
                     No se registraron repostajes de combustible en este período.
                 </td>
             </tr>
@@ -328,8 +414,9 @@ export async function runWeeklyFuelReport() {
                 <tr style="background-color: #f7fafc; border-bottom: 2px solid #edf2f7; color: #718096; text-transform: uppercase; font-size: 10px; font-weight: bold; letter-spacing: 0.5px;">
                     <th style="padding: 12px 15px; text-align: left;">Vehículo</th>
                     <th style="padding: 12px 15px; text-align: left;">Marca / Estilo</th>
-                    <th style="padding: 12px 15px; text-align: right;">Odómetro Máx (km)</th>
+                    <th style="padding: 12px 15px; text-align: right;">Odómetro Máx</th>
                     <th style="padding: 12px 15px; text-align: right;">Litros</th>
+                    <th style="padding: 12px 15px; text-align: right;">Rendimiento</th>
                     <th style="padding: 12px 15px; text-align: right;">Inversión</th>
                 </tr>
             </thead>
@@ -343,9 +430,15 @@ export async function runWeeklyFuelReport() {
     let fuelListTelegram = '';
     if (statsList.length > 0) {
         statsList.forEach(stat => {
+            const distance = stat.logsCount > 1 ? (stat.maxMileage - stat.minMileage) : 0;
+            const efficiency = (stat.totalLiters > 0 && distance > 0) ? (distance / stat.totalLiters) : 0;
+            const unit = stat.odometerUnit === 'hr' ? 'Hr/L' : stat.odometerUnit === 'mi' ? 'Mi/L' : 'Km/L';
+            const efficiencyStr = efficiency > 0 ? `${efficiency.toFixed(2)} ${unit}` : 'N/D';
+
             fuelListTelegram += `🚗 <b>${stat.plate}</b> (${stat.brandModel})\n`;
-            fuelListTelegram += `├ Odómetro Máx: <b>${stat.maxMileage > 0 ? stat.maxMileage.toLocaleString() : 'N/D'} km</b>\n`;
+            fuelListTelegram += `├ Odómetro Máx: <b>${stat.maxMileage > 0 ? stat.maxMileage.toLocaleString() : 'N/D'} ${stat.odometerUnit}</b>\n`;
             fuelListTelegram += `├ Litros: <b>${stat.totalLiters.toFixed(2)} L</b>\n`;
+            fuelListTelegram += `├ Rendimiento: <b>${efficiencyStr}</b>\n`;
             fuelListTelegram += `└ Inversión: <b>¢${stat.totalCost.toLocaleString()}</b>\n\n`;
         });
     } else {

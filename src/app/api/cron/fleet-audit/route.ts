@@ -1,7 +1,7 @@
 // /src/app/api/cron/fleet-audit/route.ts
 
 import { NextResponse } from 'next/server';
-import { runFleetAudit } from '@/modules/notifications/lib/scheduler';
+import { runSystemAudits } from '@/modules/notifications/lib/scheduler';
 import { logError, logInfo } from '@/modules/core/lib/logger';
 import { revalidatePath } from 'next/cache';
 
@@ -32,23 +32,39 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'No autorizado: Clave secreta inválida.' }, { status: 403 });
     }
 
-    // 4. If authorized, run the fleet audit process
-    logInfo('Cron job triggered: Starting Fleet Audit (Milestones & Alert checks)...');
+    // 4. Parse request body for manual trigger options (force/taskId)
+    let body: any = {};
+    try {
+      if (request.headers.get('content-type')?.includes('application/json')) {
+        body = await request.json();
+      }
+    } catch (e) {
+      // Ignore JSON parsing errors for empty body
+    }
+
+    const { taskId, force } = body;
+
+    // 5. If authorized, run the system scheduled tasks scheduler
+    logInfo('Cron job triggered: Running System Scheduler (Scheduled Tasks)...', { taskId, force });
     
-    const result = await runFleetAudit();
+    const result = await runSystemAudits(!!force, taskId);
     
     // Refresh relevant cache paths
     revalidatePath('/dashboard/fleet');
     revalidatePath('/dashboard/admin/fleet');
+    revalidatePath('/dashboard/admin/automations');
 
-    const summary = `Auditoría de flota completada. Se analizaron ${result.checkedCount} vehículos y se despacharon ${result.alertsSent} alertas.`;
-    logInfo('Fleet audit cron job finished successfully.', { summary });
+    if (!result.success) {
+      return NextResponse.json({ error: `Fallo en el planificador: ${result.error}` }, { status: 500 });
+    }
+
+    const summary = `Auditoría y tareas programadas procesadas. Tareas ejecutadas: [${result.executedTasks.join(', ') || 'Ninguna (ya al día)'}].`;
+    logInfo('Fleet audit/scheduler cron job finished successfully.', { summary });
 
     return NextResponse.json({ 
       success: true, 
       message: summary, 
-      checkedCount: result.checkedCount, 
-      alertsSent: result.alertsSent 
+      executedTasks: result.executedTasks
     });
 
   } catch (error: any) {
