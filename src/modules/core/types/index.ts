@@ -25,6 +25,8 @@ export type User = {
   forcePasswordChange?: boolean | number;
   activeWizardSession?: string | null;
   employeeId?: string | null;
+  salespersonId?: string | null;
+  is_active?: number;
 };
 
 /**
@@ -59,6 +61,7 @@ export type Company = {
     erpPurchaseOrderLineFilePath?: string;
     erpInvoiceHeaderFilePath?: string;
     erpInvoiceLineFilePath?: string;
+    timeZone?: string;
 };
 
 /**
@@ -191,6 +194,19 @@ export type ApiSettings = {
     haciendaExemptionApi: string;
     haciendaTributariaApi: string;
     recopeApi?: string;
+};
+
+export type AiSettings = {
+    id?: number;
+    aiEnabled: number;
+    provider: string;
+    ollamaHost: string;
+    ollamaModel: string;
+    geminiApiKey: string;
+    geminiModel: string;
+    deepseekApiKey: string;
+    deepseekModel: string;
+    systemPrompt: string;
 };
 
 /**
@@ -653,7 +669,7 @@ export type InventoryItem = {
 
 // --- SQL Import Types ---
 export type ImportQuery = {
-    type: 'customers' | 'products' | 'exemptions' | 'stock' | 'locations' | 'cabys' | 'suppliers' | 'erp_order_headers' | 'erp_order_lines' | 'erp_purchase_order_headers' | 'erp_purchase_order_lines' | 'erp_invoice_headers' | 'erp_invoice_lines' | 'employees' | 'departments' | 'positions' | 'payrolls' | 'salespersons';
+    type: 'customers' | 'products' | 'exemptions' | 'stock' | 'locations' | 'cabys' | 'suppliers' | 'erp_order_headers' | 'erp_order_lines' | 'erp_purchase_order_headers' | 'erp_purchase_order_lines' | 'erp_invoice_headers' | 'erp_invoice_lines' | 'employees' | 'departments' | 'positions' | 'payrolls' | 'salespersons' | 'customer_shipment_addresses';
     query: string;
 }
 
@@ -788,6 +804,7 @@ export type ErpInvoiceHeader = {
     FECHA: string | Date;
     FECHA_ENTREGA: string | Date;
     ANULADA: 'S' | 'N';
+    DIREC_EMBARQUE?: string;
     EMBARCAR_A?: string;
     DIRECCION_FACTURA?: string;
     OBSERVACIONES?: string;

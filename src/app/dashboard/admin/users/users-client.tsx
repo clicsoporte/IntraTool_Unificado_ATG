@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import {
   Card,
@@ -42,9 +43,11 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/modules/core/hooks/use-toast';
 import { logInfo, logError } from '@/modules/core/lib/logger';
 import { getAllUsers, addUser, updateUser, deleteUser } from '@/modules/core/lib/auth-client';
+import { toggleUserActive } from '@/modules/core/lib/user-actions';
 import { getAllRoles } from '@/modules/core/lib/db';
 import { getAllEmployeesAction } from '@/modules/fleet/lib/actions';
 import { getAllLinkagesAction } from '@/modules/fleet/lib/telegram-actions';
+import { getAllSalespersonsAction } from '@/modules/operations/lib/actions';
 import type { User, Role } from '@/modules/core/types';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { PlusCircle, Edit, Trash2, Save, Loader2 } from 'lucide-react';
@@ -66,14 +69,19 @@ const emptyUser: Omit<User, 'id' | 'password'> = {
   erpAlias: '',
   recentActivity: '',
   forcePasswordChange: true,
+  employeeId: null,
+  salespersonId: null,
+  is_active: 1,
 };
 
 export default function UsersClient() {
+  const router = useRouter();
   const { hasPermission } = useAuthorization();
   const { toast } = useToast();
   const [users, setUsers] = useState<User[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
+  const [salespersons, setSalespersons] = useState<any[]>([]);
   const [telegramLinkages, setTelegramLinkages] = useState<any[]>([]);
   const [showInactiveEmployees, setShowInactiveEmployees] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -95,19 +103,21 @@ export default function UsersClient() {
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [usersData, rolesData, employeesData, linkagesData] = await Promise.all([
+      const [usersData, rolesData, employeesData, linkagesData, salespersonsData] = await Promise.all([
         getAllUsers(),
         getAllRoles(),
         getAllEmployeesAction(),
-        getAllLinkagesAction()
+        getAllLinkagesAction(),
+        getAllSalespersonsAction()
       ]);
       setUsers(usersData);
       setRoles(rolesData);
       setEmployees(employeesData || []);
       setTelegramLinkages(linkagesData || []);
+      setSalespersons(salespersonsData || []);
     } catch (error) {
       logError('Error fetching users/roles/employees/linkages', { error });
-      toast({ title: 'Error', description: 'No se pudieron cargar los datos de usuarios, roles, empleados y vinculaciones de Telegram.', variant: 'destructive' });
+      toast({ title: 'Error', description: 'No se pudieron cargar los datos de usuarios, roles, empleados, vendedores y vinculaciones de Telegram.', variant: 'destructive' });
     }
     setIsLoading(false);
   }, [toast]);
@@ -150,6 +160,7 @@ export default function UsersClient() {
           erpAlias: currentUser.erpAlias || '',
           forcePasswordChange: !!(currentUser.forcePasswordChange ?? true),
           employeeId: currentUser.employeeId || null,
+          salespersonId: currentUser.salespersonId || null,
         });
         toast({ title: 'Usuario Creado' });
       }
@@ -179,7 +190,7 @@ export default function UsersClient() {
     }
   };
 
-  const handleFieldChange = (field: keyof User | 'password', value: string | boolean) => {
+  const handleFieldChange = (field: keyof User | 'password', value: string | boolean | number) => {
     setCurrentUser(prev => ({ ...prev, [field]: value }));
   };
 
@@ -202,9 +213,14 @@ export default function UsersClient() {
             <p className="text-muted-foreground">Crea, edita y gestiona las cuentas de usuario.</p>
           </div>
           {hasPermission('users:create') && (
-            <Button onClick={() => handleOpenDialog()}>
-              <PlusCircle className="mr-2 h-4 w-4" /> Nuevo Usuario
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={() => router.push('/dashboard/admin/users/wizard')}>
+                <PlusCircle className="mr-2 h-4 w-4 text-primary" /> Alta Rápida Chofer
+              </Button>
+              <Button onClick={() => handleOpenDialog()}>
+                <PlusCircle className="mr-2 h-4 w-4" /> Nuevo Usuario
+              </Button>
+            </div>
           )}
         </div>
 
@@ -218,6 +234,7 @@ export default function UsersClient() {
                     <th className="p-4 text-left font-medium">Contacto</th>
                     <th className="p-4 text-left font-medium">Alias ERP</th>
                     <th className="p-4 text-left font-medium">Rol</th>
+                    <th className="p-4 text-left font-medium">Estado</th>
                     <th className="p-4 text-right font-medium">Acciones</th>
                   </tr>
                 </thead>
@@ -256,6 +273,16 @@ export default function UsersClient() {
                                 })()}
                               </div>
                             )}
+                            {user.salespersonId && (
+                              <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5 flex-wrap">
+                                <span className="bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300 px-2 py-0.5 rounded text-[10px] font-medium border-none">
+                                  Vendedor: {(() => {
+                                    const sp = salespersons.find(s => s.VENDEDOR === user.salespersonId);
+                                    return sp ? `${sp.NOMBRE} (${user.salespersonId})` : user.salespersonId;
+                                  })()}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -268,6 +295,33 @@ export default function UsersClient() {
                         <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
                           {roles.find(r => r.id === user.role)?.name || user.role}
                         </Badge>
+                      </td>
+                      <td className="p-4">
+                        {user.id === 1 ? (
+                          <span className="text-xs text-muted-foreground">Siempre Activo</span>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={user.is_active !== 0}
+                              disabled={!hasPermission('users:update')}
+                              onChange={async (e) => {
+                                const newActive = e.target.checked;
+                                const result = await toggleUserActive(user.id, newActive);
+                                if (result.success) {
+                                  toast({ title: 'Estado actualizado', description: `Usuario ${newActive ? 'activado' : 'desactivado'} correctamente.` });
+                                  setUsers(prev => prev.map(u => u.id === user.id ? { ...u, is_active: newActive ? 1 : 0 } : u));
+                                } else {
+                                  toast({ title: 'Error', description: result.error || 'No se pudo cambiar el estado.', variant: 'destructive' });
+                                }
+                              }}
+                              className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer"
+                            />
+                            <span className="text-xs font-medium">
+                              {user.is_active !== 0 ? 'Activo' : 'Inactivo'}
+                            </span>
+                          </div>
+                        )}
                       </td>
                       <td className="p-4 text-right">
                         {hasPermission('users:update') && (
@@ -380,6 +434,36 @@ export default function UsersClient() {
                         </div>
                     </div>
                     <div className="space-y-2">
+                        <Label htmlFor="salesperson">Vincular a Vendedor (Opcional)</Label>
+                        <Select 
+                          value={currentUser.salespersonId || 'none'} 
+                          onValueChange={(value) => {
+                            const spId = value === 'none' ? null : value;
+                            handleFieldChange('salespersonId', spId || '');
+                            if (spId && !currentUser.name) {
+                              const selectedSp = salespersons.find(s => s.VENDEDOR === spId);
+                              if (selectedSp) {
+                                handleFieldChange('name', selectedSp.NOMBRE);
+                              }
+                            }
+                          }}
+                        >
+                            <SelectTrigger id="salesperson">
+                              <SelectValue placeholder="Seleccionar un vendedor" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="none">Sin vincular</SelectItem>
+                                {salespersons.map(sp => (
+                                    <SelectItem key={sp.VENDEDOR} value={sp.VENDEDOR}>
+                                      {sp.NOMBRE} ({sp.VENDEDOR}){sp.ACTIVO === 'N' ? ' [INACTIVO]' : ''}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-2">
                         <Label htmlFor="erpAlias">Alias de Usuario (ERP)</Label>
                         <Input id="erpAlias" value={currentUser.erpAlias || ''} onChange={(e) => handleFieldChange('erpAlias', e.target.value)} />
                     </div>
@@ -405,6 +489,16 @@ export default function UsersClient() {
                   />
                   <Label htmlFor="forcePasswordChange" className="font-normal">Forzar cambio de contraseña en el próximo inicio de sesión</Label>
                 </div>
+                {currentUser.id !== 1 && (
+                  <div className="flex items-center space-x-2 pt-2">
+                    <Checkbox
+                      id="is_active"
+                      checked={currentUser.is_active !== 0}
+                      onCheckedChange={(checked) => handleFieldChange('is_active', checked ? 1 : 0)}
+                    />
+                    <Label htmlFor="is_active" className="font-normal">Cuenta de usuario activa (Habilitada)</Label>
+                  </div>
+                )}
               </div>
             </ScrollArea>
           </div>

@@ -73,10 +73,14 @@ export async function triggerNotificationEvent(eventId: NotificationEventId, pay
         const matchingRules = allRules.filter(rule => rule.event === eventId && rule.enabled);
 
         // 3. Process Templates
-        const subject = applyTemplate(template.subject, payload);
-        const body = applyTemplate(template.body, payload);
-        const telegram = applyTemplate(template.telegram, payload);
-        const internal = applyTemplate(template.internal, payload);
+        const companySettings = db.prepare('SELECT publicUrl FROM core_company_settings WHERE id = 1').get() as { publicUrl?: string } | undefined;
+        const baseAppUrl = companySettings?.publicUrl || 'http://localhost:3000';
+        const enrichedPayload = { ...payload, baseAppUrl };
+
+        const subject = applyTemplate(template.subject, enrichedPayload);
+        const body = applyTemplate(template.body, enrichedPayload);
+        const telegram = applyTemplate(template.telegram, enrichedPayload);
+        const internal = applyTemplate(template.internal, enrichedPayload);
 
         // 4. --- Internal App Notifications (Bell icon) ---
         const roles = db.prepare(`SELECT id, permissions FROM ${CORE_TABLE_NAMES.roles}`).all() as { id: string, permissions: string }[];
@@ -130,6 +134,8 @@ function getHrefForEvent(eventId: string, p: Record<string, unknown>): string {
         case 'onFleetMaintenanceDue':
         case 'onFleetPermitExpiring':
         case 'onFleetOdometerAnomaly': return `/dashboard/fleet/vehicles/${v.vehicleId || v.id}`;
+        case 'onTicketCreated':
+        case 'onTicketStatusChanged': return `/dashboard/tickets`;
         case 'onNewSuggestion': return '/dashboard/admin/suggestions';
         default: return '/dashboard';
     }
@@ -137,6 +143,7 @@ function getHrefForEvent(eventId: string, p: Record<string, unknown>): string {
 
 function getEntityTypeForEvent(eventId: string): string {
     if (eventId.startsWith('onFleet')) return 'fleet';
+    if (eventId.startsWith('onTicket')) return 'ticket';
     if (eventId === 'onNewSuggestion') return 'suggestion';
     return 'system';
 }

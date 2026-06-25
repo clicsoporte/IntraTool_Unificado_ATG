@@ -25,6 +25,10 @@ const parseDecimal = (str: any): number => {
     return parseFloat(s);
 };
 
+const roundTo4Decimals = (num: number): number => {
+    return Math.round(num * 10000) / 10000;
+};
+
 // This is the data structure for a single processed invoice.
 export interface ProcessedInvoicePayload {
     info: Omit<ProcessedInvoiceInfo, 'status' | 'errorMessage'>;
@@ -87,7 +91,7 @@ async function parseInvoice(xmlContent: string, fileIndex: number): Promise<{ da
         const lineasDetalle = Array.isArray(detalleServicio.LineaDetalle) ? detalleServicio.LineaDetalle : [detalleServicio.LineaDetalle];
         
         for (const linea of lineasDetalle) {
-            const cantidad = parseDecimal(getValue(linea, ['Cantidad'], '0'));
+            const cantidad = roundTo4Decimals(parseDecimal(getValue(linea, ['Cantidad'], '0')));
             if (cantidad === 0) continue;
 
             const codigosComerciales = linea.CodigoComercial || [];
@@ -100,22 +104,22 @@ async function parseInvoice(xmlContent: string, fileIndex: number): Promise<{ da
             }
 
 
-            const montoTotalLinea = parseDecimal(getValue(linea, ['MontoTotalLinea'], '0'));
-            const subTotal = parseDecimal(getValue(linea, ['SubTotal'], '0'));
+            const montoTotalLinea = roundTo4Decimals(parseDecimal(getValue(linea, ['MontoTotalLinea'], '0')));
+            const subTotal = roundTo4Decimals(parseDecimal(getValue(linea, ['SubTotal'], '0')));
             
-            const unitPriceFromXml = parseDecimal(getValue(linea, ['PrecioUnitario'], '0'));
+            const unitPriceFromXml = roundTo4Decimals(parseDecimal(getValue(linea, ['PrecioUnitario'], '0')));
 
             const impuestoNode = getValue(linea, ['Impuesto']);
-            const taxRate = impuestoNode ? parseDecimal(getValue(impuestoNode, ['Tarifa'], '0')) / 100 : 0;
+            const taxRate = impuestoNode ? roundTo4Decimals(parseDecimal(getValue(impuestoNode, ['Tarifa'], '0')) / 100) : 0;
             
             let unitPrice;
             if (unitPriceFromXml > 0) {
                 unitPrice = unitPriceFromXml;
             } else {
-                unitPrice = cantidad > 0 ? subTotal / cantidad : 0;
+                unitPrice = cantidad > 0 ? roundTo4Decimals(subTotal / cantidad) : 0;
             }
             
-            const unitPriceWithTax = cantidad > 0 ? montoTotalLinea / cantidad : 0;
+            const unitPriceWithTax = cantidad > 0 ? roundTo4Decimals(montoTotalLinea / cantidad) : 0;
 
             const rawDescription = getValue(linea, ['Detalle']);
             const cleanDescription = rawDescription.split(';')[0].trim();
@@ -139,9 +143,9 @@ async function parseInvoice(xmlContent: string, fileIndex: number): Promise<{ da
 
     const resumenFactura = getValue(rootNode, ['ResumenFactura'], {});
     const summary = {
-        totalVentaNeta: parseDecimal(getValue(resumenFactura, ['TotalVentaNeta'], '0')),
-        totalImpuesto: parseDecimal(getValue(resumenFactura, ['TotalImpuesto'], '0')),
-        totalComprobante: parseDecimal(getValue(resumenFactura, ['TotalComprobante'], '0')),
+        totalVentaNeta: roundTo4Decimals(parseDecimal(getValue(resumenFactura, ['TotalVentaNeta'], '0'))),
+        totalImpuesto: roundTo4Decimals(parseDecimal(getValue(resumenFactura, ['TotalImpuesto'], '0'))),
+        totalComprobante: roundTo4Decimals(parseDecimal(getValue(resumenFactura, ['TotalComprobante'], '0'))),
     };
 
     return { 

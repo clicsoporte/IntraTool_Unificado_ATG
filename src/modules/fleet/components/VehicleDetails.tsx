@@ -15,7 +15,7 @@ import { Progress } from '@/components/ui/progress';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { saveFuelLogAction, saveMaintenanceLogAction, savePermitAction, deleteVehicleAction, deletePermitAction, savePreventativePlanAction, deletePreventativePlanAction, deleteFuelLogAction, deleteMaintenanceLogAction, updateVehicleRtvAction, getTelegramBotLogsAction } from '../lib/actions';
+import { saveFuelLogAction, saveMaintenanceLogAction, savePermitAction, deleteVehicleAction, deletePermitAction, savePreventativePlanAction, deletePreventativePlanAction, deleteFuelLogAction, deleteMaintenanceLogAction, updateVehicleRtvAction, getTelegramBotLogsAction, getDeletedLogsAction, restoreDeletedLogAction } from '../lib/actions';
 import { useRouter } from 'next/navigation';
 import { useToast } from '@/modules/core/hooks/use-toast';
 import Image from 'next/image';
@@ -26,7 +26,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
-import { useRef, useMemo } from 'react';
+import { useRef, useMemo, useCallback } from 'react';
 import { 
   Dialog, 
   DialogContent, 
@@ -102,6 +102,44 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
     const [permitLoading, setPermitLoading] = useState(false);
     const [preventativeLoading, setPreventativeLoading] = useState(false);
     
+    // Soft-Delete Papelera state
+    const [deletedLogs, setDeletedLogs] = useState<any[]>([]);
+    const [showDeleted, setShowDeleted] = useState(false);
+    const [deletedLoading, setDeletedLoading] = useState(false);
+
+    const loadDeletedLogs = useCallback(async () => {
+        try {
+            const logs = await getDeletedLogsAction(vehicle.id);
+            setDeletedLogs(logs);
+        } catch (e) {
+            console.error("Error loading deleted logs", e);
+        }
+    }, [vehicle.id]);
+
+    useEffect(() => {
+        setDeletedLoading(true);
+        loadDeletedLogs().finally(() => setDeletedLoading(false));
+    }, [loadDeletedLogs]);
+
+    async function handleRestoreLog(archiveId: number) {
+        if (!confirm("¿Está seguro de que desea restaurar este registro? Se incorporará nuevamente a las métricas del vehículo.")) return;
+        setLoading(true);
+        try {
+            const res = await restoreDeletedLogAction(archiveId, vehicle.id);
+            if (res.success) {
+                toast({ title: "Éxito", description: "Registro restaurado y métricas actualizadas." });
+                await loadDeletedLogs();
+                router.refresh();
+            } else {
+                throw new Error(res.error);
+            }
+        } catch (error: any) {
+            toast({ variant: "destructive", title: "Error", description: error.message || "No se pudo restaurar el registro." });
+        } finally {
+            setLoading(false);
+        }
+    }
+    
     // Submitting refs to synchronously block double/triple-click submissions
     const isFuelSubmitting = useRef(false);
     const isMaintSubmitting = useRef(false);
@@ -150,15 +188,79 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
         return botLogs.slice(startIndex, startIndex + ITEMS_PER_PAGE);
     }, [botLogs, botPage]);
 
+    const displayedFuelLogs = useMemo(() => {
+        if (!showDeleted) return fuelLogs;
+        const activeWithFlag = fuelLogs.map(l => ({ ...l, isDeleted: false }));
+        const deletedFuel = deletedLogs
+            .filter(l => l.logType === 'fuel')
+            .map(l => ({
+                ...JSON.parse(l.payload),
+                isDeleted: true,
+                archiveId: l.id,
+                deletedAt: l.deletedAt,
+                deletedBy: l.deletedBy
+            }));
+        const merged = [...activeWithFlag, ...deletedFuel];
+        return merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    }, [fuelLogs, deletedLogs, showDeleted]);
+
+    const displayedMaintLogs = useMemo(() => {
+        if (!showDeleted) return maintenanceLogs;
+        const activeWithFlag = maintenanceLogs.map(l => ({ ...l, isDeleted: false }));
+        const deletedMaint = deletedLogs
+            .filter(l => l.logType === 'maintenance')
+            .map(l => ({
+                ...JSON.parse(l.payload),
+                isDeleted: true,
+                archiveId: l.id,
+                deletedAt: l.deletedAt,
+                deletedBy: l.deletedBy
+            }));
+        const merged = [...activeWithFlag, ...deletedMaint];
+        return merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    }, [maintenanceLogs, deletedLogs, showDeleted]);
+
+    const displayedPermits = useMemo(() => {
+        if (!showDeleted) return permits;
+        const activeWithFlag = permits.map(l => ({ ...l, isDeleted: false }));
+        const deletedPermits = deletedLogs
+            .filter(l => l.logType === 'permit')
+            .map(l => ({
+                ...JSON.parse(l.payload),
+                isDeleted: true,
+                archiveId: l.id,
+                deletedAt: l.deletedAt,
+                deletedBy: l.deletedBy
+            }));
+        const merged = [...activeWithFlag, ...deletedPermits];
+        return merged.sort((a, b) => new Date(b.expirationDate).getTime() - new Date(a.expirationDate).getTime());
+    }, [permits, deletedLogs, showDeleted]);
+
+    const displayedPreventativePlans = useMemo(() => {
+        if (!showDeleted) return preventativePlans;
+        const activeWithFlag = preventativePlans.map(l => ({ ...l, isDeleted: false }));
+        const deletedPlans = deletedLogs
+            .filter(l => l.logType === 'preventative_plan')
+            .map(l => ({
+                ...JSON.parse(l.payload),
+                isDeleted: true,
+                archiveId: l.id,
+                deletedAt: l.deletedAt,
+                deletedBy: l.deletedBy
+            }));
+        const merged = [...activeWithFlag, ...deletedPlans];
+        return merged;
+    }, [preventativePlans, deletedLogs, showDeleted]);
+
     const paginatedFuelLogs = useMemo(() => {
         const startIndex = (fuelPage - 1) * ITEMS_PER_PAGE;
-        return fuelLogs.slice(startIndex, startIndex + ITEMS_PER_PAGE);
-    }, [fuelLogs, fuelPage]);
+        return displayedFuelLogs.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+    }, [displayedFuelLogs, fuelPage]);
 
     const paginatedMaintLogs = useMemo(() => {
         const startIndex = (maintPage - 1) * ITEMS_PER_PAGE;
-        return maintenanceLogs.slice(startIndex, startIndex + ITEMS_PER_PAGE);
-    }, [maintenanceLogs, maintPage]);
+        return displayedMaintLogs.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+    }, [displayedMaintLogs, maintPage]);
     
     // Find the default fuel matching the vehicle's fuelType string
     const defaultFuel = catalogs.settings?.find((f:any) => f.category === 'fuel_type' && f.value === vehicle?.fuelType);
@@ -261,11 +363,15 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
         if (isPermitSubmitting.current) return;
         isPermitSubmitting.current = true;
         setPermitLoading(true);
+        const amountStr = formData.get('amount') as string;
+        const amount = amountStr ? parseFloat(amountStr) : null;
+
         const data = {
             vehicleId: vehicle.id,
             type: formData.get('type'),
             expirationDate: formData.get('expirationDate'),
-            documentUrl: ''
+            documentUrl: '',
+            amount: amount !== null && !isNaN(amount) ? amount : null
         };
 
         try {
@@ -286,6 +392,7 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
         try {
             await deletePermitAction(permitId, vehicle.id);
             toast({ title: "Éxito", description: "Permiso eliminado correctamente." });
+            await loadDeletedLogs();
         } catch (error) {
             toast({ variant: "destructive", title: "Error", description: "No se pudo eliminar el permiso." });
         } finally {
@@ -314,6 +421,7 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
         try {
             await deleteFuelLogAction(logId, vehicle.id);
             toast({ title: "Éxito", description: "Repostaje eliminado correctamente." });
+            await loadDeletedLogs();
         } catch (error) {
             toast({ variant: "destructive", title: "Error", description: "No se pudo eliminar el repostaje." });
         } finally {
@@ -327,6 +435,7 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
         try {
             await deleteMaintenanceLogAction(logId, vehicle.id);
             toast({ title: "Éxito", description: "Mantenimiento eliminado correctamente." });
+            await loadDeletedLogs();
         } catch (error) {
             toast({ variant: "destructive", title: "Error", description: "No se pudo eliminar el mantenimiento." });
         } finally {
@@ -365,6 +474,7 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
          try {
              await deletePreventativePlanAction(planId, vehicle.id);
              toast({ title: "Éxito", description: "Plan preventivo eliminado correctamente." });
+             await loadDeletedLogs();
              router.refresh();
          } catch (error) {
              toast({ variant: "destructive", title: "Error", description: "No se pudo eliminar el plan." });
@@ -1327,8 +1437,8 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
             </div>
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
                 {/* Desktop Tabs Header List */}
-                <div className="hidden md:block overflow-x-auto pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-thumb]:bg-slate-200 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-transparent">
-                    <TabsList className="inline-flex w-max min-w-full justify-start gap-1 p-1 bg-slate-100/80 backdrop-blur rounded-xl border border-slate-200/50">
+                <div className="hidden md:flex justify-between items-center pb-2 -mx-4 px-4 sm:mx-0 sm:px-0 gap-4">
+                    <TabsList className="inline-flex w-max justify-start gap-1 p-1 bg-slate-100/80 backdrop-blur rounded-xl border border-slate-200/50">
                         <TabsTrigger value="history" className="px-4 py-2 text-xs md:text-sm font-semibold rounded-lg transition-all duration-200 data-[state=active]:bg-white data-[state=active]:shadow-sm">Historial Log</TabsTrigger>
                         <TabsTrigger value="tech" className="px-4 py-2 text-xs md:text-sm font-semibold rounded-lg transition-all duration-200 data-[state=active]:bg-white data-[state=active]:shadow-sm">Ficha Técnica</TabsTrigger>
                         <TabsTrigger value="fuel" className="px-4 py-2 text-xs md:text-sm font-semibold rounded-lg transition-all duration-200 data-[state=active]:bg-white data-[state=active]:shadow-sm">Repostaje</TabsTrigger>
@@ -1336,6 +1446,43 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                         <TabsTrigger value="permits" className="px-4 py-2 text-xs md:text-sm font-semibold rounded-lg transition-all duration-200 data-[state=active]:bg-white data-[state=active]:shadow-sm">Permisos</TabsTrigger>
                         <TabsTrigger value="preventative" className="px-4 py-2 text-xs md:text-sm font-semibold rounded-lg transition-all duration-200 data-[state=active]:bg-white data-[state=active]:shadow-sm">Planes Preventivos</TabsTrigger>
                     </TabsList>
+                    
+                    {/* Soft-Delete Toggle Checkbox */}
+                    <div className="flex items-center gap-2 border border-slate-200 bg-slate-50/50 backdrop-blur px-3 py-1.5 rounded-xl text-xs font-bold shadow-sm h-10 shrink-0">
+                        <input
+                            type="checkbox"
+                            id="toggle-deleted"
+                            checked={showDeleted}
+                            onChange={(e) => setShowDeleted(e.target.checked)}
+                            className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-slate-300 cursor-pointer"
+                        />
+                        <label htmlFor="toggle-deleted" className="text-slate-700 cursor-pointer flex items-center gap-1.5">
+                            Mostrar eliminados
+                            {deletedLogs.length > 0 && (
+                                <Badge className="bg-rose-500 hover:bg-rose-600 text-white font-extrabold text-[9px] px-1.5 py-0 h-4 border-none animate-pulse">
+                                    {deletedLogs.length}
+                                </Badge>
+                            )}
+                        </label>
+                    </div>
+                </div>
+
+                {/* Mobile Show Deleted Toggle */}
+                <div className="flex md:hidden items-center justify-between border border-slate-200 bg-slate-50/50 p-3 rounded-2xl text-xs font-bold shadow-sm mb-3">
+                    <span className="text-slate-700 flex items-center gap-1.5">
+                        Mostrar elementos eliminados
+                        {deletedLogs.length > 0 && (
+                            <Badge className="bg-rose-500 text-white font-extrabold text-[9px] px-1.5 py-0 h-4 border-none">
+                                {deletedLogs.length}
+                            </Badge>
+                        )}
+                    </span>
+                    <input
+                        type="checkbox"
+                        checked={showDeleted}
+                        onChange={(e) => setShowDeleted(e.target.checked)}
+                        className="w-5 h-5 rounded text-blue-600 focus:ring-blue-500 border-slate-300 cursor-pointer"
+                    />
                 </div>
 
                 {/* Mobile Vertical Menu (Stacked Cards) */}
@@ -1512,7 +1659,11 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                                     {paginatedFuelLogs.map((log) => {
                                         const parsed = parseLogPhoto(log.notes);
                                         return (
-                                            <div key={log.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg bg-muted/40 border gap-3">
+                                            <div key={log.id || log.archiveId} className={`flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg border gap-3 transition-all ${
+                                                log.isDeleted 
+                                                    ? 'bg-rose-50/60 dark:bg-rose-950/10 border-rose-200 text-rose-950 border-l-4 border-l-rose-500 animate-in fade-in duration-300' 
+                                                    : 'bg-muted/40 border-slate-200'
+                                            }`}>
                                                 <div className="space-y-1 flex-1">
                                                     <div className="font-bold flex items-center gap-2 text-sm sm:text-base">
                                                         {log.liters.toFixed(2)} L 
@@ -1520,7 +1671,13 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                                                     </div>
                                                     <div className="text-[10px] sm:text-xs text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1">
                                                          <span className="flex items-center gap-1"><Calendar className="w-3 h-3" /> {new Date(log.date).toLocaleDateString()}</span>
-                                                         <span className="text-[9px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 py-0.5 rounded border border-slate-200/50">Registrado por: {log.createdBy || 'Sistema'}</span>
+                                                         {log.isDeleted ? (
+                                                             <Badge className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-extrabold text-[9px] px-1.5 py-0.5 border-none">
+                                                                 🗑️ Eliminado por: {log.deletedBy} el {new Date(log.deletedAt).toLocaleDateString()}
+                                                             </Badge>
+                                                         ) : (
+                                                             <span className="text-[9px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 py-0.5 rounded border border-slate-200/50">Registrado por: {log.createdBy || 'Sistema'}</span>
+                                                         )}
                                                      </div>
                                                     {parsed.cleanText && (
                                                         <div className="text-[10px] sm:text-xs text-muted-foreground bg-slate-100/60 dark:bg-slate-800/40 px-2 py-1 rounded border border-dashed mt-1 max-w-md">
@@ -1543,26 +1700,41 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                                                         <div className="text-sm font-bold text-emerald-700">CRC {log.cost?.toLocaleString()}</div>
                                                         <div className="text-[10px] text-muted-foreground">ID: {log.driverId || 'N/A'}</div>
                                                     </div>
-                                                    {hasPermission('fleet:fuel:delete') && (
+                                                    {log.isDeleted ? (
                                                         <Button 
-                                                            variant="ghost" 
-                                                            size="icon" 
-                                                            className="h-8 w-8 text-muted-foreground hover:text-red-600 rounded-full shrink-0 transition-colors" 
-                                                            onClick={() => handleDeleteFuelLog(log.id)}
+                                                            variant="outline" 
+                                                            size="sm" 
+                                                            className="h-8 text-xs font-black text-emerald-600 border-emerald-250 hover:bg-emerald-50 bg-emerald-50/10 flex items-center gap-1 shrink-0 rounded-lg shadow-sm"
+                                                            onClick={() => handleRestoreLog(log.archiveId)}
                                                             disabled={loading}
                                                         >
-                                                            <Trash2 className="h-4 w-4" />
+                                                            <Clock className="w-3.5 h-3.5 rotate-180" />
+                                                            Restaurar
                                                         </Button>
+                                                    ) : (
+                                                        <>
+                                                            {hasPermission('fleet:fuel:delete') && (
+                                                                <Button 
+                                                                    variant="ghost" 
+                                                                    size="icon" 
+                                                                    className="h-8 w-8 text-muted-foreground hover:text-red-650 rounded-full shrink-0 transition-colors" 
+                                                                    onClick={() => handleDeleteFuelLog(log.id)}
+                                                                    disabled={loading}
+                                                                >
+                                                                    <Trash2 className="h-4 w-4" />
+                                                                </Button>
+                                                            )}
+                                                            <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" onClick={() => exportFuelLogPDF(log)}>
+                                                                <FileText className="h-4 w-4 text-emerald-600" />
+                                                            </Button>
+                                                        </>
                                                     )}
-                                                    <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" onClick={() => exportFuelLogPDF(log)}>
-                                                        <FileText className="h-4 w-4 text-emerald-600" />
-                                                    </Button>
                                                 </div>
                                             </div>
                                         );
                                     })}
-                                    {fuelLogs.length === 0 && <p className="text-center py-10 text-muted-foreground italic">No hay registros de combustible.</p>}
-                                    {fuelLogs.length > ITEMS_PER_PAGE && (
+                                    {displayedFuelLogs.length === 0 && <p className="text-center py-10 text-muted-foreground italic">No hay registros de combustible.</p>}
+                                    {displayedFuelLogs.length > ITEMS_PER_PAGE && (
                                          <div className="flex items-center justify-between pt-4 border-t border-dashed">
                                              <Button 
                                                  variant="outline" 
@@ -1574,13 +1746,13 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                                                  Anterior
                                              </Button>
                                              <span className="text-xs text-muted-foreground font-semibold">
-                                                 Pág. {fuelPage} de {Math.ceil(fuelLogs.length / ITEMS_PER_PAGE)}
+                                                 Pág. {fuelPage} de {Math.ceil(displayedFuelLogs.length / ITEMS_PER_PAGE)}
                                              </span>
                                              <Button 
                                                  variant="outline" 
                                                  size="sm" 
-                                                 onClick={() => setFuelPage(prev => Math.min(Math.ceil(fuelLogs.length / ITEMS_PER_PAGE), prev + 1))}
-                                                 disabled={fuelPage === Math.ceil(fuelLogs.length / ITEMS_PER_PAGE)}
+                                                 onClick={() => setFuelPage(prev => Math.min(Math.ceil(displayedFuelLogs.length / ITEMS_PER_PAGE), prev + 1))}
+                                                 disabled={fuelPage === Math.ceil(displayedFuelLogs.length / ITEMS_PER_PAGE)}
                                                  className="text-xs h-8"
                                              >
                                                  Siguiente
@@ -1599,16 +1771,26 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                             </CardHeader>
                             <CardContent>
                                 <div className="space-y-4">
-                                    {paginatedMaintLogs.map((log) => {
+                                     {paginatedMaintLogs.map((log) => {
                                         const parsed = parseLogPhoto(log.description);
                                         return (
-                                            <div key={log.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg bg-muted/40 border border-l-4 border-l-blue-400 gap-3">
+                                            <div key={log.id || log.archiveId} className={`flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg border gap-3 transition-all ${
+                                                log.isDeleted 
+                                                    ? 'bg-rose-50/60 dark:bg-rose-950/10 border-rose-200 text-rose-950 border-l-4 border-l-rose-500 animate-in fade-in duration-300' 
+                                                    : 'bg-muted/40 border border-l-4 border-l-blue-400 border-slate-200'
+                                            }`}>
                                                 <div className="space-y-1 flex-1">
                                                     <div className="font-bold text-blue-800 text-sm sm:text-base">{log.type}</div>
                                                     {parsed.cleanText && <div className="text-[10px] sm:text-xs font-medium line-clamp-2">{parsed.cleanText}</div>}
                                                     <div className="text-[9px] sm:text-[10px] text-muted-foreground flex flex-wrap items-center gap-x-2 gap-y-1">
                                                          <span>{new Date(log.date).toLocaleDateString()} • {log.mileage.toLocaleString()} {vehicle.odometerUnit || 'km'}</span>
-                                                         <span className="text-[9px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 py-0.5 rounded border border-slate-200/50">Registrado por: {log.createdBy || 'Sistema'}</span>
+                                                         {log.isDeleted ? (
+                                                             <Badge className="bg-rose-100 hover:bg-rose-200 text-rose-700 font-extrabold text-[9px] px-1.5 py-0.5 border-none">
+                                                                 🗑️ Eliminado por: {log.deletedBy} el {new Date(log.deletedAt).toLocaleDateString()}
+                                                             </Badge>
+                                                         ) : (
+                                                             <span className="text-[9px] bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-1.5 py-0.5 rounded border border-slate-200/50">Registrado por: {log.createdBy || 'Sistema'}</span>
+                                                         )}
                                                      </div>
                                                     {parsed.photoFilename && (
                                                         <Button 
@@ -1626,26 +1808,41 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                                                         <div className="text-sm font-bold">CRC {log.cost?.toLocaleString()}</div>
                                                         <div className="text-[10px] text-muted-foreground truncate max-w-[100px]">{log.performedBy}</div>
                                                     </div>
-                                                    {hasPermission('fleet:maintenance:delete') && (
+                                                    {log.isDeleted ? (
                                                         <Button 
-                                                            variant="ghost" 
-                                                            size="icon" 
-                                                            className="h-8 w-8 text-muted-foreground hover:text-red-600 rounded-full shrink-0 transition-colors" 
-                                                            onClick={() => handleDeleteMaintenanceLog(log.id)}
+                                                            variant="outline" 
+                                                            size="sm" 
+                                                            className="h-8 text-xs font-black text-emerald-600 border-emerald-250 hover:bg-emerald-50 bg-emerald-50/10 flex items-center gap-1 shrink-0 rounded-lg shadow-sm"
+                                                            onClick={() => handleRestoreLog(log.archiveId)}
                                                             disabled={loading}
                                                         >
-                                                            <Trash2 className="h-4 w-4" />
+                                                            <Clock className="w-3.5 h-3.5 rotate-180" />
+                                                            Restaurar
                                                         </Button>
+                                                    ) : (
+                                                        <>
+                                                            {hasPermission('fleet:maintenance:delete') && (
+                                                                <Button 
+                                                                    variant="ghost" 
+                                                                    size="icon" 
+                                                                    className="h-8 w-8 text-muted-foreground hover:text-red-650 rounded-full shrink-0 transition-colors" 
+                                                                    onClick={() => handleDeleteMaintenanceLog(log.id)}
+                                                                    disabled={loading}
+                                                                >
+                                                                    <Trash2 className="h-4 w-4" />
+                                                                </Button>
+                                                            )}
+                                                            <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" onClick={() => exportMaintenanceLogPDF(log)}>
+                                                                <FileText className="h-4 w-4 text-blue-600" />
+                                                            </Button>
+                                                        </>
                                                     )}
-                                                    <Button variant="outline" size="icon" className="h-8 w-8 shrink-0" onClick={() => exportMaintenanceLogPDF(log)}>
-                                                        <FileText className="h-4 w-4 text-blue-600" />
-                                                    </Button>
                                                 </div>
                                             </div>
                                         );
                                     })}
-                                    {maintenanceLogs.length === 0 && <p className="text-center py-10 text-muted-foreground italic">No hay registros de mantenimiento.</p>}
-                                    {maintenanceLogs.length > ITEMS_PER_PAGE && (
+                                    {displayedMaintLogs.length === 0 && <p className="text-center py-10 text-muted-foreground italic">No hay registros de mantenimiento.</p>}
+                                    {displayedMaintLogs.length > ITEMS_PER_PAGE && (
                                          <div className="flex items-center justify-between pt-4 border-t border-dashed">
                                              <Button 
                                                  variant="outline" 
@@ -1657,13 +1854,13 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                                                  Anterior
                                              </Button>
                                              <span className="text-xs text-muted-foreground font-semibold">
-                                                 Pág. {maintPage} de {Math.ceil(maintenanceLogs.length / ITEMS_PER_PAGE)}
+                                                 Pág. {maintPage} de {Math.ceil(displayedMaintLogs.length / ITEMS_PER_PAGE)}
                                              </span>
                                              <Button 
                                                  variant="outline" 
                                                  size="sm" 
-                                                 onClick={() => setMaintPage(prev => Math.min(Math.ceil(maintenanceLogs.length / ITEMS_PER_PAGE), prev + 1))}
-                                                 disabled={maintPage === Math.ceil(maintenanceLogs.length / ITEMS_PER_PAGE)}
+                                                 onClick={() => setMaintPage(prev => Math.min(Math.ceil(displayedMaintLogs.length / ITEMS_PER_PAGE), prev + 1))}
+                                                 disabled={maintPage === Math.ceil(displayedMaintLogs.length / ITEMS_PER_PAGE)}
                                                  className="text-xs h-8"
                                              >
                                                  Siguiente
@@ -1681,7 +1878,7 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                                     <MessageSquare className="w-5 h-5" /> Historial de Registros vía Bot Telegram
                                 </CardTitle>
                                 <CardDescription className="text-xs">
-                                    Registros permanentes realizados por los choferes desde el asistente de Telegram.
+                                    Registros permanentes realizados por los usuarios desde el asistente de Telegram.
                                 </CardDescription>
                             </CardHeader>
                             <CardContent>
@@ -1711,7 +1908,7 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                                                     <div className="space-y-1 flex-1">
                                                         <div className="flex items-center gap-2 flex-wrap">
                                                             <Badge variant="outline" className={`${actionColor} font-bold rounded-lg px-2 py-0.5 text-xs`}>
-                                                                {actionEmoji} {log.actionType === 'fuel' ? 'Repostaje' : log.actionType === 'maintenance' ? 'Mantenimiento' : 'Renovación RTV'}
+                                                                {actionEmoji} {log.actionType === 'fuel' ? 'Repostaje' : log.actionType === 'maintenance' ? 'Mantenimiento' : log.actionType === 'rtv' ? 'Renovación RTV' : 'Otro'}
                                                             </Badge>
                                                             <span className="text-[10px] text-muted-foreground font-medium flex items-center gap-1">
                                                                 <Calendar className="w-3.5 h-3.5" />
@@ -1725,7 +1922,7 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                                                     <div className="flex items-center justify-between sm:justify-end gap-3 border-t sm:border-t-0 pt-2 sm:pt-0 shrink-0">
                                                         <div className="text-right">
                                                             <span className="text-[10px] bg-sky-50 text-sky-800 border border-sky-100 px-2 py-0.5 rounded-lg font-bold">
-                                                                Chofer: {log.driverName}
+                                                                Usuario: {log.driverName}
                                                             </span>
                                                         </div>
                                                     </div>
@@ -1984,17 +2181,20 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                             </CardContent>
                         </Card>
                         
-                        {permits.map(permit => {
+                        {displayedPermits.map(permit => {
                             const expDate = new Date(permit.expirationDate);
                             const isExpired = expDate < new Date();
                             const daysDiff = Math.floor((expDate.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
                             
                             let statusText = "Vigente";
                             let statusClass = "text-green-600 font-semibold bg-green-50 border-green-200";
-                            let borderClass = "border-l-green-500";
+                            let borderClass = permit.isDeleted ? "border-l-rose-500" : "border-l-green-500";
                             let showWarningIcon = false;
 
-                            if (isExpired) {
+                            if (permit.isDeleted) {
+                                statusText = `Eliminado por ${permit.deletedBy}`;
+                                statusClass = "text-rose-600 font-semibold bg-rose-50 border-rose-200";
+                            } else if (isExpired) {
                                 statusText = `Vencido hace ${Math.abs(daysDiff)} días`;
                                 statusClass = "text-red-600 font-semibold bg-red-50 border-red-200";
                                 borderClass = "border-l-red-500";
@@ -2007,24 +2207,47 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                             }
 
                             return (
-                                <Card key={permit.id} className={`border-l-4 ${borderClass} relative hover:shadow-md transition-all duration-200`}>
-                                    <Button 
-                                        variant="ghost" 
-                                        size="icon" 
-                                        className="h-8 w-8 text-muted-foreground hover:text-red-600 absolute top-2 right-2 rounded-full transition-colors"
-                                        onClick={() => handleDeletePermit(permit.id)}
-                                        disabled={loading}
-                                    >
-                                        <Trash2 className="w-4 h-4" />
-                                    </Button>
+                                <Card key={permit.id || permit.archiveId} className={`border-l-4 ${borderClass} relative hover:shadow-md transition-all duration-200 ${
+                                    permit.isDeleted ? 'bg-rose-50/60 dark:bg-rose-950/10 border-rose-200 animate-in fade-in duration-300' : ''
+                                }`}>
+                                    {permit.isDeleted ? (
+                                        <Button 
+                                            variant="outline" 
+                                            size="sm" 
+                                            className="h-8 text-xs font-black text-emerald-600 border-emerald-200 hover:bg-emerald-50 bg-emerald-50/10 flex items-center gap-1 absolute top-2 right-2 rounded-lg shadow-sm"
+                                            onClick={() => handleRestoreLog(permit.archiveId)}
+                                            disabled={loading}
+                                        >
+                                            <Clock className="w-3.5 h-3.5 rotate-180" />
+                                            Restaurar
+                                        </Button>
+                                    ) : (
+                                        <Button 
+                                            variant="ghost" 
+                                            size="icon" 
+                                            className="h-8 w-8 text-muted-foreground hover:text-red-650 absolute top-2 right-2 rounded-full transition-colors"
+                                            onClick={() => handleDeletePermit(permit.id)}
+                                            disabled={loading}
+                                        >
+                                            <Trash2 className="w-4 h-4" />
+                                        </Button>
+                                    )}
                                     <CardHeader className="pb-2 pr-10">
                                         <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">{permit.type}</CardTitle>
                                     </CardHeader>
                                     <CardContent>
                                         <div className="text-2xl font-bold">{expDate.toLocaleDateString()}</div>
+                                        {permit.amount !== undefined && permit.amount !== null && (
+                                            <div className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 mt-1.5 flex items-center gap-1">
+                                                <span>💵 Costo:</span>
+                                                <span className="font-bold">CRC {Number(permit.amount).toLocaleString('es-CR')}</span>
+                                            </div>
+                                        )}
                                         <div className="mt-2">
                                             <Badge variant="outline" className={`text-xs px-2.5 py-0.5 rounded-full ${statusClass}`}>
-                                                {showWarningIcon ? (
+                                                {permit.isDeleted ? (
+                                                    <Trash2 className="w-3 h-3 mr-1" />
+                                                ) : showWarningIcon ? (
                                                     <AlertCircle className="w-3 h-3 mr-1" />
                                                 ) : (
                                                     <CheckCircle className="w-3 h-3 mr-1" />
@@ -2071,6 +2294,18 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                                         <Label>Fecha de Vencimiento</Label>
                                         <Input type="date" name="expirationDate" required />
                                     </div>
+                                    <div className="space-y-2">
+                                        <Label htmlFor="permitAmount">Costo / Valor (Opcional)</Label>
+                                        <Input 
+                                            type="number" 
+                                            id="permitAmount"
+                                            name="amount" 
+                                            placeholder="ej: 15000"
+                                            step="any"
+                                            min="0"
+                                            className="text-xs h-9"
+                                        />
+                                    </div>
                                     <div className="flex justify-end gap-2 pt-4">
                                         <Button type="button" variant="ghost" onClick={() => setPermitDialogOpen(false)}>Cancelar</Button>
                                         <Button type="submit" disabled={permitLoading}>
@@ -2091,7 +2326,7 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                 {/* Preventative Plans Tab */}
                 <TabsContent value="preventative" className="pt-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {preventativePlans.map(plan => {
+                        {displayedPreventativePlans.map(plan => {
                             const currentVal = (plan.intervalUnit === 'hours' && vehicle.odometerUnit !== 'hr') ? (vehicle.currentHours || 0) : vehicle.currentMileage;
                             const diff = currentVal - plan.lastPerformedValue;
                             const wearPercent = Math.min(100, Math.max(0, (diff / plan.intervalValue) * 100));
@@ -2101,9 +2336,13 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                             let statusText = "Vigente";
                             let statusClass = "text-green-600 bg-green-50 border-green-200";
                             let progressColor = "bg-green-500";
-                            let borderClass = "border-l-green-500";
+                            let borderClass = plan.isDeleted ? "border-l-rose-500" : "border-l-green-500";
 
-                            if (isExpired) {
+                            if (plan.isDeleted) {
+                                statusText = `Eliminado por ${plan.deletedBy}`;
+                                statusClass = "text-rose-600 bg-rose-50 border-rose-200";
+                                progressColor = "bg-rose-500";
+                            } else if (isExpired) {
                                 statusText = "Vencido";
                                 statusClass = "text-red-600 bg-red-50 border-red-200 animate-pulse";
                                 progressColor = "bg-red-500 animate-pulse";
@@ -2116,16 +2355,31 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                             }
 
                             return (
-                                <Card key={plan.id} className={`border-l-4 ${borderClass} relative hover:shadow-md transition-all duration-200`}>
-                                    <Button 
-                                        variant="ghost" 
-                                        size="icon" 
-                                        className="h-8 w-8 text-muted-foreground hover:text-red-600 absolute top-2 right-2 rounded-full transition-colors"
-                                        onClick={() => handleDeletePreventativePlan(plan.id)}
-                                        disabled={loading}
-                                    >
-                                        <Trash2 className="w-4 h-4" />
-                                    </Button>
+                                <Card key={plan.id || plan.archiveId} className={`border-l-4 ${borderClass} relative hover:shadow-md transition-all duration-200 ${
+                                    plan.isDeleted ? 'bg-rose-50/60 dark:bg-rose-950/10 border-rose-200 animate-in fade-in duration-300' : ''
+                                }`}>
+                                    {plan.isDeleted ? (
+                                        <Button 
+                                            variant="outline" 
+                                            size="sm" 
+                                            className="h-8 text-xs font-black text-emerald-600 border-emerald-250 hover:bg-emerald-50 bg-emerald-50/10 flex items-center gap-1 absolute top-2 right-2 rounded-lg shadow-sm"
+                                            onClick={() => handleRestoreLog(plan.archiveId)}
+                                            disabled={loading}
+                                        >
+                                            <Clock className="w-3.5 h-3.5 rotate-180" />
+                                            Restaurar
+                                        </Button>
+                                    ) : (
+                                        <Button 
+                                            variant="ghost" 
+                                            size="icon" 
+                                            className="h-8 w-8 text-muted-foreground hover:text-red-650 absolute top-2 right-2 rounded-full transition-colors"
+                                            onClick={() => handleDeletePreventativePlan(plan.id)}
+                                            disabled={loading}
+                                        >
+                                            <Trash2 className="w-4 h-4" />
+                                        </Button>
+                                    )}
                                     <CardHeader className="pb-2 pr-10">
                                         <CardTitle className="text-sm font-bold uppercase tracking-wider text-muted-foreground">{plan.maintenanceType}</CardTitle>
                                         <CardDescription className="text-xs">Intervalo: cada {plan.intervalValue.toLocaleString()} {plan.intervalUnit}</CardDescription>
@@ -2159,17 +2413,19 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                                             <Badge variant="outline" className={`text-xs px-2.5 py-0.5 rounded-full ${statusClass}`}>
                                                 {statusText}
                                             </Badge>
-                                            <Button 
-                                                variant="outline" 
-                                                size="sm" 
-                                                onClick={() => {
-                                                    setMaintType(plan.maintenanceType);
-                                                    setActiveTab('maintenance');
-                                                }}
-                                                className="text-xs h-7 gap-1 border-blue-200 text-blue-700 hover:bg-blue-50"
-                                            >
-                                                <Wrench className="w-3.5 h-3.5" /> Registrar Servicio
-                                            </Button>
+                                            {!plan.isDeleted && (
+                                                <Button 
+                                                    variant="outline" 
+                                                    size="sm" 
+                                                    onClick={() => {
+                                                        setMaintType(plan.maintenanceType);
+                                                        setActiveTab('maintenance');
+                                                    }}
+                                                    className="text-xs h-7 gap-1 border-blue-200 text-blue-700 hover:bg-blue-50"
+                                                >
+                                                    <Wrench className="w-3.5 h-3.5" /> Registrar Servicio
+                                                </Button>
+                                            )}
                                         </div>
                                     </CardContent>
                                 </Card>

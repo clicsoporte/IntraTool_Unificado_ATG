@@ -1,6 +1,7 @@
 import { getAllVehiclesAction, getFleetLogsReportAction } from "@/modules/fleet/lib/actions";
 import FleetReportsClient from "@/modules/fleet/components/FleetReportsClient";
 import { authorizeAction } from "@/modules/core/lib/auth-guard";
+import { getCurrentUser, getUserPreferenceAction } from "@/modules/core/lib/auth";
 import { FileBarChart, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
@@ -10,13 +11,22 @@ export default async function FleetReportsPage() {
     
     const vehicles = await getAllVehiclesAction();
     const fuelLogs = await getFleetLogsReportAction();
+    const user = await getCurrentUser();
+    
+    let defaultRange = 'current_month';
+    if (user) {
+        const pref = await getUserPreferenceAction(user.id, 'fleet_reports_default_range');
+        if (pref !== null) {
+            defaultRange = pref;
+        }
+    }
 
     return (
         <main className="flex-1 p-4 md:p-6 lg:p-8">
             <div className="max-w-7xl mx-auto space-y-6">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div className="flex items-center gap-4">
-                        <Link href="/dashboard/fleet">
+                        <Link href="/dashboard/fleet" prefetch={false}>
                             <Button variant="ghost" size="icon">
                                 <ArrowLeft className="w-5 h-5" />
                             </Button>
@@ -31,7 +41,12 @@ export default async function FleetReportsPage() {
                     </div>
                 </div>
 
-                <FleetReportsClient vehicles={vehicles} fuelLogs={fuelLogs} />
+                <FleetReportsClient 
+                    vehicles={vehicles} 
+                    fuelLogs={fuelLogs} 
+                    defaultRange={defaultRange}
+                    currentUser={user}
+                />
             </div>
         </main>
     );

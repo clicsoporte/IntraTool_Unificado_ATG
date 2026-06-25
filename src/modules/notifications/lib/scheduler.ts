@@ -17,10 +17,14 @@ export async function runSystemAudits(force: boolean = false, targetTaskId?: str
         for (const task of enabledTasks) {
             const isTarget = targetTaskId ? task.taskId === targetTaskId : true;
             if (isTarget && (force || shouldRunTask(task))) {
-                logInfo(`Executing scheduled task: ${task.name}`);
-                await executeTask(task.taskId);
-                await updateTaskLastRun(task.taskId);
-                executedTasks.push(task.name);
+                try {
+                    logInfo(`Executing scheduled task: ${task.name}`);
+                    await executeTask(task.taskId);
+                    await updateTaskLastRun(task.taskId);
+                    executedTasks.push(task.name);
+                } catch (taskError: any) {
+                    logError(`Scheduled task execution failed for ${task.name}`, { task: task.taskId, error: taskError.message });
+                }
             }
         }
         return { success: true, executedTasks };
@@ -226,8 +230,8 @@ export async function runFleetAudit(sendAlerts: boolean = true) {
 
         // --- 2. RTV LEGAL ALERTS ---
         if (vehicle.rtvExpiration) {
-            const rtvDate = new Date(vehicle.rtvExpiration);
-            const rtvDateOnly = new Date(rtvDate.getFullYear(), rtvDate.getMonth(), rtvDate.getDate());
+            const parts = vehicle.rtvExpiration.split('-');
+            const rtvDateOnly = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
             const todayDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
             const diffTime = rtvDateOnly.getTime() - todayDateOnly.getTime();
             const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
@@ -250,8 +254,8 @@ export async function runFleetAudit(sendAlerts: boolean = true) {
         const permits = db.prepare('SELECT * FROM fleet_permits WHERE vehicleId = ?').all(vehicle.id) as any[];
         for (const permit of permits) {
             if (permit.expirationDate) {
-                const permitDate = new Date(permit.expirationDate);
-                const permitDateOnly = new Date(permitDate.getFullYear(), permitDate.getMonth(), permitDate.getDate());
+                const parts = permit.expirationDate.split('-');
+                const permitDateOnly = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
                 const todayDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
                 const diffTime = permitDateOnly.getTime() - todayDateOnly.getTime();
                 const daysLeft = Math.ceil(diffTime / (1000 * 60 * 60 * 24));

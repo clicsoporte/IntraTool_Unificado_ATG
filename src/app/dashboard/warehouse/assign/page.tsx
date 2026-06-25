@@ -65,6 +65,7 @@ export default function AssignItemPage() {
         globalFilter, currentPage, rowsPerPage, sortKey, sortDirection,
         formData, productSearchTerm, isProductSearchOpen,
         clientSearchTerm, isClientSearchOpen, locationSearchTerm, isLocationSearchOpen,
+        moveProductConfirmOpen, mixedLocationConfirmOpen, moveAndMixConfirmOpen,
     } = state;
 
     const renderSortIcon = (key: SortKey) => {
@@ -197,7 +198,7 @@ export default function AssignItemPage() {
                     {selectors.totalPages > 0 && (
                         <CardFooter className="flex w-full items-center justify-between pt-4">
                              <div className="text-sm text-muted-foreground">
-                                Total de {selectors.filteredAssignments.length} asignacion(es).
+                                Total de {state.totalCount} asignacion(es).
                             </div>
                             <div className="flex items-center gap-4">
                                 <div className="flex items-center gap-2">
@@ -275,6 +276,51 @@ export default function AssignItemPage() {
                         </DialogFooter>
                     </DialogContent>
                 </Dialog>
+
+                <AlertDialog open={moveProductConfirmOpen} onOpenChange={actions.setMoveProductConfirmOpen}>
+                    <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>Producto ya Asignado</AlertDialogTitle>
+                            <AlertDialogDescription>Este producto ya tiene una ubicación por defecto asignada. ¿Qué deseas hacer?</AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                            <Button variant="outline" onClick={() => actions.handleSubmit('add')}>Agregar como Ubicación Adicional</Button>
+                            <AlertDialogAction onClick={() => actions.handleSubmit('move')}>Mover a Nueva Ubicación</AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
+                
+                <AlertDialog open={mixedLocationConfirmOpen} onOpenChange={actions.setMixedLocationConfirmOpen}>
+                    <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>¡Atención! Ubicación Ocupada</AlertDialogTitle>
+                            <AlertDialogDescription>
+                                La ubicación seleccionada ya contiene otros productos asociados. ¿Deseas convertir esta ubicación en mixta añadiendo este nuevo producto?
+                            </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                            <AlertDialogAction onClick={() => actions.handleSubmit('add_and_mix')}>Sí, Añadir y Hacer Mixta</AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
+                
+                <AlertDialog open={moveAndMixConfirmOpen} onOpenChange={actions.setMoveAndMixConfirmOpen}>
+                    <AlertDialogContent>
+                        <AlertDialogHeader>
+                            <AlertDialogTitle>Conflicto Múltiple</AlertDialogTitle>
+                            <AlertDialogDescription>
+                               El producto ya tiene otra ubicación asignada y la ubicación de destino también está ocupada por otro producto. ¿Qué deseas hacer?
+                            </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                            <Button variant="outline" onClick={() => actions.handleSubmit('add_and_mix')}>Agregar y Hacer Mixta</Button>
+                            <AlertDialogAction onClick={() => actions.handleSubmit('move_and_mix')}>Mover y Hacer Mixta</AlertDialogAction>
+                        </AlertDialogFooter>
+                    </AlertDialogContent>
+                </AlertDialog>
             </div>
         </main>
     );

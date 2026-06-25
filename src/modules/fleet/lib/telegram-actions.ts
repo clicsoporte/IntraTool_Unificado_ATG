@@ -4,6 +4,7 @@ import {
   createLinkageCode, 
   linkTelegramManually, 
   removeLinkage, 
+  updateLinkagePermissions,
   getAllLinkages, 
   getAllActiveBotStates, 
   deleteTelegramState,
@@ -247,5 +248,22 @@ export async function getAllEmployeesAction() {
   } catch (error: any) {
     await logError('Error al cargar todos los empleados para Telegram', { error: error.message });
     return [];
+  }
+}
+
+/**
+ * Server Action to update linkage permissions with admin authorization
+ */
+export async function updateTelegramLinkagePermissionsAction(
+  id: number,
+  permissions: { allowFuel: boolean; allowMaintenance: boolean; allowDeliveries: boolean; allowWarehouse: boolean }
+): Promise<void> {
+  await authorizeAction('admin:settings:automations');
+  try {
+    await updateLinkagePermissions(id, permissions);
+    revalidatePath('/dashboard/admin/automations');
+  } catch (error: any) {
+    await logError('Error al actualizar permisos de Telegram para vinculación', { id, permissions, error: error.message });
+    throw new Error('No se pudieron guardar los permisos.');
   }
 }

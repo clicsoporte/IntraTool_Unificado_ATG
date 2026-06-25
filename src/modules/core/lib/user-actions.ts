@@ -68,3 +68,25 @@ export async function createFirstUser(
     throw new Error("Hubo un error al guardar el usuario en la base de datos.");
   }
 }
+
+export async function toggleUserActive(userId: number, isActive: boolean): Promise<{ success: boolean; error?: string }> {
+  try {
+    const db = await getDb();
+    db.prepare('UPDATE core_users SET is_active = ? WHERE id = ?').run(isActive ? 1 : 0, userId);
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
+}
+
+export async function getEmployeeDetails(employeeId: string): Promise<any> {
+  try {
+    const db = await getDb();
+    const row = db.prepare('SELECT * FROM core_employees WHERE EMPLEADO = ?').get(employeeId);
+    if (!row) return null;
+    return JSON.parse(JSON.stringify(row));
+  } catch (e) {
+    console.error("Error in getEmployeeDetails", e);
+    return null;
+  }
+}

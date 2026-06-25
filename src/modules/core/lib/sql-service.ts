@@ -51,12 +51,25 @@ async function getDbConfig(): Promise<sql.config> {
 }
 
 /**
+ * Strips both single-line (--) and multi-line (/* *\/) SQL comments from a query string.
+ * This is used for validation purposes only.
+ */
+function stripSqlComments(query: string): string {
+    // Replace multi-line comments /* ... */
+    let cleaned = query.replace(/\/\*[\s\S]*?\*\//g, '');
+    // Replace single-line comments -- ...
+    cleaned = cleaned.replace(/--.*$/gm, '');
+    return cleaned;
+}
+
+/**
  * Validates a SQL query string to ensure it is a read-only SELECT statement.
  * @param {string} query - The SQL query to validate.
  * @throws {Error} If the query is not a valid, read-only SELECT statement.
  */
 function validateSelectOnly(query: string): void {
-    const cleanedQuery = query.trim().toLowerCase();
+    const strippedQuery = stripSqlComments(query);
+    const cleanedQuery = strippedQuery.trim().toLowerCase();
     
     const forbiddenKeywords = [
         'insert', 'update', 'delete', 'drop', 'alter', 'create', 

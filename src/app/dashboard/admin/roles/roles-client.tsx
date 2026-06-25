@@ -47,6 +47,7 @@ import { PlusCircle, Save, Trash2, ShieldQuestion, Copy } from 'lucide-react';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePageTitle } from '@/modules/core/hooks/usePageTitle';
 import { useAuthorization } from '@/modules/core/hooks/useAuthorization';
+import { getDepartments } from '@/modules/inventory/lib/actions';
 
 export default function RolesClient() {
   const { hasPermission } = useAuthorization(['roles:create', 'roles:read', 'roles:update', 'roles:delete']);
@@ -54,6 +55,10 @@ export default function RolesClient() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const { setTitle } = usePageTitle();
+
+  const [localPermissionGroups, setLocalPermissionGroups] = useState<Record<string, string[]>>(permissionGroups);
+  const [localPermissionTranslations, setLocalPermissionTranslations] = useState<Record<string, string>>(permissionTranslations);
+  const [localPermissionTree, setLocalPermissionTree] = useState<Record<string, string[]>>(permissionTree as any);
 
   const [isDialogOpen, setDialogOpen] = useState(false);
   const [currentRole, setCurrentRole] = useState<Role | null>(null);
@@ -77,6 +82,49 @@ export default function RolesClient() {
 
   useEffect(() => {
     setTitle('Gestión de Roles');
+    
+    async function loadDynamicPermissions() {
+      try {
+        const depts = await getDepartments();
+        const activeDepts = depts.filter((d: any) => Number(d.is_active) === 1);
+        
+        const ticketGroupPermissions: string[] = [];
+        const newTranslations = { ...permissionTranslations } as any;
+        const newTree = { ...permissionTree } as any;
+
+        activeDepts.forEach((d: any) => {
+            const readPerm = `tickets:read:${d.id}`;
+            const createPerm = `tickets:create:${d.id}`;
+            const managePerm = `tickets:manage:${d.id}`;
+
+            ticketGroupPermissions.push(readPerm, createPerm, managePerm);
+
+            newTranslations[readPerm] = `Tickets: Ver Soporte de ${d.name}`;
+            newTranslations[createPerm] = `Tickets: Crear Ticket en ${d.name}`;
+            newTranslations[managePerm] = `Tickets: Gestionar Tickets de ${d.name}`;
+
+            newTree[readPerm] = [createPerm, managePerm];
+            
+            if (newTree["dashboard:access"]) {
+                newTree["dashboard:access"] = [...newTree["dashboard:access"], readPerm];
+            }
+        });
+
+        const updatedGroups = { ...permissionGroups } as any;
+        updatedGroups["Mesa de Tickets (Soporte Técnico)"] = [
+            ...permissionGroups["Mesa de Tickets (Soporte Técnico)"],
+            ...ticketGroupPermissions
+        ];
+
+        setLocalPermissionGroups(updatedGroups);
+        setLocalPermissionTranslations(newTranslations);
+        setLocalPermissionTree(newTree);
+      } catch (err) {
+        console.error("Failed to load dynamic department permissions:", err);
+      }
+    }
+
+    loadDynamicPermissions();
     fetchRoles();
   }, [setTitle, fetchRoles]);
 
@@ -139,8 +187,8 @@ export default function RolesClient() {
     } catch (err: any) {
       logError('Failed to save roles', { error: err.message });
       toast({
-        title: 'Error',
-        description: 'No se pudieron guardar los roles.',
+        title: 'Error al Guardar Roles',
+        description: err.message || 'No se pudieron guardar los roles.',
         variant: 'destructive',
       });
     }
@@ -158,16 +206,26 @@ export default function RolesClient() {
       });
       return;
     }
-    const updatedRoles = roles.filter((r) => r.id !== roleToDelete.id);
-    await saveAllRoles(updatedRoles);
-    setRoles(updatedRoles);
-    toast({
-      title: 'Rol Eliminado',
-      description: `El rol "${roleToDelete.name}" ha sido eliminado.`,
-      variant: 'destructive',
-    });
-    await logInfo('Role deleted', { roleId: roleToDelete.id });
-    setRoleToDelete(null);
+    try {
+      const updatedRoles = roles.filter((r) => r.id !== roleToDelete.id);
+      await saveAllRoles(updatedRoles);
+      setRoles(updatedRoles);
+      toast({
+        title: 'Rol Eliminado',
+        description: `El rol "${roleToDelete.name}" ha sido eliminado.`,
+        variant: 'destructive',
+      });
+      await logInfo('Role deleted', { roleId: roleToDelete.id });
+    } catch (err: any) {
+      logError('Failed to delete role', { error: err.message });
+      toast({
+        title: 'Error al Eliminar Rol',
+        description: err.message || 'No se pudo eliminar el rol.',
+        variant: 'destructive',
+      });
+    } finally {
+      setRoleToDelete(null);
+    }
   };
 
   const handleResetAdmin = async () => {
@@ -181,66 +239,66 @@ export default function RolesClient() {
     await logInfo('Admin role reset to default');
   };
 
-  const handlePermissionChange = (permission: AppPermission, isChecked: boolean, role: Role) => {
+  const handlePermissionChange = (permission: any, isChecked: boolean, role: Role) => {
     if (!currentRole) return;
 
-    let newPermissions = new Set(role.permissions as AppPermission[]);
+    let newPermissions = new Set(role.permissions as string[]);
 
-    const addWithParents = (perm: AppPermission) => {
+    const addWithChildren = (perm: any) => {
         newPermissions.add(perm);
-        for (const parent in permissionTree) {
-            const parentPerm = parent as AppPermission;
-            if (permissionTree[parentPerm]?.includes(perm)) {
-                addWithParents(parentPerm);
+        const children = localPermissionTree[perm] || [];
+        for (const child of children) {
+            addWithChildren(child);
+        }
+    };
+    
+    const removeWithParents = (perm: any) => {
+        newPermissions.delete(perm);
+        for (const parent in localPermissionTree) {
+            const parentPerm = parent;
+            if (localPermissionTree[parentPerm]?.includes(perm)) {
+                removeWithParents(parentPerm);
             }
         }
     };
     
-    const removeWithChildren = (perm: AppPermission) => {
-        newPermissions.delete(perm);
-        const children = permissionTree[perm] || [];
-        for (const child of children) {
-            removeWithChildren(child as AppPermission);
-        }
-    };
-    
     if (isChecked) {
-        addWithParents(permission);
+        addWithChildren(permission);
     } else {
-        removeWithChildren(permission);
+        removeWithParents(permission);
     }
     
     setCurrentRole({ ...role, permissions: Array.from(newPermissions) });
   };
   
- const handleGroupPermissionChange = (groupPermissions: AppPermission[], check: boolean) => {
+ const handleGroupPermissionChange = (groupPermissions: any[], check: boolean) => {
     if (!currentRole) return;
     
-    let newPermissions = new Set(currentRole.permissions as AppPermission[]);
+    let newPermissions = new Set(currentRole.permissions as string[]);
 
-    const addWithParents = (perm: AppPermission) => {
+    const addWithChildren = (perm: any) => {
         newPermissions.add(perm);
-        for (const parent in permissionTree) {
-            const parentPerm = parent as AppPermission;
-            if (permissionTree[parentPerm]?.includes(perm)) {
-                addWithParents(parentPerm);
-            }
+        const children = localPermissionTree[perm] || [];
+        for (const child of children) {
+            addWithChildren(child);
         }
     };
 
-    const removeWithChildren = (perm: AppPermission) => {
+    const removeWithParents = (perm: any) => {
         newPermissions.delete(perm);
-        const children = permissionTree[perm] || [];
-        for (const child of children) {
-            removeWithChildren(child as AppPermission);
+        for (const parent in localPermissionTree) {
+            const parentPerm = parent;
+            if (localPermissionTree[parentPerm]?.includes(perm)) {
+                removeWithParents(parentPerm);
+            }
         }
     };
 
     groupPermissions.forEach(p => {
         if (check) {
-            addWithParents(p);
+            addWithChildren(p);
         } else {
-            removeWithChildren(p);
+            removeWithParents(p);
         }
     });
 
@@ -250,7 +308,7 @@ export default function RolesClient() {
 
   const renderPermissionGroup = (
     groupName: string,
-    permissions: AppPermission[],
+    permissions: string[],
     role: Role
   ) => {
     const allSelectedInGroup = permissions.every(p => role.permissions.includes(p));
@@ -286,7 +344,7 @@ export default function RolesClient() {
                 htmlFor={`${role.id}-${permission}`}
                 className="font-normal text-sm"
               >
-                {(permissionTranslations as any)[permission] || permission}
+                {(localPermissionTranslations as any)[permission] || permission}
               </Label>
             </div>
           ))}
@@ -422,8 +480,8 @@ export default function RolesClient() {
               </div>
               <ScrollArea className="h-[50vh] rounded-md border p-4">
                 <div className="space-y-6">
-                  {Object.entries(permissionGroups).map(([groupName, perms]) =>
-                    renderPermissionGroup(groupName, perms as AppPermission[], currentRole)
+                  {Object.entries(localPermissionGroups).map(([groupName, perms]) =>
+                    renderPermissionGroup(groupName, perms as any, currentRole)
                   )}
                 </div>
               </ScrollArea>

@@ -141,6 +141,29 @@ export async function syncAllLocationPaths(): Promise<void> {
 }
 
 
+const getChildLeafLocationsInMemory = (allLocations: WarehouseLocation[], parentIds: number[]): WarehouseLocation[] => {
+    if (parentIds.length === 0) return [];
+    
+    let allChildren: WarehouseLocation[] = [];
+    const queue = [...parentIds];
+    const visited = new Set<number>();
+
+    while (queue.length > 0) {
+        const currentId = queue.shift()!;
+        if (visited.has(currentId)) continue;
+        visited.add(currentId);
+
+        const children = allLocations.filter(l => l.parentId === currentId);
+        if (children.length === 0) {
+            const self = allLocations.find(l => l.id === currentId);
+            if(self) allChildren.push(self);
+        } else {
+            queue.push(...children.map(c => c.id));
+        }
+    }
+    return Array.from(new Map(allChildren.map(item => [item.id, item])).values());
+};
+
 /**
  * Gets all locations and enriches them with completion status for wizard.
  * @returns {Promise<WarehouseLocation[]>} A promise that resolves to an array of all locations.
@@ -156,7 +179,7 @@ export async function getLocations(): Promise<(WarehouseLocation & { isCompleted
         // Check if a location is a 'level' (has children)
         const children = allLocations.filter(l => l.parentId === loc.id);
         if (children.length > 0) {
-            const finalChildren = getChildLeafLocations_transactional(db, [loc.id]);
+            const finalChildren = getChildLeafLocationsInMemory(allLocations, [loc.id]);
             const isCompleted = finalChildren.length > 0 && finalChildren.every(child => populatedLocationIds.has(child.id));
             return { ...loc, isCompleted };
         }
@@ -713,6 +736,93 @@ export async function getAllItemLocations(): Promise<ItemLocation[]> {
     return JSON.parse(JSON.stringify(itemLocations));
 }
 
+export async function getItemLocationsPaginated(params: {
+    page: number;
+    limit: number;
+    search?: string;
+    sortKey?: string;
+    sortDirection?: 'asc' | 'desc';
+}): Promise<{ assignments: ItemLocation[]; totalCount: number }> {
+    const db = await getDb();
+    const { page, limit, search, sortKey, sortDirection } = params;
+    
+    let query = `
+        SELECT il.*, l.cached_full_path, p.description AS productDescription, cust.name AS clientName
+        FROM ${WAREHOUSE_TABLES.item_locations} il
+        LEFT JOIN ${WAREHOUSE_TABLES.locations} l ON il.locationId = l.id
+        LEFT JOIN core_products p ON il.itemId = p.id
+        LEFT JOIN core_customers cust ON il.clientId = cust.id
+    `;
+    
+    let countQuery = `
+        SELECT COUNT(*) as count
+        FROM ${WAREHOUSE_TABLES.item_locations} il
+        LEFT JOIN ${WAREHOUSE_TABLES.locations} l ON il.locationId = l.id
+        LEFT JOIN core_products p ON il.itemId = p.id
+        LEFT JOIN core_customers cust ON il.clientId = cust.id
+    `;
+    
+    const conditions: string[] = [];
+    const binds: any[] = [];
+    
+    if (search && search.trim().length > 0) {
+        const searchPattern = `%${search.trim()}%`;
+        conditions.push(`(il.itemId LIKE ? OR p.description LIKE ? OR cust.name LIKE ? OR l.cached_full_path LIKE ?)`);
+        binds.push(searchPattern, searchPattern, searchPattern, searchPattern);
+    }
+    
+    if (conditions.length > 0) {
+        const whereClause = ` WHERE ${conditions.join(' AND ')}`;
+        query += whereClause;
+        countQuery += whereClause;
+    }
+    
+    // Sorting
+    const allowedSortKeys = ['product', 'description', 'client', 'location', 'type', 'updatedAt'];
+    let orderClause = '';
+    if (sortKey && allowedSortKeys.includes(sortKey)) {
+        const direction = sortDirection === 'asc' ? 'ASC' : 'DESC';
+        switch (sortKey) {
+            case 'product':
+                orderClause = ` ORDER BY il.itemId ${direction}`;
+                break;
+            case 'description':
+                orderClause = ` ORDER BY p.description ${direction}`;
+                break;
+            case 'client':
+                orderClause = ` ORDER BY CASE WHEN cust.name IS NULL THEN 1 ELSE 0 END, cust.name ${direction}`;
+                break;
+            case 'location':
+                orderClause = ` ORDER BY l.cached_full_path ${direction}`;
+                break;
+            case 'type':
+                orderClause = ` ORDER BY il.isExclusive ${direction}`;
+                break;
+            case 'updatedAt':
+                orderClause = ` ORDER BY il.updatedAt ${direction}`;
+                break;
+        }
+    } else {
+        orderClause = ` ORDER BY il.updatedAt DESC`;
+    }
+    query += orderClause;
+    
+    // Pagination
+    const offset = page * limit;
+    query += ` LIMIT ? OFFSET ?`;
+    const queryBinds = [...binds, limit, offset];
+    
+    const totalCountRow = db.prepare(countQuery).get(...binds) as { count: number } | undefined;
+    const totalCount = totalCountRow?.count || 0;
+    
+    const assignments = db.prepare(query).all(...queryBinds) as any[];
+    
+    return {
+        assignments: JSON.parse(JSON.stringify(assignments)),
+        totalCount
+    };
+}
+
 /**
  * Inserts or updates an item-location assignment.
  * If payload.id is provided, it updates. Otherwise, it inserts.
@@ -1252,7 +1362,7 @@ export async function lockEntity(payload: { entityIds: number[]; userName: strin
 
     const transaction = db.transaction(() => {
         const placeholders = entityIds.map(() => '?').join(',');
-        const conflictingLocks = db.prepare(`SELECT id, lockedBy FROM ${WAREHOUSE_TABLES.locations} WHERE id IN (${placeholders}) AND isLocked = 1`).all(...entityIds) as { id: number; lockedBy: string }[];
+        const conflictingLocks = db.prepare(`SELECT id, lockedBy FROM ${WAREHOUSE_TABLES.locations} WHERE id IN (${placeholders}) AND isLocked = 1 AND (lockedBySessionId != ? OR lockedBySessionId IS NULL)`).all(...entityIds, sessionId) as { id: number; lockedBy: string }[];
         
         if (conflictingLocks.length > 0) {
             const locker = conflictingLocks[0].lockedBy || 'otro usuario';

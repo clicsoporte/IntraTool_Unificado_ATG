@@ -59,16 +59,39 @@ export default function WarehouseExplorerPage() {
                         />
                     </div>
                 </div>
-            </div>
-             {(state.selectedBuildingId !== null) && (
-                 <div className="p-4 border-b bg-muted/20">
-                    <h3 className="font-semibold text-lg">{selectors.details.title}</h3>
-                    <p className="text-sm text-muted-foreground">{selectors.details.description}</p>
-                </div>
-            )}
-            <div className="flex-1 grid grid-cols-1 md:grid-cols-5 overflow-hidden">
+            </div>             {(state.selectedBuildingId !== null) && (
+                  <div className="p-4 border-b bg-muted/20 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                     <div>
+                         <h3 className="font-semibold text-lg">{selectors.details.title}</h3>
+                         <p className="text-sm text-muted-foreground">{selectors.details.description}</p>
+                     </div>
+                     <div>
+                        <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                                <Button variant="destructive" disabled={state.selectedAssignmentIds.size === 0 || state.isSubmitting}>
+                                    {state.isSubmitting ? <Loader2 className="animate-spin mr-2"/> : <Trash2 className="mr-2"/>}
+                                    Limpiar {state.selectedAssignmentIds.size} Asignacion(es)
+                                </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                                <AlertDialogHeader>
+                                    <AlertDialogTitle className="flex items-center gap-2"><AlertTriangle/>¿Confirmar Limpieza?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                        Se eliminarán permanentemente las <strong>{state.selectedAssignmentIds.size}</strong> asignaciones seleccionadas. Esta acción no se puede deshacer.
+                                    </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                    <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                    <AlertDialogAction onClick={actions.handleCleanup}>Sí, limpiar</AlertDialogAction>
+                                </AlertDialogFooter>
+                            </AlertDialogContent>
+                        </AlertDialog>
+                     </div>
+                 </div>
+             )}
+            <div className="flex-1 flex flex-col md:flex-row overflow-hidden w-full">
                 {/* Column 1: Buildings */}
-                <ScrollArea className="border-r">
+                <ScrollArea className="border-r w-full md:w-[16%] md:min-w-[160px]">
                     <div className="p-2">
                         <h3 className="font-semibold px-2 py-1">Bodegas / Zonas</h3>
                         {selectors.buildings.map(building => (
@@ -89,7 +112,7 @@ export default function WarehouseExplorerPage() {
                 </ScrollArea>
                 
                 {/* Column 2: Racks */}
-                <ScrollArea className="border-r bg-muted/20">
+                <ScrollArea className="border-r bg-muted/20 w-full md:w-[12%] md:min-w-[120px]">
                     <div className="p-2">
                         <h3 className="font-semibold px-2 py-1">Racks</h3>
                         {selectors.racks.map(rack => (
@@ -110,7 +133,7 @@ export default function WarehouseExplorerPage() {
                 </ScrollArea>
 
                 {/* Column 3: Levels */}
-                <ScrollArea className="border-r">
+                <ScrollArea className="border-r w-full md:w-[12%] md:min-w-[120px]">
                      <div className="p-2">
                         <h3 className="font-semibold px-2 py-1">Niveles</h3>
                         {selectors.levels.map(level => (
@@ -131,7 +154,7 @@ export default function WarehouseExplorerPage() {
                 </ScrollArea>
 
                 {/* Column 4: Ocupación */}
-                 <ScrollArea className="p-4 space-y-4">
+                 <ScrollArea className="p-4 space-y-4 w-full md:w-[30%] md:min-w-[250px] md:flex-1">
                      {state.selectedBuildingId === null ? (
                         <div className="flex h-full items-center justify-center">
                             <p className="text-muted-foreground text-center p-8">Selecciona una bodega para empezar.</p>
@@ -180,35 +203,12 @@ export default function WarehouseExplorerPage() {
                                     </div>
                                 </ScrollArea>
                             </div>
-                            <div className="border-t pt-4">
-                                <h4 className="font-semibold mb-2">Acciones de Limpieza</h4>
-                                <AlertDialog>
-                                    <AlertDialogTrigger asChild>
-                                        <Button variant="destructive" disabled={state.selectedAssignmentIds.size === 0 || state.isSubmitting}>
-                                            {state.isSubmitting ? <Loader2 className="animate-spin mr-2"/> : <Trash2 className="mr-2"/>}
-                                            Limpiar {state.selectedAssignmentIds.size} Asignacion(es)
-                                        </Button>
-                                    </AlertDialogTrigger>
-                                    <AlertDialogContent>
-                                        <AlertDialogHeader>
-                                            <AlertDialogTitle className="flex items-center gap-2"><AlertTriangle/>¿Confirmar Limpieza?</AlertDialogTitle>
-                                            <AlertDialogDescription>
-                                                Se eliminarán permanentemente las <strong>{state.selectedAssignmentIds.size}</strong> asignaciones seleccionadas. Esta acción no se puede deshacer.
-                                            </AlertDialogDescription>
-                                        </AlertDialogHeader>
-                                        <AlertDialogFooter>
-                                            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                            <AlertDialogAction onClick={actions.handleCleanup}>Sí, limpiar</AlertDialogAction>
-                                        </AlertDialogFooter>
-                                    </AlertDialogContent>
-                                </AlertDialog>
-                            </div>
                         </>
                     )}
                 </ScrollArea>
 
                 {/* Column 5: Ubicaciones Libres */}
-                 <ScrollArea className="border-l p-4 bg-muted/20">
+                 <ScrollArea className="border-l p-4 bg-muted/20 w-full md:w-[30%] md:min-w-[250px] md:flex-1">
                       {state.selectedBuildingId !== null && (
                          <div className="space-y-2">
                             <h4 className="font-semibold">Ubicaciones Libres ({selectors.details.emptyLocations.length})</h4>

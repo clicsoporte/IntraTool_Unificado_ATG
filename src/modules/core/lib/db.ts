@@ -12,7 +12,7 @@ import { auditDatabaseInstance, repairDatabaseInstance } from './db-integrity';
 
 import { initialCompany, initialRoles } from './data';
 import { DB_MODULES } from './db-modules';
-import type { Company, LogEntry, ApiSettings, User, Product, Customer, Role, QuoteDraft, DatabaseModule, Exemption, ExemptionLaw, StockInfo, StockSettings, ImportQuery, ItemLocation, UpdateBackupInfo, Suggestion, DateRange, Supplier, ErpOrderHeader, ErpOrderLine, Notification, UserPreferences, ErpPurchaseOrderHeader, ErpPurchaseOrderLine, SqlConfig, ProductionOrder, WizardSession, AnalyticsSettings, TransitStatusAlias, WarehouseLocation, WarehouseInventoryItem, WarehouseSettings, ErpInvoiceHeader, ErpInvoiceLine } from '@/modules/core/types';
+import type { Company, LogEntry, ApiSettings, AiSettings, User, Product, Customer, Role, QuoteDraft, DatabaseModule, Exemption, ExemptionLaw, StockInfo, StockSettings, ImportQuery, ItemLocation, UpdateBackupInfo, Suggestion, DateRange, Supplier, ErpOrderHeader, ErpOrderLine, Notification, UserPreferences, ErpPurchaseOrderHeader, ErpPurchaseOrderLine, SqlConfig, ProductionOrder, WizardSession, AnalyticsSettings, TransitStatusAlias, WarehouseLocation, WarehouseInventoryItem, WarehouseSettings, ErpInvoiceHeader, ErpInvoiceLine } from '@/modules/core/types';
 import bcrypt from 'bcryptjs';
 import Papa from 'papaparse';
 import { executeQuery } from './sql-service';
@@ -22,218 +22,38 @@ import { revalidatePath } from 'next/cache';
 import { getExchangeRate, getEmailSettings } from './api-actions';
 import { NewUserSchema, UserSchema } from './auth-schemas';
 import { authorizeAction, authorizeSession, authorizeActionAny } from './auth-guard';
-import { CORE_SCHEMA_VERSION, CORE_TABLE_NAMES, CORE_TABLES, initializeCoreSchema, runCoreMigrations } from './schema';
-import { initializeWarehouseSchema, runWarehouseMigrations, WAREHOUSE_TABLES } from '../../warehouse/lib/schema';
-import { initializePlannerSchema, PLANNER_TABLES } from '../../planner/lib/schema';
-import { initializeRequestsSchema, REQUESTS_TABLES } from '../../requests/lib/schema';
-import { initializeConsignmentsSchema, CONSIGNMENTS_TABLES } from '../../consignments/lib/schema';
-import { initializeItToolsSchema, IT_TOOLS_TABLES } from '../../it-tools/lib/schema';
-import { initializeCostAssistantSchema, COST_ASSISTANT_TABLES } from '../../cost-assistant/lib/schema';
-import { initializeOperationsSchema, OPERATIONS_TABLES } from '../../operations/lib/schema';
-import { initializeFleetSchema, FLEET_TABLES } from '../../fleet/lib/schema';
-import { initializeNotificationDefaults } from '../../notifications/lib/db';
 
-const DB_FILE = 'clic_tools.db';
-const SALT_ROUNDS = 10;
-const UPDATE_BACKUP_DIR = 'update_backups';
+import { 
+    getDb as connGetDb, 
+    connectDb as connConnectDb, 
+    runWalCheckpoint as connRunWalCheckpoint,
+    closeDbConnection,
+    initializeAllModuleSchemas,
+    dbDirectory,
+    DB_FILE
+} from './db-conn';
+import { WAREHOUSE_TABLES } from '../../warehouse/lib/schema';
+import { PLANNER_TABLES } from '../../planner/lib/schema';
+import { REQUESTS_TABLES } from '../../requests/lib/schema';
+import { CONSIGNMENTS_TABLES } from '../../consignments/lib/schema';
+import { IT_TOOLS_TABLES } from '../../it-tools/lib/schema';
+import { COST_ASSISTANT_TABLES } from '../../cost-assistant/lib/schema';
+import { OPERATIONS_TABLES } from '../../operations/lib/schema';
+
 const VERSION_FILE_PATH = path.join(process.cwd(), 'package.json');
-const dbDirectory = path.join(process.cwd(), 'dbs');
+const UPDATE_BACKUP_DIR = 'update_backups';
 
-let unifiedDbInstance: Database.Database | null = null;
-let initializationPromise: Promise<Database.Database> | null = null;
 
-/**
- * Orchestrates the initialization and migration of all module schemas into the single DB.
- */
-async function initializeAllModuleSchemas(db: Database.Database) {
-    try {
-        // 1. Core (always first)
-        initializeCoreSchema(db);
-        await runCoreMigrations(db);
-
-        // 2. Warehouse
-        await initializeWarehouseSchema(db);
-        await runWarehouseMigrations(db);
-        await initializePlannerSchema(db);
-        await initializeRequestsSchema(db);
-        await initializeConsignmentsSchema(db);
-        await initializeItToolsSchema(db);
-        await initializeCostAssistantSchema(db);
-        await initializeOperationsSchema(db);
-        await initializeFleetSchema(db);
-        await initializeNotificationDefaults(db);
-        
-        console.log('All module schemas initialized successfully.');
-    } catch (error: any) {
-        console.error("❌ Schema synchronization failed:", error.message);
-        throw error;
-    }
+export async function getDb() {
+    return connGetDb();
 }
 
-/**
- * Automatically detects schema differences and applies missing columns/tables 
- * if the software version is ahead of the database version.
- */
-async function runSelfHealing(db: Database.Database) {
-    try {
-        const currentVersionRow = db.prepare(`SELECT version FROM _core_migrations WHERE module = 'core'`).get() as { version: number } | undefined;
-        const currentVersion = currentVersionRow ? currentVersionRow.version : 0;
-
-        if (currentVersion < CORE_SCHEMA_VERSION) {
-            console.log(`[DB] Detectada nueva versión de software (${currentVersion} -> ${CORE_SCHEMA_VERSION}). Iniciando auto-reparación de esquema...`);
-            
-            const results = auditDatabaseInstance(db);
-            const { fixed, errors } = await repairDatabaseInstance(db, results);
-            
-            if (fixed.length > 0) {
-                console.log(`[DB] Auto-reparación completada. Se aplicaron ${fixed.length} cambios:`, fixed);
-            }
-            
-            if (errors.length > 0) {
-                console.error(`[DB] Errores durante la auto-reparación:`, errors);
-            }
-
-            // Actualizar la versión en la DB para que no vuelva a correr hasta el próximo cambio de código
-            db.prepare(`INSERT OR REPLACE INTO _core_migrations (module, version) VALUES ('core', ?)`).run(CORE_SCHEMA_VERSION);
-            console.log(`[DB] Versión de base de datos actualizada a ${CORE_SCHEMA_VERSION}`);
-        }
-    } catch (e: any) {
-        console.error("[DB] No se pudo ejecutar la auto-reparación:", e.message);
-        // No bloqueamos el arranque, intentamos seguir con la inicialización normal
-    }
+export async function connectDb(_unused?: string, forceRecreate = false) {
+    return connConnectDb(_unused, forceRecreate);
 }
 
-/**
- * Centralized function to get the unified database instance.
- * Implements a thread-safe Singleton pattern to avoid locks and multiple connections.
- * 
- * @returns {Database.Database} Active better-sqlite3 instance
- */
-export async function getDb(): Promise<Database.Database> {
-    if (unifiedDbInstance && unifiedDbInstance.open) {
-        return unifiedDbInstance;
-    }
-
-    if (initializationPromise) {
-        return initializationPromise;
-    }
-
-    initializationPromise = (async () => {
-        try {
-            if (!fs.existsSync(dbDirectory)) {
-                fs.mkdirSync(dbDirectory, { recursive: true });
-            }
-
-            const dbPath = path.join(dbDirectory, DB_FILE);
-            const db = new Database(dbPath);
-
-            // Reglas de motor (PRAGMAs) críticas para rendimiento e integridad
-            db.pragma('journal_mode = WAL');
-            db.pragma('synchronous = NORMAL');
-            db.pragma('foreign_keys = ON');
-            db.pragma('busy_timeout = 10000'); // Wait up to 10s if DB is locked (Crucial for Wizard)
-            db.pragma('journal_size_limit = 67108864'); // Limit WAL size to 64MB
-
-            // Verificación rápida de integridad al conectar
-            try {
-                const check = db.pragma('integrity_check(1)') as any[];
-                if (check && check.length > 0 && check[0].integrity_check !== 'ok') {
-                    console.error("⚠️ Database integrity check failed:", check);
-                }
-            } catch (e) {
-                console.error("Failed to run integrity check:", e);
-            }
-
-            // Tabla maestra de migraciones
-            db.exec(`
-                CREATE TABLE IF NOT EXISTS _core_migrations (
-                    module TEXT PRIMARY KEY,
-                    version INTEGER NOT NULL,
-                    last_updated DATETIME DEFAULT CURRENT_TIMESTAMP
-                );
-            `);
-
-            // Orquestar esquemas (Auto-sanación primero)
-            await runSelfHealing(db);
-            await initializeAllModuleSchemas(db);
-
-            unifiedDbInstance = db;
-
-            // Registrar cierre limpio al terminar el proceso
-            const closeDb = () => {
-                if (unifiedDbInstance && unifiedDbInstance.open) {
-                    console.log("[DB] Closing unified database connection...");
-                    try {
-                        unifiedDbInstance.pragma('wal_checkpoint(TRUNCATE)');
-                        unifiedDbInstance.close();
-                        console.log("[DB] Database closed successfully.");
-                    } catch (err) {
-                        console.error("[DB] Error closing database:", err);
-                    }
-                }
-            };
-
-            process.removeAllListeners('SIGINT').on('SIGINT', () => { closeDb(); process.exit(0); });
-            process.removeAllListeners('SIGTERM').on('SIGTERM', () => { closeDb(); process.exit(0); });
-
-            return unifiedDbInstance;
-        } catch (error: any) {
-            initializationPromise = null; // Allow retry on failure
-            console.error("❌ Failed to initialize database:", error.message);
-            throw error;
-        }
-    })();
-
-    return initializationPromise;
-}
-
-/**
- * @deprecated Usa getDb() en su lugar.
- * Mantenido temporalmente como puente de compatibilidad durante la migración a la v3.x.
- * 
- * @param _unused - Parámetro heredado que ahora es ignorado.
- * @param forceRecreate - Si es true, reinicia la base de datos (¡CUIDADO!).
- */
-export async function connectDb(_unused?: string, forceRecreate = false): Promise<Database.Database> {
-    if (forceRecreate) {
-        if (unifiedDbInstance) {
-            unifiedDbInstance.close();
-            unifiedDbInstance = null;
-        }
-        const dbPath = path.join(dbDirectory, DB_FILE);
-        if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
-    }
-    return getDb();
-}
-
-/**
- * Checks the database schema and applies necessary alterations (migrations).
- * @param {Database.Database} db - The database instance to check.
- */
-export async function runMainDbMigrations(db: import('better-sqlite3').Database) {
-    // This function is now a placeholder as migrations are handled in initializeAllModuleSchemas
-}
-
-async function checkAndApplyMigrations(db: import('better-sqlite3').Database) {
-    // This function is now a placeholder
-}
-
-
-
-/**
- * Executes a WAL checkpoint on all open database connections.
- * This is important for ensuring data integrity before backups or in long-running server environments.
- */
-export async function runWalCheckpoint(): Promise<void> {
-    console.log("[DB] Running WAL checkpoint on unified database connection...");
-    if (unifiedDbInstance && unifiedDbInstance.open) {
-        try {
-            unifiedDbInstance.pragma('wal_checkpoint(TRUNCATE)');
-            console.log(`[DB] Checkpoint successful for unified database`);
-        } catch (error) {
-            console.error(`[DB] Checkpoint failed for unified database:`, error);
-        }
-    }
+export async function runWalCheckpoint() {
+    return connRunWalCheckpoint();
 }
 
 
@@ -288,7 +108,8 @@ export async function saveCompanySettings(settings: Company): Promise<void> {
                 supplierFilePath = @supplierFilePath, erpPurchaseOrderHeaderFilePath = @erpPurchaseOrderHeaderFilePath,
                 erpPurchaseOrderLineFilePath = @erpPurchaseOrderLineFilePath,
                 erpInvoiceHeaderFilePath = @erpInvoiceHeaderFilePath, erpInvoiceLineFilePath = @erpInvoiceLineFilePath,
-                importMode = @importMode, lastSyncTimestamp = @lastSyncTimestamp, quoterShowTaxId = @quoterShowTaxId, syncWarningHours = @syncWarningHours
+                importMode = @importMode, lastSyncTimestamp = @lastSyncTimestamp, quoterShowTaxId = @quoterShowTaxId, syncWarningHours = @syncWarningHours,
+                timeZone = @timeZone
             WHERE id = 1
         `);
         stmt.run(finalSettings);
@@ -296,14 +117,62 @@ export async function saveCompanySettings(settings: Company): Promise<void> {
 
     try {
         transaction(settings);
+        if (settings.timeZone) {
+            try {
+                const { invalidateTimeZoneCache } = require('./timezone');
+                invalidateTimeZoneCache();
+            } catch (cacheErr) {
+                console.error("Failed to invalidate timezone cache:", cacheErr);
+            }
+        }
     } catch (error) {
         console.error("Failed to save company settings:", error);
         throw new Error("Database transaction failed to save company settings.");
     }
 }
 
-// ... rest of the file is unchanged, so I will omit it for brevity, but I will include it in the final output.
-// I will just copy the rest of the file from the prompt
+export async function getGeographyData(key: string): Promise<string | null> {
+    const db = await getDb();
+    try {
+        const row = db.prepare('SELECT value FROM core_geography_data WHERE key = ?').get(key) as { value: string } | undefined;
+        if (row) {
+            return row.value;
+        }
+
+        // Seeding logic for Costa Rica if it's the requested key and not found in DB
+        if (key === 'costa_rica') {
+            const filePath = path.join(process.cwd(), 'docs', 'provincias_cantones_distritos_costa_ric.txt');
+            if (fs.existsSync(filePath)) {
+                const fileContent = fs.readFileSync(filePath, 'utf-8');
+                try {
+                    JSON.parse(fileContent); // Validate it is valid JSON
+                    db.prepare('INSERT OR REPLACE INTO core_geography_data (key, value) VALUES (?, ?)').run(key, fileContent);
+                    console.log(`[DB] Successfully seeded core_geography_data with key 'costa_rica' from file.`);
+                    return fileContent;
+                } catch (parseErr: any) {
+                    console.error(`[DB] Error parsing geography seed file:`, parseErr.message);
+                }
+            } else {
+                console.warn(`[DB] Costa Rica geography seed file not found at: ${filePath}`);
+            }
+        }
+        return null;
+    } catch (error: any) {
+        console.error("Failed to get geography data:", error.message);
+        return null;
+    }
+}
+
+export async function saveGeographyData(key: string, value: string): Promise<void> {
+    await authorizeActionAny(['deliveries:admin', 'admin:settings:general']);
+    const db = await getDb();
+    try {
+        db.prepare('INSERT OR REPLACE INTO core_geography_data (key, value, updatedAt) VALUES (?, ?, CURRENT_TIMESTAMP)').run(key, value);
+    } catch (error: any) {
+        console.error("Failed to save geography data:", error.message);
+        throw new Error("Database transaction failed to save geography data: " + error.message);
+    }
+}
 export async function getLogs(filters: {type?: 'operational' | 'system' | 'all'; search?: string; dateRange?: DateRange;} = {}): Promise<LogEntry[]> {
     const db = await getDb();
     try {
@@ -425,6 +294,37 @@ export async function saveApiSettings(settings: ApiSettings): Promise<void> {
         db.prepare(`UPDATE core_api_settings SET exchangeRateApi = @exchangeRateApi, haciendaExemptionApi = @haciendaExemptionApi, haciendaTributariaApi = @haciendaTributariaApi, recopeApi = @recopeApi WHERE id = 1`).run(settings);
     } catch (error) {
         console.error("Failed to save api settings:", error);
+    }
+}
+
+export async function getAiSettings(): Promise<AiSettings | null> {
+    const db = await getDb();
+    try {
+        return db.prepare('SELECT * FROM core_ai_settings WHERE id = 1').get() as AiSettings | null;
+    } catch (error) {
+        console.error("Failed to get ai settings:", error);
+        return null;
+    }
+}
+
+export async function saveAiSettings(settings: AiSettings): Promise<void> {
+    const db = await getDb();
+    try {
+        db.prepare(`
+            UPDATE core_ai_settings SET 
+                aiEnabled = @aiEnabled, 
+                provider = @provider, 
+                ollamaHost = @ollamaHost, 
+                ollamaModel = @ollamaModel, 
+                geminiApiKey = @geminiApiKey, 
+                geminiModel = @geminiModel, 
+                deepseekApiKey = @deepseekApiKey, 
+                deepseekModel = @deepseekModel, 
+                systemPrompt = @systemPrompt 
+            WHERE id = 1
+        `).run(settings);
+    } catch (error) {
+        console.error("Failed to save ai settings:", error);
     }
 }
 
@@ -585,6 +485,46 @@ export async function saveAllSuppliers(suppliers: Supplier[]): Promise<void> {
     }
 }
 
+export async function saveAllCustomerShipmentAddresses(addresses: any[]): Promise<void> {
+    const db = await getDb();
+    const insertOrUpdate = db.prepare(`
+        INSERT INTO core_customer_shipment_addresses (
+            cliente_id, direccion_id, detalle_direccion, descripcion, contacto, cargo, telefono1, telefono2
+        ) VALUES (
+            @cliente_id, @direccion_id, @detalle_direccion, @descripcion, @contacto, @cargo, @telefono1, @telefono2
+        ) ON CONFLICT(cliente_id, direccion_id) DO UPDATE SET
+            detalle_direccion = excluded.detalle_direccion,
+            descripcion = excluded.descripcion,
+            contacto = excluded.contacto,
+            cargo = excluded.cargo,
+            telefono1 = excluded.telefono1,
+            telefono2 = excluded.telefono2
+    `);
+
+    const transaction = db.transaction((list: any[]) => {
+        for (const addr of list) {
+            insertOrUpdate.run({
+                cliente_id: (addr.CLIENTE || '').trim(),
+                direccion_id: (addr.DIRECCION || '').trim(),
+                detalle_direccion: addr.DETALLE_DIRECCION || null,
+                descripcion: addr.DESCRIPCION || null,
+                contacto: addr.CONTACTO || null,
+                cargo: addr.CARGO || null,
+                telefono1: addr.TELEFONO1 || null,
+                telefono2: addr.TELEFONO2 || null
+            });
+        }
+    });
+
+    try {
+        transaction(addresses);
+    } catch (error) {
+        console.error("Failed to save all customer shipment addresses:", error);
+        throw error;
+    }
+}
+
+
 
 export async function getAllExemptions(): Promise<Exemption[]> {
     const db = await getDb();
@@ -639,6 +579,19 @@ export async function getAllRoles(): Promise<Role[]> {
 export async function saveAllRoles(roles: Role[]): Promise<void> {
     await authorizeAction('roles:update');
     const db = await getDb();
+
+    // Validate if any deleted role has users assigned to it
+    const currentRoles = db.prepare('SELECT id, name FROM core_roles').all() as { id: string; name: string }[];
+    const rolesToSaveIds = new Set(roles.map(r => r.id.toLowerCase()));
+    
+    const deletedRoles = currentRoles.filter(cr => !rolesToSaveIds.has(cr.id.toLowerCase()));
+    for (const deletedRole of deletedRoles) {
+        const userCountRow = db.prepare('SELECT COUNT(*) as count FROM core_users WHERE LOWER(role) = ?').get(deletedRole.id.toLowerCase()) as { count: number } | undefined;
+        if (userCountRow && userCountRow.count > 0) {
+            throw new Error(`No se puede eliminar el rol "${deletedRole.name}" porque tiene ${userCountRow.count} usuario(s) asignado(s).`);
+        }
+    }
+
     const insert = db.prepare('INSERT INTO core_roles (id, name, permissions) VALUES (@id, @name, @permissions)');
     const transaction = db.transaction((rolesToSave: Role[]) => {
         db.prepare('DELETE FROM core_roles').run();
@@ -654,6 +607,7 @@ export async function saveAllRoles(roles: Role[]): Promise<void> {
         transaction(roles);
     } catch (error) {
         console.error("Failed to save all roles:", error);
+        throw error;
     }
 }
 
@@ -752,13 +706,17 @@ const createHeaderMapping = (type: ImportQuery['type']): Record<string, string> 
         case 'erp_order_lines': return {'PEDIDO': 'PEDIDO', 'PEDIDO_LINEA': 'PEDIDO_LINEA', 'ARTICULO': 'ARTICULO', 'CANTIDAD_PEDIDA': 'CANTIDAD_PEDIDA', 'PRECIO_UNITARIO': 'PRECIO_UNITARIO'};
         case 'erp_purchase_order_headers': return { 'ORDEN_COMPRA': 'ORDEN_COMPRA', 'PROVEEDOR': 'PROVEEDOR', 'FECHA_HORA': 'FECHA_HORA', 'ESTADO': 'ESTADO', 'CREATEDBY': 'CreatedBy' };
         case 'erp_purchase_order_lines': return { 'ORDEN_COMPRA': 'ORDEN_COMPRA', 'ARTICULO': 'ARTICULO', 'CANTIDAD_ORDENADA': 'CANTIDAD_ORDENADA' };
-        case 'erp_invoice_headers': return { 'CLIENTE': 'CLIENTE', 'NOMBRE_CLIENTE': 'NOMBRE_CLIENTE', 'TIPO_DOCUMENTO': 'TIPO_DOCUMENTO', 'FACTURA': 'FACTURA', 'PEDIDO': 'PEDIDO', 'FACTURA_ORIGINAL': 'FACTURA_ORIGINAL', 'FECHA': 'FECHA', 'FECHA_ENTREGA': 'FECHA_ENTREGA', 'ANULADA': 'ANULADA', 'EMBARCAR_A': 'EMBARCAR_A', 'DIRECCION_FACTURA': 'DIRECCION_FACTURA', 'OBSERVACIONES': 'OBSERVACIONES', 'RUTA': 'RUTA', 'USUARIO': 'USUARIO', 'USUARIO_ANULA': 'USUARIO_ANULA', 'ZONA': 'ZONA', 'VENDEDOR': 'VENDEDOR', 'REIMPRESO': 'REIMPRESO' };
+        case 'erp_invoice_headers': return { 'CLIENTE': 'CLIENTE', 'NOMBRE_CLIENTE': 'NOMBRE_CLIENTE', 'TIPO_DOCUMENTO': 'TIPO_DOCUMENTO', 'FACTURA': 'FACTURA', 'PEDIDO': 'PEDIDO', 'FACTURA_ORIGINAL': 'FACTURA_ORIGINAL', 'FECHA': 'FECHA', 'FECHA_ENTREGA': 'FECHA_ENTREGA', 'ANULADA': 'ANULADA', 'DIREC_EMBARQUE': 'DIREC_EMBARQUE', 'EMBARCAR_A': 'EMBARCAR_A', 'DIRECCION_FACTURA': 'DIRECCION_FACTURA', 'OBSERVACIONES': 'OBSERVACIONES', 'RUTA': 'RUTA', 'USUARIO': 'USUARIO', 'USUARIO_ANULA': 'USUARIO_ANULA', 'ZONA': 'ZONA', 'VENDEDOR': 'VENDEDOR', 'REIMPRESO': 'REIMPRESO' };
         case 'erp_invoice_lines': return { 'FACTURA': 'FACTURA', 'TIPO_DOCUMENTO': 'TIPO_DOCUMENTO', 'LINEA': 'LINEA', 'BODEGA': 'BODEGA', 'PEDIDO': 'PEDIDO', 'ARTICULO': 'ARTICULO', 'ANULADA': 'ANULADA', 'FECHA_FACTURA': 'FECHA_FACTURA', 'CANTIDAD': 'CANTIDAD', 'PRECIO_UNITARIO': 'PRECIO_UNITARIO', 'TOTAL_IMPUESTO1': 'TOTAL_IMPUESTO1', 'PRECIO_TOTAL': 'PRECIO_TOTAL', 'DESCRIPCION': 'DESCRIPCION', 'DOCUMENTO_ORIGEN': 'DOCUMENTO_ORIGEN', 'CANT_DESPACHADA': 'CANT_DESPACHADA', 'ES_CANASTA_BASICA': 'ES_CANASTA_BASICA' };
-        case 'employees': return { 'EMPLEADO': 'EMPLEADO', 'NOMBRE': 'NOMBRE', 'ACTIVO': 'ACTIVO', 'DEPARTAMENTO': 'DEPARTAMENTO', 'PUESTO': 'PUESTO', 'NOMINA': 'NOMINA' };
+        case 'employees': return { 
+            'EMPLEADO': 'EMPLEADO', 'NOMBRE': 'NOMBRE', 'ACTIVO': 'ACTIVO', 'DEPARTAMENTO': 'DEPARTAMENTO', 'PUESTO': 'PUESTO', 'NOMINA': 'NOMINA',
+            'IDENTIFICACION': 'IDENTIFICACION', 'DIRECCION_HAB': 'DIRECCION_HAB', 'PASAPORTE': 'PASAPORTE', 'PAIS': 'PAIS', 'PERMISO_CONDUCIR': 'PERMISO_CONDUCIR', 'FECHA_INGRESO': 'FECHA_INGRESO', 'FECHA_SALIDA': 'FECHA_SALIDA'
+        };
         case 'departments': return { 'DEPARTAMENTO': 'DEPARTAMENTO', 'DESCRIPCION': 'DESCRIPCION' };
         case 'positions': return { 'PUESTO': 'PUESTO', 'DESCRIPCION': 'DESCRIPCION' };
         case 'payrolls': return { 'NOMINA': 'NOMINA', 'DESCRIPCION': 'DESCRIPCION', 'TIPO_NOMINA': 'TIPO_NOMINA' };
-        case 'salespersons': return { 'VENDEDOR': 'VENDEDOR', 'NOMBRE': 'NOMBRE', 'EMPLEADO': 'EMPLEADO' };
+        case 'salespersons': return { 'VENDEDOR': 'VENDEDOR', 'NOMBRE': 'NOMBRE', 'ACTIVO': 'ACTIVO', 'EMPLEADO': 'EMPLEADO', 'E_MAIL': 'E_MAIL', 'TELEFONO': 'TELEFONO' };
+        case 'customer_shipment_addresses': return { 'CLIENTE': 'CLIENTE', 'DIRECCION': 'DIRECCION', 'DETALLE_DIRECCION': 'DETALLE_DIRECCION', 'DESCRIPCION': 'DESCRIPCION', 'CONTACTO': 'CONTACTO', 'CARGO': 'CARGO', 'TELEFONO1': 'TELEFONO1', 'TELEFONO2': 'TELEFONO2' };
         default: return {};
     }
 }
@@ -805,7 +763,7 @@ async function updateCabysCatalog(data: any[]): Promise<{ count: number }> {
     return { count: data.length };
 }
 
-export async function importDataFromFile(type: Exclude<ImportQuery['type'], 'erp_order_headers' | 'erp_order_lines' | 'employees' | 'departments' | 'positions' | 'payrolls' | 'salespersons'>): Promise<{ count: number, source: string }> {
+export async function importDataFromFile(type: Exclude<ImportQuery['type'], 'erp_order_headers' | 'erp_order_lines' | 'employees' | 'departments' | 'positions' | 'payrolls' | 'salespersons' | 'customer_shipment_addresses'>): Promise<{ count: number, source: string }> {
     const companySettings = await getCompanySettings();
     if (!companySettings) throw new Error("No se pudo cargar la configuración de la empresa.");
     
@@ -928,6 +886,8 @@ async function importDataFromSql(type: ImportQuery['type']): Promise<{ count: nu
         await saveAllPayrolls(mappedData);
     } else if (type === 'salespersons') {
         await saveAllSalespersons(mappedData);
+    } else if (type === 'customer_shipment_addresses') {
+        await saveAllCustomerShipmentAddresses(mappedData);
     }
     return { count: mappedData.length, source: 'SQL Server' };
 }
@@ -939,7 +899,7 @@ export async function importData(type: ImportQuery['type']): Promise<{ count: nu
     if (companySettings.importMode === 'sql') {
         return importDataFromSql(type);
     } else {
-        return importDataFromFile(type as Exclude<ImportQuery['type'], 'erp_order_headers' | 'erp_order_lines' | 'employees' | 'departments' | 'positions' | 'payrolls' | 'salespersons'>);
+        return importDataFromFile(type as Exclude<ImportQuery['type'], 'erp_order_headers' | 'erp_order_lines' | 'employees' | 'departments' | 'positions' | 'payrolls' | 'salespersons' | 'customer_shipment_addresses'>);
     }
 }
 
@@ -952,7 +912,7 @@ export async function importAllData(): Promise<{ results: { type: string; count:
         'customers', 'products', 'exemptions', 'stock', 'locations', 'cabys', 'suppliers', 
         'erp_order_headers', 'erp_order_lines', 'erp_purchase_order_headers', 
         'erp_purchase_order_lines', 'erp_invoice_headers', 'erp_invoice_lines', 
-        'employees', 'departments', 'positions', 'payrolls', 'salespersons'
+        'employees', 'departments', 'positions', 'payrolls', 'salespersons', 'customer_shipment_addresses'
     ];
     
     const results: { type: string; count: number; }[] = [];
@@ -1201,10 +1161,7 @@ export async function restoreDatabase(moduleId: string, backupFile: File): Promi
     const dbModule = DB_MODULES.find(m => m.id === moduleId);
     if (!dbModule) throw new Error("Module not found");
 
-    if (unifiedDbInstance && unifiedDbInstance.open) {
-        unifiedDbInstance.close();
-        unifiedDbInstance = null;
-    }
+    closeDbConnection();
 
     const dbPath = path.join(dbDirectory, dbModule.dbFile);
     const buffer = Buffer.from(await backupFile.arrayBuffer());
@@ -1221,11 +1178,7 @@ export async function restoreAllFromUpdateBackup(timestamp: string): Promise<voi
     }
     
     // First, close the active database connection
-    if (unifiedDbInstance && unifiedDbInstance.open) {
-        console.log(`Closing unified database connection before restore...`);
-        unifiedDbInstance.close();
-        unifiedDbInstance = null;
-    }
+    closeDbConnection();
 
     // Now, perform the file copy operations
     for (const backup of backupsToRestore) {
@@ -1346,6 +1299,61 @@ export async function factoryReset(moduleId: string): Promise<void> {
                     db.prepare(`DELETE FROM ${table}`).run();
                 }
                 db.prepare('DELETE FROM _core_migrations WHERE module = ?').run('wh');
+            } else if (moduleId === 'purchase-requests') {
+                const tables = ['req_requests', 'req_history', 'req_settings'];
+                for (const table of tables) {
+                    try { db.prepare(`DELETE FROM ${table}`).run(); } catch(e){}
+                }
+                db.prepare('DELETE FROM _core_migrations WHERE module = ?').run('req');
+            } else if (moduleId === 'production-planner') {
+                const tables = ['planner_orders', 'planner_order_history', 'planner_settings'];
+                for (const table of tables) {
+                    try { db.prepare(`DELETE FROM ${table}`).run(); } catch(e){}
+                }
+                db.prepare('DELETE FROM _core_migrations WHERE module = ?').run('planner');
+            } else if (moduleId === 'cost-assistant') {
+                const tables = ['cost_drafts', 'cost_settings'];
+                for (const table of tables) {
+                    try { db.prepare(`DELETE FROM ${table}`).run(); } catch(e){}
+                }
+                db.prepare('DELETE FROM _core_migrations WHERE module = ?').run('cost');
+            } else if (moduleId === 'it-tools') {
+                const tables = ['it_notes', 'it_settings'];
+                for (const table of tables) {
+                    try { db.prepare(`DELETE FROM ${table}`).run(); } catch(e){}
+                }
+                db.prepare('DELETE FROM _core_migrations WHERE module = ?').run('it');
+            } else if (moduleId === 'consignments') {
+                const tables = [
+                    'cs_agreements', 'cs_products', 'cs_boletas', 'cs_boleta_lines',
+                    'cs_boleta_history', 'cs_settings', 'cs_counts', 'cs_closures', 'cs_adjustments'
+                ];
+                for (const table of tables) {
+                    try { db.prepare(`DELETE FROM ${table}`).run(); } catch(e){}
+                }
+                db.prepare('DELETE FROM _core_migrations WHERE module = ?').run('cs');
+            } else if (moduleId === 'operations') {
+                const tables = [
+                    'ops_types', 'ops_documents', 'ops_lines', 'ops_history',
+                    'ops_delivery_settings', 'ops_delivery_routes', 'ops_delivery_assignments',
+                    'ops_delivery_queue', 'ops_delivery_lines', 'ops_delivery_release_codes',
+                    'ops_delivery_notifications'
+                ];
+                for (const table of tables) {
+                    try { db.prepare(`DELETE FROM ${table}`).run(); } catch(e){}
+                }
+                db.prepare('DELETE FROM _core_migrations WHERE module = ?').run('ops');
+            } else if (moduleId === 'erp-imports') {
+                const tables = [
+                    'core_erp_invoice_headers', 'core_erp_invoice_lines',
+                    'core_erp_order_headers', 'core_erp_order_lines',
+                    'core_erp_purchase_order_headers', 'core_erp_purchase_order_lines',
+                    'core_salespersons', 'core_employees',
+                    'ops_delivery_queue', 'ops_delivery_lines'
+                ];
+                for (const table of tables) {
+                    try { db.prepare(`DELETE FROM ${table}`).run(); } catch(e){}
+                }
             }
             // Add other modules here as they are migrated
         });
@@ -1465,7 +1473,7 @@ export async function saveAllErpPurchaseOrderLines(lines: ErpPurchaseOrderLine[]
 
 export async function saveAllErpInvoiceHeaders(headers: ErpInvoiceHeader[]): Promise<void> {
     const db = await getDb();
-    const insert = db.prepare('INSERT OR REPLACE INTO core_erp_invoice_headers (FACTURA, CLIENTE, NOMBRE_CLIENTE, TIPO_DOCUMENTO, PEDIDO, FACTURA_ORIGINAL, FECHA, FECHA_ENTREGA, ANULADA, EMBARCAR_A, DIRECCION_FACTURA, OBSERVACIONES, RUTA, USUARIO, USUARIO_ANULA, ZONA, VENDEDOR, REIMPRESO) VALUES (@FACTURA, @CLIENTE, @NOMBRE_CLIENTE, @TIPO_DOCUMENTO, @PEDIDO, @FACTURA_ORIGINAL, @FECHA, @FECHA_ENTREGA, @ANULADA, @EMBARCAR_A, @DIRECCION_FACTURA, @OBSERVACIONES, @RUTA, @USUARIO, @USUARIO_ANULA, @ZONA, @VENDEDOR, @REIMPRESO)');
+    const insert = db.prepare('INSERT OR REPLACE INTO core_erp_invoice_headers (FACTURA, CLIENTE, NOMBRE_CLIENTE, TIPO_DOCUMENTO, PEDIDO, FACTURA_ORIGINAL, FECHA, FECHA_ENTREGA, ANULADA, DIREC_EMBARQUE, EMBARCAR_A, DIRECCION_FACTURA, OBSERVACIONES, RUTA, USUARIO, USUARIO_ANULA, ZONA, VENDEDOR, REIMPRESO) VALUES (@FACTURA, @CLIENTE, @NOMBRE_CLIENTE, @TIPO_DOCUMENTO, @PEDIDO, @FACTURA_ORIGINAL, @FECHA, @FECHA_ENTREGA, @ANULADA, @DIREC_EMBARQUE, @EMBARCAR_A, @DIRECCION_FACTURA, @OBSERVACIONES, @RUTA, @USUARIO, @USUARIO_ANULA, @ZONA, @VENDEDOR, @REIMPRESO)');
     const transaction = db.transaction((data: ErpInvoiceHeader[]) => {
         db.prepare('DELETE FROM core_erp_invoice_headers').run();
         for(const header of data) {
@@ -1500,10 +1508,65 @@ export async function saveAllErpInvoiceLines(lines: ErpInvoiceLine[]): Promise<v
 
 export async function saveAllEmployees(data: any[]): Promise<void> {
     const db = await getDb();
-    const insert = db.prepare('INSERT OR REPLACE INTO core_employees (EMPLEADO, NOMBRE, ACTIVO, DEPARTAMENTO, PUESTO, NOMINA) VALUES (@EMPLEADO, @NOMBRE, @ACTIVO, @DEPARTAMENTO, @PUESTO, @NOMINA)');
+    const insert = db.prepare(`
+        INSERT OR REPLACE INTO core_employees (
+            EMPLEADO, NOMBRE, ACTIVO, DEPARTAMENTO, PUESTO, NOMINA, 
+            IDENTIFICACION, DIRECCION_HAB, PASAPORTE, PAIS, PERMISO_CONDUCIR, FECHA_INGRESO, FECHA_SALIDA
+        ) VALUES (
+            @EMPLEADO, @NOMBRE, @ACTIVO, @DEPARTAMENTO, @PUESTO, @NOMINA,
+            @IDENTIFICACION, @DIRECCION_HAB, @PASAPORTE, @PAIS, @PERMISO_CONDUCIR, @FECHA_INGRESO, @FECHA_SALIDA
+        )
+    `);
+    
+    const toBindValue = (val: any) => {
+        if (val === null || val === undefined) return null;
+        if (val instanceof Date) return val.toISOString();
+        return String(val);
+    };
+
     const transaction = db.transaction((rows: any[]) => {
         db.prepare('DELETE FROM core_employees').run();
-        for(const row of rows) insert.run(row);
+        for(const row of rows) {
+            let fechaIngreso = row.FECHA_INGRESO;
+            let fechaSalida = row.FECHA_SALIDA;
+
+            const parseDateHelper = (val: any): Date | null => {
+                if (!val) return null;
+                const d = new Date(val);
+                if (isNaN(d.getTime())) return null;
+                return d;
+            };
+
+            const dateIngreso = parseDateHelper(fechaIngreso);
+            const dateSalida = parseDateHelper(fechaSalida);
+
+            if (dateSalida) {
+                const is1980 = dateSalida.getUTCFullYear() === 1980 && dateSalida.getUTCMonth() === 0 && dateSalida.getUTCDate() === 1;
+                const isLocal1980 = dateSalida.getFullYear() === 1980 && dateSalida.getMonth() === 0 && dateSalida.getDate() === 1;
+                const isBeforeIngreso = dateIngreso ? dateSalida.getTime() < dateIngreso.getTime() : false;
+
+                if (is1980 || isLocal1980 || isBeforeIngreso) {
+                    fechaSalida = null;
+                }
+            }
+
+            const sanitized = {
+                EMPLEADO: toBindValue(row.EMPLEADO),
+                NOMBRE: toBindValue(row.NOMBRE),
+                ACTIVO: toBindValue(row.ACTIVO),
+                DEPARTAMENTO: toBindValue(row.DEPARTAMENTO),
+                PUESTO: toBindValue(row.PUESTO),
+                NOMINA: toBindValue(row.NOMINA),
+                IDENTIFICACION: toBindValue(row.IDENTIFICACION),
+                DIRECCION_HAB: toBindValue(row.DIRECCION_HAB),
+                PASAPORTE: toBindValue(row.PASAPORTE),
+                PAIS: toBindValue(row.PAIS),
+                PERMISO_CONDUCIR: toBindValue(row.PERMISO_CONDUCIR),
+                FECHA_INGRESO: toBindValue(fechaIngreso),
+                FECHA_SALIDA: toBindValue(fechaSalida)
+            };
+            insert.run(sanitized);
+        }
     });
     transaction(data);
 }
@@ -1541,7 +1604,7 @@ export async function saveAllPayrolls(data: any[]): Promise<void> {
 
 export async function saveAllSalespersons(data: any[]): Promise<void> {
     const db = await getDb();
-    const insert = db.prepare('INSERT OR REPLACE INTO core_salespersons (VENDEDOR, NOMBRE, EMPLEADO) VALUES (@VENDEDOR, @NOMBRE, @EMPLEADO)');
+    const insert = db.prepare('INSERT OR REPLACE INTO core_salespersons (VENDEDOR, NOMBRE, ACTIVO, EMPLEADO, E_MAIL, TELEFONO) VALUES (@VENDEDOR, @NOMBRE, @ACTIVO, @EMPLEADO, @E_MAIL, @TELEFONO)');
     const transaction = db.transaction((rows: any[]) => {
         db.prepare('DELETE FROM core_salespersons').run();
         for(const row of rows) insert.run(row);
@@ -1614,6 +1677,17 @@ export async function deleteNotificationById(id: number): Promise<void> {
     const db = await getDb();
     db.prepare('DELETE FROM core_notifications WHERE id = ?').run(id);
 }
+
+export async function clearAllNotifications(userId: number): Promise<void> {
+    const db = await getDb();
+    db.prepare('DELETE FROM core_notifications WHERE userId = ?').run(userId);
+}
+
+export async function clearReadNotifications(userId: number): Promise<void> {
+    const db = await getDb();
+    db.prepare('DELETE FROM core_notifications WHERE userId = ? AND isRead = 1').run(userId);
+}
+
 
 
 // --- User Preferences ---
@@ -1692,3 +1766,93 @@ export async function searchErpInvoices(clientId: string, searchTerm: string, li
     const results = db.prepare(query).all(...params) as ErpInvoiceHeader[];
     return JSON.parse(JSON.stringify(results));
 }
+
+export async function getAllSalespersons(): Promise<any[]> {
+    const db = await getDb();
+    try {
+        const rows = db.prepare('SELECT * FROM core_salespersons ORDER BY NOMBRE ASC').all();
+        return JSON.parse(JSON.stringify(rows));
+    } catch (e) {
+        console.error('Error in getAllSalespersons:', e);
+        return [];
+    }
+}
+
+export async function getPaginatedCustomers(search?: string, activeOnly?: boolean, page = 1, pageSize = 20, hasLocationOnly?: boolean): Promise<{ customers: Customer[]; totalCount: number; totalPages: number }> {
+    const db = await getDb();
+    try {
+        let whereClauses: string[] = [];
+        const params: any[] = [];
+
+        if (search) {
+            whereClauses.push('(id LIKE ? OR name LIKE ? OR taxId LIKE ?)');
+            const s = `%${search}%`;
+            params.push(s, s, s);
+        }
+
+        if (activeOnly) {
+            whereClauses.push("active = 'S'");
+        }
+
+        if (hasLocationOnly) {
+            whereClauses.push("EXISTS (SELECT 1 FROM core_customer_shipment_addresses WHERE cliente_id = core_customers.id AND latitude IS NOT NULL AND longitude IS NOT NULL)");
+        }
+
+        const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+        
+        const countRow = db.prepare(`SELECT COUNT(*) as count FROM core_customers ${whereSql}`).get(...params) as { count: number } | undefined;
+        const totalCount = countRow?.count || 0;
+        const totalPages = Math.ceil(totalCount / pageSize);
+
+        const offset = (page - 1) * pageSize;
+        const customers = db.prepare(`
+            SELECT * FROM core_customers 
+            ${whereSql} 
+            ORDER BY name ASC 
+            LIMIT ? OFFSET ?
+        `).all(...params, pageSize, offset) as Customer[];
+
+        return {
+            customers: JSON.parse(JSON.stringify(customers)),
+            totalCount,
+            totalPages
+        };
+    } catch (error) {
+        console.error("Failed to get paginated customers:", error);
+        return { customers: [], totalCount: 0, totalPages: 0 };
+    }
+}
+
+export async function getCustomerShipmentAddresses(clienteId: string): Promise<any[]> {
+    const db = await getDb();
+    try {
+        const rows = db.prepare(`
+            SELECT * FROM core_customer_shipment_addresses 
+            WHERE cliente_id = ? 
+            ORDER BY direccion_id ASC
+        `).all(clienteId);
+        return JSON.parse(JSON.stringify(rows));
+    } catch (error) {
+        console.error(`Failed to get shipment addresses for customer ${clienteId}:`, error);
+        return [];
+    }
+}
+
+export async function updateShipmentAddressCoordinates(clienteId: string, direccionId: string, latitude: number | null, longitude: number | null): Promise<void> {
+    const db = await getDb();
+    try {
+        db.prepare(`
+            INSERT INTO core_customer_shipment_addresses (
+                cliente_id, direccion_id, latitude, longitude
+            ) VALUES (
+                ?, ?, ?, ?
+            ) ON CONFLICT(cliente_id, direccion_id) DO UPDATE SET
+                latitude = excluded.latitude,
+                longitude = excluded.longitude
+        `).run(clienteId, direccionId, latitude, longitude);
+    } catch (error) {
+        console.error(`Failed to update shipment address coordinates for customer ${clienteId} address ${direccionId}:`, error);
+        throw error;
+    }
+}
+

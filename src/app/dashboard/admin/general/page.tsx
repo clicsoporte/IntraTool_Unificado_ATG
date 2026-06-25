@@ -284,6 +284,33 @@ export default function GeneralSettingsPage() {
                           Después de cuánto tiempo sin sincronizar se mostrará la alerta. Formato HH:MM o decimal (ej: 0.5 para 30 min).
                        </p>
                   </div>
+                   <div className="space-y-2">
+                        <Label htmlFor="timeZone">Zona Horaria Comercial</Label>
+                        <select 
+                            id="timeZone"
+                            value={companyData.timeZone || 'America/Costa_Rica'}
+                            onChange={(e) => setCompanyData(prev => prev ? ({...prev, timeZone: e.target.value}) : null)}
+                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                            <optgroup label="Centroamérica y Latam">
+                                <option value="America/Costa_Rica">🇨🇷 Costa Rica (GMT-6)</option>
+                                <option value="America/Panama">🇵🇦 Panamá (GMT-5)</option>
+                                <option value="America/Bogota">🇨🇴 Colombia (GMT-5)</option>
+                                <option value="America/Mexico_City">🇲🇽 México (GMT-6)</option>
+                                <option value="America/Guatemala">🇬🇹 Guatemala (GMT-6)</option>
+                                <option value="America/El_Salvador">🇸🇻 El Salvador (GMT-6)</option>
+                                <option value="America/Managua">🇳🇮 Nicaragua (GMT-6)</option>
+                                <option value="America/Tegucigalpa">🇭🇳 Honduras (GMT-6)</option>
+                            </optgroup>
+                            <optgroup label="Otras Zonas">
+                                <option value="UTC">🌐 UTC (GMT+0)</option>
+                                <option value="America/New_York">🇺🇸 US Eastern (GMT-5)</option>
+                            </optgroup>
+                        </select>
+                        <p className="text-xs text-muted-foreground pt-1">
+                            Huso horario que el bot de Telegram y la consola usarán para delimitar la jornada laboral.
+                        </p>
+                   </div>
                   <div className="space-y-2 md:col-span-2">
                       <Label htmlFor="publicUrl">URL Pública de la Aplicación</Label>
                       <Input 

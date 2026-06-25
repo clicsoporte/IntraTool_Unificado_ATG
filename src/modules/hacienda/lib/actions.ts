@@ -7,7 +7,7 @@
 'use server';
 
 import { logError } from '@/modules/core/lib/logger';
-import { getApiSettings, getCabysCatalog } from '@/modules/core/lib/db';
+import { getApiSettings, getCabysCatalog, getAllExemptions } from '@/modules/core/lib/db';
 import { authorizeAction } from '@/modules/core/lib/auth-guard';
 import type { HaciendaContributorInfo, HaciendaExemptionApiResponse, EnrichedExemptionInfo, EnrichedCabysItem } from '@/modules/core/types';
 
@@ -139,4 +139,9 @@ export async function getEnrichedExemptionStatus(authNumber: string): Promise<En
     };
 
     return result;
+}
+
+export async function getExemptionsAction() {
+    await authorizeAction('hacienda:query');
+    return getAllExemptions();
 }

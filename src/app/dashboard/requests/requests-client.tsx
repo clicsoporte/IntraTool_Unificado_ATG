@@ -32,6 +32,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { useAuth } from '@/modules/core/hooks/useAuth';
+import { useLoading } from '@/modules/core/hooks/useLoading';
 import { Separator } from '@/components/ui/separator';
 import { usePageTitle } from '@/modules/core/hooks/usePageTitle';
 import { MultiSelectFilter } from '@/components/ui/multi-select-filter';
@@ -82,8 +83,23 @@ export default function RequestsClient() {
         analysisCost,
         analysisSalePrice,
         rowsPerPage,
-        erpEntryNumber
     } = state;
+
+    const { showLoading, hideLoading } = useLoading();
+
+    React.useEffect(() => {
+        if (isLoading && !state.isRefreshing) {
+            showLoading("Cargando solicitudes de compra...");
+        } else if (isSubmitting) {
+            showLoading("Procesando solicitud...");
+        } else {
+            hideLoading();
+        }
+        // Cleanup on unmount
+        return () => {
+            hideLoading();
+        };
+    }, [isLoading, state.isRefreshing, isSubmitting, showLoading, hideLoading]);
 
 
     if (!isAuthReady) {
@@ -364,7 +380,7 @@ export default function RequestsClient() {
                         </Dialog>
                         {selectors.hasPermission('analytics:purchase-suggestions:read') && (
                             <Button asChild variant="secondary" className="bg-blue-600 text-white hover:bg-blue-700">
-                                <Link href="/dashboard/analytics/purchase-suggestions">
+                                <Link href="/dashboard/analytics/purchase-suggestions" prefetch={false}>
                                     <Lightbulb className="mr-2" />
                                     Sugerencias de Compra
                                 </Link>
@@ -510,12 +526,6 @@ export default function RequestsClient() {
             <Dialog open={isAddNoteDialogOpen} onOpenChange={actions.setAddNoteDialogOpen}><DialogContent><DialogHeader><DialogTitle>Añadir Nota a la Solicitud {notePayload?.requestId}</DialogTitle><DialogDescription>Agrega una nota o actualización a la solicitud sin cambiar su estado actual.</DialogDescription></DialogHeader><div className="py-4 space-y-2"><Label htmlFor="add-note-textarea">Nota</Label><Textarea id="add-note-textarea" value={notePayload?.notes || ''} onChange={e => actions.setNotePayload({ ...state.notePayload, notes: e.target.value } as RequestNotePayload)} placeholder="Añade aquí una nota o actualización..." /></div><DialogFooter><DialogClose asChild><Button variant="ghost">Cancelar</Button></DialogClose><Button onClick={actions.handleAddNote} disabled={isSubmitting}>{isSubmitting && <Loader2 className="mr-2 animate-spin"/>}Añadir Nota</Button></DialogFooter></DialogContent></Dialog>
             <Dialog open={isTransitsDialogOpen} onOpenChange={actions.setTransitsDialogOpen}><DialogContent><DialogHeader><DialogTitle>Tránsitos para el Producto</DialogTitle><DialogDescription>Órdenes de compra activas en el ERP para el artículo: <strong>{activeTransits?.itemDescription}</strong> ({activeTransits?.itemId})</DialogDescription></DialogHeader><div className="py-4">{activeTransits && activeTransits.transits.length > 0 ? (<ScrollArea className="h-60"><Table><TableHeader><TableRow><TableHead>Nº OC</TableHead><TableHead>Proveedor</TableHead><TableHead>Fecha</TableHead><TableHead className="text-right">Cantidad</TableHead></TableRow></TableHeader><TableBody>{activeTransits.transits.map((transit: ErpPOHeader & { quantity: number, supplierName: string }) => (<TableRow key={transit.ORDEN_COMPRA}><TableCell>{transit.ORDEN_COMPRA}</TableCell><TableCell>{transit.supplierName}</TableCell><TableCell>{format(new Date(transit.FECHA_HORA), 'dd/MM/yyyy')}</TableCell><TableCell className="text-right font-medium">{transit.quantity}</TableCell></TableRow>))}</TableBody></Table></ScrollArea>) : (<p className="text-center text-muted-foreground py-8">No se encontraron tránsitos activos para este artículo.</p>)}</div></DialogContent></Dialog>
             <Dialog open={isCostAnalysisDialogOpen} onOpenChange={actions.setCostAnalysisDialogOpen}><DialogContent><DialogHeader><DialogTitle>Análisis de Costo y Venta</DialogTitle><DialogDescription>Calcula el margen de ganancia para esta solicitud.</DialogDescription></DialogHeader><div className="grid gap-4 py-4"><div className="space-y-2"><Label htmlFor="analysis-cost">Costo del Artículo</Label><Input id="analysis-cost" type="number" value={state.analysisCost || ''} onChange={e => actions.setAnalysisCost(e.target.value)} /></div><div className="space-y-2"><Label htmlFor="analysis-sale-price">Precio de Venta</Label><Input id="analysis-sale-price" type="number" value={state.analysisSalePrice || ''} onChange={e => actions.setAnalysisSalePrice(e.target.value)} /></div><div className="mt-4 flex justify-between items-center text-sm font-medium"><p>Margen de Ganancia:</p><p className={cn(selectors.costAnalysis?.margin < 0 && 'text-red-500')}>{selectors.costAnalysis?.margin?.toFixed(2)}%</p></div>{selectors.costAnalysis?.margin < 0 && (<div className="text-xs text-red-500 text-center flex items-center gap-2 justify-center"><AlertTriangle className="h-4 w-4" />Estás vendiendo este artículo con pérdidas.</div>)}</div><DialogFooter><DialogClose asChild><Button variant="ghost">Cancelar</Button></DialogClose><Button onClick={actions.handleSaveCostAnalysis} disabled={isSubmitting}>{isSubmitting && <Loader2 className="mr-2 animate-spin" />}Guardar Análisis</Button></DialogFooter></DialogContent></Dialog>
-            {(isSubmitting || isLoading) && (
-                <div className="fixed bottom-4 right-4 flex items-center gap-2 rounded-lg bg-primary p-3 text-primary-foreground shadow-lg">
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                    <span>Procesando...</span>
-                </div>
-            )}
         </main>
     );
 }

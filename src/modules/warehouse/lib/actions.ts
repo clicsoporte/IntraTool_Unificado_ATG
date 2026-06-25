@@ -16,6 +16,7 @@ import {
     updateInventory as updateInventoryServer,
     getItemLocations as getItemLocationsServer,
     getAllItemLocations as getAllItemLocationsServer,
+    getItemLocationsPaginated as getItemLocationsPaginatedServer,
     assignItemToLocation as assignItemToLocationServer,
     unassignItemFromLocation as unassignItemFromLocationServer,
     getWarehouseData as getWarehouseDataServer,
@@ -124,6 +125,13 @@ export const updateInventory = async(itemId: string, locationId: number, quantit
 // --- Simple Mode Actions ---
 export const getItemLocations = async (itemId: string): Promise<ItemLocation[]> => getItemLocationsServer(itemId);
 export const getAllItemLocations = async (): Promise<ItemLocation[]> => getAllItemLocationsServer();
+export const getItemLocationsPaginated = async (params: {
+    page: number;
+    limit: number;
+    search?: string;
+    sortKey?: string;
+    sortDirection?: 'asc' | 'desc';
+}): Promise<{ assignments: ItemLocation[]; totalCount: number }> => getItemLocationsPaginatedServer(params);
 
 export async function assignItemToLocation(payload: Partial<Omit<ItemLocation, 'updatedAt'>> & { updatedBy: string }, mode?: 'move' | 'add' | 'add_and_mix' | 'move_and_mix'): Promise<{ success: boolean; data?: ItemLocation; error?: string }> {
     return assignItemToLocationServer(payload, mode);

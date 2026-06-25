@@ -1,4 +1,6 @@
 import { getFleetSettingsAction, addFleetSettingAction, deleteFleetSettingAction, getAllEmployeesAction } from "@/modules/fleet/lib/actions";
+import { getDeliverySettings, updateDeliverySettings } from "@/modules/operations/lib/actions";
+import { revalidatePath } from "next/cache";
 import { Truck, Plus, Trash2, Settings2, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -14,7 +16,20 @@ export default async function FleetSettingsPage() {
 
     const settings = await getFleetSettingsAction();
     const allEmployees = await getAllEmployeesAction();
-    const currentDrivers = settings.filter((s: any) => s.category === 'driver');
+    const currentDrivers = (settings || []).filter((s: any) => s.category === 'driver');
+
+    // Load Telegram Bot delivery settings (v4.2)
+    const deliverySettings = await getDeliverySettings();
+    const rtvEnabled = deliverySettings.bot_ask_rtv !== 'false';
+
+    const toggleRtvAction = async () => {
+        'use server';
+        await updateDeliverySettings({
+            ...deliverySettings,
+            bot_ask_rtv: rtvEnabled ? 'false' : 'true'
+        });
+        revalidatePath('/dashboard/admin/fleet');
+    };
 
     const categories = [
         { id: 'brand', name: 'Marcas de Vehículo', permission: 'fleet:settings:brands' },
@@ -68,7 +83,7 @@ export default async function FleetSettingsPage() {
                                 <p className="text-sm text-muted-foreground">Si se activa, el campo de conductor no aparecerá en el formulario de repostaje (uso simplificado).</p>
                             </div>
                             {(() => {
-                                const driverSetting = settings.find((s: any) => s.category === 'driver_requirement' && s.value === 'enabled');
+                                const driverSetting = (settings || []).find((s: any) => s.category === 'driver_requirement' && s.value === 'enabled');
                                 const isEnabled = !!driverSetting;
                                 const settingId = driverSetting?.id; // PRIMITIVE ONLY
                                 
@@ -93,6 +108,36 @@ export default async function FleetSettingsPage() {
                                     </form>
                                 );
                             })()}
+                        </div>
+                    </CardContent>
+                </Card>
+
+                {/* Configuración del Bot de Telegram para Flota */}
+                <Card className="md:col-span-2 border-sky-200 bg-sky-50/15">
+                    <CardHeader className="pb-3">
+                        <CardTitle className="text-lg flex items-center gap-2 text-sky-700">
+                            <Truck className="w-4 h-4" />
+                            Configuración del Bot de Telegram (Módulo Flota)
+                        </CardTitle>
+                        <CardDescription>
+                            Ajustes específicos del asistente de Telegram aplicables a vehículos y conductores.
+                        </CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                        <div className="flex items-center justify-between p-4 bg-white rounded-lg border border-sky-100 shadow-sm">
+                            <div className="space-y-0.5">
+                                <h3 className="font-medium text-sky-900">Preguntar RTV / Trámite</h3>
+                                <p className="text-sm text-muted-foreground">Habilitar flujos de trámites y RTV en el asistente de Telegram para los choferes.</p>
+                            </div>
+                            <form action={toggleRtvAction}>
+                                <Button 
+                                    variant={rtvEnabled ? "destructive" : "default"}
+                                    className={rtvEnabled ? "" : "bg-sky-600 hover:bg-sky-700 text-white"}
+                                    type="submit"
+                                >
+                                    {rtvEnabled ? 'Activo (Mostrar Opción)' : 'Inactivo (Ocultar Opción)'}
+                                </Button>
+                            </form>
                         </div>
                     </CardContent>
                 </Card>
@@ -138,9 +183,11 @@ export default async function FleetSettingsPage() {
                             />
 
                             <div className="border rounded-md divide-y max-h-[300px] overflow-y-auto">
-                                {settings
-                                    .filter((s: any) => s.category === category.id)
-                                    .map((setting: any) => (
+                                {(() => {
+                                    const filtered = (settings || []).filter((s: any) => s.category === category.id);
+                                    return (
+                                        <>
+                                            {filtered.map((setting: any) => (
                                         <div key={setting.id} className="flex items-center justify-between p-3 hover:bg-muted/50 transition-colors">
                                             <div className="flex flex-col">
                                                 <span className="text-sm font-medium">{setting.value}</span>
@@ -160,11 +207,14 @@ export default async function FleetSettingsPage() {
                                             </form>
                                         </div>
                                     ))}
-                                {settings.filter((s: any) => s.category === category.id).length === 0 && (
-                                    <div className="p-8 text-center text-muted-foreground italic text-sm">
-                                        No hay valores definidos.
-                                    </div>
-                                )}
+                                            {filtered.length === 0 && (
+                                                <div className="p-8 text-center text-muted-foreground italic text-sm">
+                                                    No hay valores definidos.
+                                                </div>
+                                            )}
+                                        </>
+                                    );
+                                })()}
                             </div>
                         </CardContent>
                     </Card>

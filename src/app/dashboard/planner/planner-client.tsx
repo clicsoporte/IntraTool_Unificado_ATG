@@ -31,6 +31,7 @@ import { DialogColumnSelector } from '@/components/ui/dialog-column-selector';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger, SheetFooter } from '@/components/ui/sheet';
 import { useAuth } from '@/modules/core/hooks/useAuth';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { useLoading } from '@/modules/core/hooks/useLoading';
 
 
 /**
@@ -46,6 +47,8 @@ export default function PlannerClient() {
         isAuthorized,
     } = usePlanner();
     const { isAuthReady } = useAuth();
+    const { showLoading, hideLoading } = useLoading();
+    
     const {
         isLoading, isSubmitting, isRefreshing, isNewOrderDialogOpen, isEditOrderDialogOpen, orders, viewingArchived,
         currentPage, pageSize, plannerSettings, newOrder, orderToEdit,
@@ -57,6 +60,20 @@ export default function PlannerClient() {
         dynamicStatusConfig, isAddNoteDialogOpen, notePayload, isActionDialogOpen,
         activeOrdersForSelectedProduct, visibleColumns, orderToConfirmModification
     } = state;
+
+    React.useEffect(() => {
+        if (isLoading && !isRefreshing) {
+            showLoading("Cargando órdenes de producción...");
+        } else if (isSubmitting) {
+            showLoading("Procesando solicitud...");
+        } else {
+            hideLoading();
+        }
+        // Cleanup on unmount
+        return () => {
+            hideLoading();
+        };
+    }, [isLoading, isRefreshing, isSubmitting, showLoading, hideLoading]);
 
     if (!isAuthReady) {
         return (
@@ -672,12 +689,6 @@ export default function PlannerClient() {
                 </DialogContent>
             </Dialog>
 
-            {(isSubmitting || isLoading) && (
-                <div className="fixed bottom-4 right-4 flex items-center gap-2 rounded-lg bg-primary p-3 text-primary-foreground shadow-lg">
-                    <Loader2 className="h-5 w-5 animate-spin" />
-                    <span>Procesando...</span>
-                </div>
-            )}
         </main>
     );
 }

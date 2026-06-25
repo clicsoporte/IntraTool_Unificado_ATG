@@ -12,6 +12,7 @@ import {
     getUnreadSuggestions as dbGetUnreadSuggestions,
     getUnreadSuggestionsCount as dbGetUnreadSuggestionsCount,
     getDb,
+    addLog,
 } from '@/modules/core/lib/db';
 import type { Suggestion } from '@/modules/core/types';
 import { logInfo, logError } from '@/modules/core/lib/logger';
@@ -65,14 +66,15 @@ export async function getUnreadSuggestionsCount(): Promise<number> {
  * @param userId - The ID of the user submitting the suggestion.
  * @param userName - The name of the user submitting the suggestion.
  */
-export async function addSuggestion(content: string, userId: number, userName: string): Promise<void> {
+export async function addSuggestion(content: string, userId: number | null | undefined, userName: string): Promise<void> {
     const db = await getDb();
     let newSuggestionId;
     try {
+        const dbUserId = (userId && userId !== 0) ? userId : null;
         const info = db.prepare(`
             INSERT INTO core_suggestions (content, userId, userName, isRead, timestamp)
             VALUES (?, ?, ?, 0, ?)
-        `).run(content, userId, userName, new Date().toISOString());
+        `).run(content, dbUserId, userName, new Date().toISOString());
         newSuggestionId = info.lastInsertRowid;
         
         await logInfo('New suggestion submitted', { user: userName });
@@ -97,5 +99,36 @@ export async function addSuggestion(content: string, userId: number, userName: s
         } catch (notificationError: any) {
             logError("Failed to create notification for new suggestion", { error: notificationError.message, suggestionId: newSuggestionId });
         }
+    }
+}
+
+/**
+ * Logs a global dashboard crash to both core_logs and core_suggestions.
+ * @param errorMessage - The message of the error.
+ * @param errorStack - The stack trace of the error.
+ */
+export async function logDashboardErrorAction(errorMessage: string, errorStack?: string): Promise<void> {
+    try {
+        // 1. Add to database logs (Visible in /dashboard/admin/logs)
+        await addLog({
+            type: 'ERROR',
+            message: `⚠️ CRASH: Dashboard Error Boundary triggered`,
+            details: {
+                errorMessage,
+                errorStack: errorStack || 'No stack trace provided'
+            }
+        });
+
+        // 2. Submit as an automatic suggestion (Visible in /dashboard/admin/suggestions)
+        const content = `🚨 [REPORTE AUTOMÁTICO DE ERROR]\nSe ha detectado un fallo inesperado en el dashboard.\n\n` +
+            `• Error: ${errorMessage}\n` +
+            `• Detalles: ${errorStack ? errorStack.substring(0, 500) + '...' : 'No hay detalles de pila.'}\n\n` +
+            `Por favor, revise el Visor de Eventos en /dashboard/admin/logs para ver los detalles completos.`;
+            
+        await addSuggestion(content, null, 'Sistema (Fallo de Dashboard)');
+        
+        logInfo('Dashboard crash logged successfully to DB and Suggestions.', { error: errorMessage });
+    } catch (e: any) {
+        logError('Failed to log dashboard crash boundary:', { error: e.message });
     }
 }

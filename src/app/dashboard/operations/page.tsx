@@ -14,7 +14,14 @@ export default function OperationsPage() {
     }, [setTitle]);
 
     const submodules: any[] = [
-        // More submodules can be added here
+        {
+            href: "/dashboard/operations/logistics",
+            title: "Logística y Despacho 🚛",
+            description: "Monitoreo de entregas en tiempo real, despacho de camiones, control de rutas y gestión de solicitudes de recolección para compras.",
+            icon: Truck,
+            bgColor: "bg-teal-600",
+            color: "text-teal-600"
+        }
     ];
 
     return (
@@ -32,7 +39,7 @@ export default function OperationsPage() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {submodules.map((sub) => (
-                        <Link key={sub.href} href={sub.href}>
+                        <Link key={sub.href} href={sub.href} prefetch={false}>
                             <Card className="group hover:shadow-xl transition-all border-none shadow-md overflow-hidden relative">
                                 <div className={`absolute top-0 right-0 w-32 h-32 -mr-8 -mt-8 rounded-full ${sub.bgColor} opacity-20 group-hover:scale-110 transition-transform`} />
                                 <CardHeader className="pb-2 flex flex-row items-center gap-4">

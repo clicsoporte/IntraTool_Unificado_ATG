@@ -5,8 +5,10 @@
 
 import fs from 'fs';
 import path from 'path';
-import { importAllData } from './db';
+import { importAllData, getPaginatedCustomers, getCustomerShipmentAddresses, updateShipmentAddressCoordinates } from './db';
 import { logWarn } from './logger';
+import { Customer } from '@/modules/core/types';
+import { authorizeAction } from './auth-guard';
 
 /**
  * A server action that triggers a full data synchronization from the configured source (file or SQL).
@@ -49,4 +51,19 @@ export async function cleanupAllExportFiles(): Promise<number> {
         }
     }
     return deletedCount;
+}
+
+export async function getPaginatedCustomersAction(search?: string, activeOnly?: boolean, page?: number, pageSize?: number, hasLocationOnly?: boolean): Promise<{ customers: Customer[]; totalCount: number; totalPages: number }> {
+    await authorizeAction('deliveries:customers');
+    return await getPaginatedCustomers(search, activeOnly, page, pageSize, hasLocationOnly);
+}
+
+export async function getCustomerShipmentAddressesAction(clienteId: string): Promise<any[]> {
+    await authorizeAction('deliveries:customers');
+    return await getCustomerShipmentAddresses(clienteId);
+}
+
+export async function updateShipmentAddressCoordinatesAction(clienteId: string, direccionId: string, latitude: number | null, longitude: number | null): Promise<void> {
+    await authorizeAction('deliveries:customers');
+    return await updateShipmentAddressCoordinates(clienteId, direccionId, latitude, longitude);
 }

@@ -17,14 +17,16 @@ interface ManageDriversClientProps {
 export default function ManageDriversClient({ currentDrivers, allEmployees }: ManageDriversClientProps) {
     const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>("");
     const [showInactive, setShowInactive] = useState<boolean>(false);
+    const [showAllStaff, setShowAllStaff] = useState<boolean>(false);
     const [isLoading, setIsLoading] = useState(false);
     const { toast } = useToast();
 
-    // We show employees that are not already drivers, optionally filtering out inactive ones
+    // We show employees that are not already drivers, optionally filtering out inactive ones and restricting to 'TR' department by default
     const availableEmployees = allEmployees.filter(emp => {
         const isNotDriver = !currentDrivers.some(d => d.value === emp.id);
         const isStatusMatch = showInactive || emp.active === 'S';
-        return isNotDriver && isStatusMatch;
+        const isDeptMatch = showAllStaff || emp.DEPARTAMENTO === 'TR';
+        return isNotDriver && isStatusMatch && isDeptMatch;
     });
 
     const handleAddDriver = async () => {
@@ -77,15 +79,28 @@ export default function ManageDriversClient({ currentDrivers, allEmployees }: Ma
                         Agregar
                     </Button>
                 </div>
-                <div className="flex items-center space-x-2 px-1">
-                    <Checkbox 
-                        id="showInactiveDrivers" 
-                        checked={showInactive} 
-                        onCheckedChange={(checked) => setShowInactive(!!checked)} 
-                    />
-                    <Label htmlFor="showInactiveDrivers" className="text-xs text-muted-foreground font-normal cursor-pointer select-none">
-                        Mostrar también inactivos en el buscador
-                    </Label>
+                <div className="flex flex-wrap items-center gap-4 px-1">
+                    <div className="flex items-center space-x-2">
+                        <Checkbox 
+                            id="showInactiveDrivers" 
+                            checked={showInactive} 
+                            onCheckedChange={(checked) => setShowInactive(!!checked)} 
+                        />
+                        <Label htmlFor="showInactiveDrivers" className="text-xs text-muted-foreground font-normal cursor-pointer select-none">
+                            Mostrar también inactivos en el buscador
+                        </Label>
+                    </div>
+                    
+                    <div className="flex items-center space-x-2">
+                        <Checkbox 
+                            id="showAllStaff" 
+                            checked={showAllStaff} 
+                            onCheckedChange={(checked) => setShowAllStaff(!!checked)} 
+                        />
+                        <Label htmlFor="showAllStaff" className="text-xs text-muted-foreground font-normal cursor-pointer select-none">
+                            Habilitar toda la planilla (Mostrar todo)
+                        </Label>
+                    </div>
                 </div>
             </div>
 

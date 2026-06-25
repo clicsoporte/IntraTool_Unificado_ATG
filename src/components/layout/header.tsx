@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { UserNav } from "./user-nav";
 import { NotificationBell } from "./notification-bell";
@@ -39,6 +39,23 @@ function HeaderActions() {
     const [suggestion, setSuggestion] = useState("");
     const [isSubmittingSuggestion, setIsSubmittingSuggestion] = useState(false);
     const [isSuggestionDialogOpen, setSuggestionDialogOpen] = useState(false);
+    const [currentTime, setCurrentTime] = useState<Date | null>(null);
+
+    useEffect(() => {
+        setCurrentTime(new Date());
+        const timer = setInterval(() => {
+            setCurrentTime(new Date());
+        }, 1000);
+        return () => clearInterval(timer);
+    }, []);
+
+    const getTimezoneOffsetString = (date: Date) => {
+        const offset = -date.getTimezoneOffset();
+        const sign = offset >= 0 ? '+' : '-';
+        const hours = Math.floor(Math.abs(offset) / 60);
+        const minutes = Math.abs(offset) % 60;
+        return `GMT${sign}${hours}${minutes > 0 ? `:${String(minutes).padStart(2, '0')}` : ''}`;
+    };
 
     const isSyncOld = companyData?.lastSyncTimestamp && companyData?.syncWarningHours 
       ? (new Date().getTime() - parseISO(companyData.lastSyncTimestamp).getTime()) > (companyData.syncWarningHours * 60 * 60 * 1000) 
@@ -94,6 +111,15 @@ function HeaderActions() {
 
     return (
         <>
+            {currentTime && (
+                <div className="hidden items-center gap-2 text-sm text-muted-foreground p-2 border rounded-lg md:flex bg-slate-50/50 dark:bg-slate-900/10">
+                    <Clock className="h-4 w-4 text-blue-500 animate-pulse" />
+                    <span className="font-mono text-xs font-semibold">
+                        {format(currentTime, 'dd/MM/yy HH:mm:ss')}
+                        <span className="text-[10px] text-slate-400 ml-1.5 font-sans font-bold">({getTimezoneOffsetString(currentTime)})</span>
+                    </span>
+                </div>
+            )}
             {exchangeRateData.rate && (
                 <div className="hidden items-center gap-2 text-sm text-muted-foreground p-2 border rounded-lg sm:flex">
                     <DollarSign className="h-4 w-4"/>

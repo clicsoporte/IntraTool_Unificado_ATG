@@ -23,6 +23,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { useLoading } from '@/modules/core/hooks/useLoading';
 
 function StatusUpdateDialog({ hook }: { hook: ReturnType<typeof useConsignmentsBoletas> }) {
     const { state, actions } = hook;
@@ -253,7 +254,21 @@ export default function BoletasClient() {
     const { state, actions, selectors } = useConsignmentsBoletas();
     const { sortKey, sortDirection, filters } = state;
     const { sortedBoletas, agreementOptions } = selectors;
+    const { showLoading, hideLoading } = useLoading();
     usePageTitle().setTitle('Gestión de Boletas');
+
+    React.useEffect(() => {
+        if (state.isRefreshing) {
+            showLoading("Refrescando boletas...");
+        } else if (state.isSubmitting) {
+            showLoading("Guardando cambios...");
+        } else {
+            hideLoading();
+        }
+        return () => {
+            hideLoading();
+        };
+    }, [state.isRefreshing, state.isSubmitting, showLoading, hideLoading]);
 
     const renderSortIcon = (key: BoletaSortKey) => {
         if (sortKey !== key) return null;

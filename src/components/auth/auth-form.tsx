@@ -31,9 +31,8 @@ import type { User } from "@/modules/core/types";
 import { useToast } from "@/modules/core/hooks/use-toast";
 import {
   login,
-  getAllUsers,
-  saveAllUsers,
   sendRecoveryEmail,
+  completeForcedPasswordChange,
 } from "@/modules/core/lib/auth-client";
 import { logInfo, logWarn, logError } from "@/modules/core/lib/logger";
 import { useAuth } from "@/modules/core/hooks/useAuth";
@@ -121,14 +120,15 @@ export function AuthForm({ initialHasUsers, initialCompanyName, initialSystemVer
 
     setIsProcessing(true);
     try {
-      const allUsers = await getAllUsers();
-      const updatedUsers = allUsers.map((u) => u.id === userForPasswordChange.id ? { ...u, password: newPassword, forcePasswordChange: false } : u);
-      await saveAllUsers(updatedUsers);
+      const response = await completeForcedPasswordChange(newPassword);
+      if (!response.success) {
+        throw new Error(response.error || "No se pudo actualizar la contraseña.");
+      }
       await logInfo(`Password for user ${userForPasswordChange.name} was changed successfully (forced).`);
       setAuthStep("recovery_success");
     } catch (error: any) {
       await logError("Failed to set new password", { error: error.message });
-      toast({ title: "Error", description: "No se pudo actualizar la contraseña.", variant: "destructive" });
+      toast({ title: "Error", description: error.message || "No se pudo actualizar la contraseña.", variant: "destructive" });
     } finally {
       setIsProcessing(false);
     }

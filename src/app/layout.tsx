@@ -1,12 +1,9 @@
 
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider } from "@/modules/core/hooks/useAuth";
-import { cn } from "@/lib/utils";
-
-const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
+import { LoadingProvider } from "@/modules/core/hooks/useLoading";
 
 export const metadata: Metadata = {
   title: "Clic-Tools",
@@ -20,9 +17,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="es" suppressHydrationWarning>
-      <body className={cn("font-sans", inter.variable)}>
+      <body className="font-sans">
         <AuthProvider>
+          <LoadingProvider>
             {children}
+          </LoadingProvider>
         </AuthProvider>
         <Toaster />
       </body>

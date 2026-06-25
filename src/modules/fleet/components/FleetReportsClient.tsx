@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react';
 import { 
     FileBarChart, Search, Filter, Download, 
     Calendar, Truck, Fuel, TrendingUp, DollarSign, Activity, SlidersHorizontal,
-    Camera
+    Camera, Pin, Check
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -21,6 +21,8 @@ import {
   DialogHeader, 
   DialogTitle, 
 } from "@/components/ui/dialog";
+import { saveUserPreferenceAction } from '@/modules/core/lib/auth';
+import { useToast } from '@/modules/core/hooks/use-toast';
 
 const parseLogPhoto = (text: string | null | undefined) => {
     if (!text) return { cleanText: "", photoFilename: null };
@@ -33,13 +35,82 @@ const parseLogPhoto = (text: string | null | undefined) => {
     return { cleanText: text, photoFilename: null };
 };
 
-export default function FleetReportsClient({ vehicles, fuelLogs }: { vehicles: any[], fuelLogs: any[] }) {
+const calculatePresetDates = (preset: string) => {
+    const today = new Date();
+    const format = (d: Date) => d.toISOString().split('T')[0];
+    
+    if (preset === 'current_month') {
+        const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
+        return { from: format(firstDay), to: format(today) };
+    } else if (preset === '3_months') {
+        const dateFrom = new Date();
+        dateFrom.setMonth(today.getMonth() - 3);
+        return { from: format(dateFrom), to: format(today) };
+    } else if (preset === '6_months') {
+        const dateFrom = new Date();
+        dateFrom.setMonth(today.getMonth() - 6);
+        return { from: format(dateFrom), to: format(today) };
+    } else if (preset === 'all') {
+        return { from: '', to: '' };
+    }
+    return null;
+};
+
+export default function FleetReportsClient({ 
+    vehicles, 
+    fuelLogs,
+    defaultRange = 'current_month',
+    currentUser
+}: { 
+    vehicles: any[], 
+    fuelLogs: any[],
+    defaultRange?: string,
+    currentUser?: any
+}) {
+    const { toast } = useToast();
+    const [currentDefaultRange, setCurrentDefaultRange] = useState(defaultRange);
+    const [presetRange, setPresetRange] = useState(defaultRange);
+
+    const initialDates = useMemo(() => {
+        return calculatePresetDates(defaultRange) || { from: '', to: '' };
+    }, [defaultRange]);
+
     const [filterPlate, setFilterPlate] = useState('all');
     const [filterBrand, setFilterBrand] = useState('all');
-    const [dateFrom, setDateFrom] = useState('');
-    const [dateTo, setDateTo] = useState('');
+    const [dateFrom, setDateFrom] = useState(initialDates.from);
+    const [dateTo, setDateTo] = useState(initialDates.to);
     const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
     const [selectedPhoto, setSelectedPhoto] = useState<string | null>(null);
+    const [isSavingPref, setIsSavingPref] = useState(false);
+
+    const handlePresetChange = (preset: string) => {
+        setPresetRange(preset);
+        const dates = calculatePresetDates(preset);
+        if (dates) {
+            setDateFrom(dates.from);
+            setDateTo(dates.to);
+        }
+    };
+
+    const handleManualDateFromChange = (val: string) => {
+        setDateFrom(val);
+        setPresetRange('custom');
+    };
+
+    const handleManualDateToChange = (val: string) => {
+        setDateTo(val);
+        setPresetRange('custom');
+    };
+
+    const getPresetLabel = (preset: string) => {
+        switch (preset) {
+            case 'current_month': return 'Mes Actual';
+            case '3_months': return 'Últimos 3 Meses';
+            case '6_months': return 'Últimos 6 Meses';
+            case 'all': return 'Todo el Historial';
+            default: return 'Personalizado';
+        }
+    };
 
     const brands = useMemo(() => Array.from(new Set(vehicles.map(v => v.brand).filter(Boolean))), [vehicles]);
 
@@ -116,7 +187,7 @@ export default function FleetReportsClient({ vehicles, fuelLogs }: { vehicles: a
                         <Filter className="w-4 h-4 text-blue-600" /> Filtros de Reporte
                     </CardTitle>
                 </CardHeader>
-                <CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                <CardContent className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
                     <div className="space-y-1.5">
                         <label className="text-xs font-bold uppercase text-muted-foreground">Vehículo (Placa)</label>
                         <Select value={filterPlate} onValueChange={setFilterPlate}>
@@ -147,14 +218,66 @@ export default function FleetReportsClient({ vehicles, fuelLogs }: { vehicles: a
                         </Select>
                     </div>
 
+                    <div className="space-y-1.5 flex flex-col justify-between">
+                        <div>
+                            <label className="text-xs font-bold uppercase text-muted-foreground">Rango Rápido</label>
+                            <Select value={presetRange} onValueChange={handlePresetChange}>
+                                <SelectTrigger>
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="current_month">Mes Actual</SelectItem>
+                                    <SelectItem value="3_months">Últimos 3 Meses</SelectItem>
+                                    <SelectItem value="6_months">Últimos 6 Meses</SelectItem>
+                                    <SelectItem value="all">Todo el Historial</SelectItem>
+                                    {presetRange === 'custom' && (
+                                        <SelectItem value="custom">Personalizado</SelectItem>
+                                    )}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        {presetRange !== 'custom' && currentUser && (
+                            <div className="mt-1 flex items-center justify-start">
+                                {presetRange === currentDefaultRange ? (
+                                    <span className="text-[10px] text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 font-bold flex items-center gap-1">
+                                        <Check className="w-3 h-3 text-emerald-600" /> Predeterminado
+                                    </span>
+                                ) : (
+                                    <button 
+                                        type="button"
+                                        disabled={isSavingPref}
+                                        onClick={async () => {
+                                            setIsSavingPref(true);
+                                            try {
+                                                await saveUserPreferenceAction(currentUser.id, 'fleet_reports_default_range', presetRange);
+                                                setCurrentDefaultRange(presetRange);
+                                                toast({
+                                                    title: "Preferencia guardada",
+                                                    description: `Se estableció "${getPresetLabel(presetRange)}" como rango por defecto.`,
+                                                });
+                                            } catch (e) {
+                                                console.error(e);
+                                            } finally {
+                                                setIsSavingPref(false);
+                                            }
+                                        }}
+                                        className="text-[10px] text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded-full border border-blue-200 font-bold flex items-center gap-1 transition-all"
+                                    >
+                                        <Pin className="w-2.5 h-2.5" /> Guardar por Defecto
+                                    </button>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
                     <div className="space-y-1.5">
                         <label className="text-xs font-bold uppercase text-muted-foreground">Desde</label>
-                        <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+                        <Input type="date" value={dateFrom} onChange={(e) => handleManualDateFromChange(e.target.value)} />
                     </div>
 
                     <div className="space-y-1.5">
                         <label className="text-xs font-bold uppercase text-muted-foreground">Hasta</label>
-                        <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+                        <Input type="date" value={dateTo} onChange={(e) => handleManualDateToChange(e.target.value)} />
                     </div>
 
                     <div className="flex items-end">
@@ -193,8 +316,7 @@ export default function FleetReportsClient({ vehicles, fuelLogs }: { vehicles: a
                             onClick={() => {
                                 setFilterPlate('all');
                                 setFilterBrand('all');
-                                setDateFrom('');
-                                setDateTo('');
+                                handlePresetChange(currentDefaultRange);
                             }}
                             className="w-full h-8 mt-1 text-red-500 font-semibold rounded-lg text-xs"
                         >
@@ -243,13 +365,63 @@ export default function FleetReportsClient({ vehicles, fuelLogs }: { vehicles: a
                             </div>
 
                             <div className="space-y-2">
+                                <label className="text-sm font-semibold text-slate-700">Rango Rápido</label>
+                                <Select value={presetRange} onValueChange={handlePresetChange}>
+                                    <SelectTrigger className="w-full h-12 rounded-xl">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="current_month">Mes Actual</SelectItem>
+                                        <SelectItem value="3_months">Últimos 3 Meses</SelectItem>
+                                        <SelectItem value="6_months">Últimos 6 Meses</SelectItem>
+                                        <SelectItem value="all">Todo el Historial</SelectItem>
+                                        {presetRange === 'custom' && (
+                                            <SelectItem value="custom">Personalizado</SelectItem>
+                                        )}
+                                    </SelectContent>
+                                </Select>
+                                {presetRange !== 'custom' && currentUser && (
+                                    <div className="mt-1 flex items-center justify-start">
+                                        {presetRange === currentDefaultRange ? (
+                                            <span className="text-xs text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200 font-bold flex items-center gap-1">
+                                                <Check className="w-3.5 h-3.5 text-emerald-600" /> Predeterminado
+                                            </span>
+                                        ) : (
+                                            <button 
+                                                type="button"
+                                                disabled={isSavingPref}
+                                                onClick={async () => {
+                                                    setIsSavingPref(true);
+                                                    try {
+                                                        await saveUserPreferenceAction(currentUser.id, 'fleet_reports_default_range', presetRange);
+                                                        setCurrentDefaultRange(presetRange);
+                                                        toast({
+                                                            title: "Preferencia guardada",
+                                                            description: `Se estableció "${getPresetLabel(presetRange)}" como rango por defecto.`,
+                                                        });
+                                                    } catch (e) {
+                                                        console.error(e);
+                                                    } finally {
+                                                        setIsSavingPref(false);
+                                                    }
+                                                }}
+                                                className="text-xs text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-full border border-blue-200 font-bold flex items-center gap-1 transition-all"
+                                            >
+                                                <Pin className="w-3 h-3" /> Guardar por Defecto
+                                            </button>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="space-y-2">
                                 <label className="text-sm font-semibold text-slate-700">Desde</label>
-                                <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-full h-12 rounded-xl border-slate-200" />
+                                <Input type="date" value={dateFrom} onChange={(e) => handleManualDateFromChange(e.target.value)} className="w-full h-12 rounded-xl border-slate-200" />
                             </div>
 
                             <div className="space-y-2">
                                 <label className="text-sm font-semibold text-slate-700">Hasta</label>
-                                <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-full h-12 rounded-xl border-slate-200" />
+                                <Input type="date" value={dateTo} onChange={(e) => handleManualDateToChange(e.target.value)} className="w-full h-12 rounded-xl border-slate-200" />
                             </div>
 
                             <div className="pt-4 border-t flex flex-col gap-3">

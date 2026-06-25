@@ -1,4 +1,4 @@
-import { getAllVehiclesAction, getFleetCatalogsAction } from "@/modules/fleet/lib/actions";
+import { getAllVehiclesAction, getFleetCatalogsAction, getDeletedVehiclesAction } from "@/modules/fleet/lib/actions";
 import VehicleList from "@/modules/fleet/components/VehicleList";
 import FuelPriceUpdater from "@/modules/fleet/components/FuelPriceUpdater";
 import RunAuditButton from "@/modules/fleet/components/RunAuditButton";
@@ -11,6 +11,7 @@ export default async function FleetDashboardPage() {
     await authorizeAction('fleet:access');
     const vehicles = await getAllVehiclesAction();
     const catalogs = await getFleetCatalogsAction();
+    const deletedVehicles = await getDeletedVehiclesAction();
 
     return (
         <div className="p-4 md:p-6 space-y-6 md:space-y-8 animate-in fade-in duration-500">
@@ -27,7 +28,7 @@ export default async function FleetDashboardPage() {
                 <div className="flex flex-col sm:flex-row gap-3 w-full lg:w-auto">
                     <RunAuditButton />
                     <FuelPriceUpdater settings={catalogs.settings} lastFuelPriceUpdate={catalogs.lastFuelPriceUpdate} />
-                    <Link href="/dashboard/fleet/reports" className="w-full sm:w-auto">
+                    <Link href="/dashboard/fleet/reports" prefetch={false} className="w-full sm:w-auto">
                         <Button className="w-full bg-slate-800 hover:bg-slate-900 text-white shadow-lg transition-all">
                             <FileBarChart className="w-4 h-4 mr-2" /> Reporte de Consumos
                         </Button>
@@ -35,7 +36,7 @@ export default async function FleetDashboardPage() {
                 </div>
             </div>
 
-            <VehicleList vehicles={vehicles} />
+            <VehicleList vehicles={vehicles} deletedVehicles={deletedVehicles} />
         </div>
     );
 }

@@ -35,6 +35,7 @@ import {
   Cpu,
   Container,
   Truck,
+  Users,
 } from "lucide-react";
 import type { Tool } from "@/modules/core/types";
 import { UserNav } from "./user-nav";
@@ -93,6 +94,14 @@ const navLinks: Tool[] = [
     bgColor: 'bg-teal-700',
   },
    {
+    id: 'deliveries:customers',
+    name: 'Clientes y Ubicaciones',
+    description: 'Gestionar direcciones de entrega y geolocalizaciones.',
+    href: '/dashboard/clientes',
+    icon: Users,
+    bgColor: 'bg-indigo-600',
+  },
+   {
     id: "it-tools:access",
     name: "Herramientas de TI",
     description: "Gestionar notas técnicas y documentación interna de TI.",
@@ -132,6 +141,22 @@ const navLinks: Tool[] = [
       icon: Search,
       bgColor: "bg-fuchsia-600",
     },
+  {
+    id: "inventory:read",
+    name: "Inventario y Repuestos",
+    description: "Gestión centralizada de stock, repuestos y activos aislados por departamento.",
+    href: "/dashboard/inventory",
+    icon: Warehouse,
+    bgColor: "bg-emerald-600",
+  },
+  {
+    id: "tickets:read",
+    name: "Mesa de Tickets",
+    description: "Administrar solicitudes de soporte, reparaciones y consumos de inventario.",
+    href: "/dashboard/tickets",
+    icon: Wrench,
+    bgColor: "bg-blue-600",
+  },
   {
     id: "help",
     name: "Centro de Ayuda",
@@ -203,13 +228,13 @@ export function AppSidebar() {
 
   return (
       <Sidebar collapsible="icon" className="border-r z-20">
-        <SidebarHeader>
-          <Button variant="ghost" size="icon" className="size-10" asChild>
+        <SidebarHeader className="flex flex-row items-center gap-2 p-2 group-data-[collapsible=icon]:justify-center">
+          <Button variant="ghost" size="icon" className="size-10 shrink-0" asChild>
             <Link href="/dashboard" onClick={handleLinkClick}>
-              <Network />
+              <Network className="text-primary" />
             </Link>
           </Button>
-          <h2 className="text-lg font-semibold tracking-tight text-sidebar-foreground">
+          <h2 className="text-sm font-semibold tracking-tight text-sidebar-foreground truncate group-data-[collapsible=icon]:hidden">
             {companyData?.systemName || 'Clic-Tools'}
           </h2>
         </SidebarHeader>

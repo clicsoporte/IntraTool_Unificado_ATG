@@ -24,6 +24,9 @@ export type User = {
   securityAnswer?: string;
   forcePasswordChange?: boolean | number;
   activeWizardSession?: string | null;
+  employeeId?: string | null;
+  salespersonId?: string | null;
+  is_active?: number;
 };
 
 /**
@@ -58,6 +61,7 @@ export type Company = {
     erpPurchaseOrderLineFilePath?: string;
     erpInvoiceHeaderFilePath?: string;
     erpInvoiceLineFilePath?: string;
+    timeZone?: string;
 };
 
 /**
@@ -785,6 +789,7 @@ export type ErpInvoiceHeader = {
     FECHA: string | Date;
     FECHA_ENTREGA: string | Date;
     ANULADA: 'S' | 'N';
+    DIREC_EMBARQUE?: string;
     EMBARCAR_A?: string;
     DIRECCION_FACTURA?: string;
     OBSERVACIONES?: string;

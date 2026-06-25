@@ -6,6 +6,8 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { AlertTriangle, RefreshCcw, Home } from 'lucide-react';
 import Link from 'next/link';
  
+import { logDashboardErrorAction } from '@/modules/core/lib/suggestions-actions';
+ 
 export default function DashboardError({
   error,
   reset,
@@ -14,8 +16,11 @@ export default function DashboardError({
   reset: () => void;
 }) {
   useEffect(() => {
-    // Log the error to an error reporting service
+    // Log the error to console
     console.error('Dashboard Error Boundary:', error);
+    
+    // Automatically report to database logs and suggestions
+    logDashboardErrorAction(error.message || 'Error desconocido', error.stack);
   }, [error]);
  
   return (
@@ -53,7 +58,7 @@ export default function DashboardError({
             variant="outline"
             className="w-full sm:w-auto"
           >
-            <Link href="/dashboard">
+            <Link href="/dashboard" prefetch={false}>
               <Home className="mr-2 h-4 w-4" />
               Ir al Inicio
             </Link>

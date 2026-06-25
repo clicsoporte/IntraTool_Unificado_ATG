@@ -18,6 +18,10 @@ import {
     getInitialAuthData as getInitialAuthDataServer,
     sendPasswordRecoveryEmail as sendRecoveryEmailServer,
     getCurrentUser as getCurrentUserServer,
+    getUserPreferenceAction,
+    saveUserPreferenceAction,
+    updateOwnProfile as updateOwnProfileServer,
+    completeForcedPasswordChange as completeForcedPasswordChangeServer,
 } from '@/modules/core/lib/auth';
 
 /**
@@ -120,3 +124,26 @@ export async function getInitialAuthData() {
 export async function sendRecoveryEmail(email: string): Promise<void> {
     return await sendRecoveryEmailServer(email);
 }
+
+export async function getUserPreference(userId: number, key: string): Promise<any | null> {
+    return await getUserPreferenceAction(userId, key);
+}
+
+export async function saveUserPreference(userId: number, key: string, value: any): Promise<void> {
+    await saveUserPreferenceAction(userId, key, value);
+}
+
+/**
+ * Cliente-safe wrapper para actualizar el perfil propio.
+ */
+export async function updateOwnProfile(userData: Partial<User>): Promise<{ success: boolean; error?: string }> {
+    return await updateOwnProfileServer(userData);
+}
+
+/**
+ * Cliente-safe wrapper para completar el cambio forzado de contraseña.
+ */
+export async function completeForcedPasswordChange(newPassword: string): Promise<{ success: boolean; error?: string }> {
+    return await completeForcedPasswordChangeServer(newPassword);
+}
+

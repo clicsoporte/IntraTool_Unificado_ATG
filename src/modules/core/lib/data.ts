@@ -120,6 +120,14 @@ export const mainTools: Tool[] = [
     bgColor: "bg-blue-600",
   },
   {
+    id: "deliveries:customers",
+    name: "Clientes y Ubicaciones",
+    description: "Gestionar direcciones de entrega y geolocalizaciones.",
+    href: "/dashboard/clientes",
+    icon: Users,
+    bgColor: "bg-indigo-600",
+  },
+  {
     id: "hacienda:query",
       name: "Consultas Hacienda",
       description: "Verificar situación tributaria y exoneraciones.",
@@ -127,6 +135,22 @@ export const mainTools: Tool[] = [
       icon: Search,
       bgColor: "bg-fuchsia-600",
     },
+  {
+    id: "inventory:read",
+    name: "Inventario y Repuestos",
+    description: "Gestión centralizada de stock, repuestos y activos aislados por departamento.",
+    href: "/dashboard/inventory",
+    icon: Warehouse,
+    bgColor: "bg-emerald-600",
+  },
+  {
+    id: "tickets:read",
+    name: "Mesa de Tickets",
+    description: "Administrar solicitudes de soporte, reparaciones y consumos de inventario.",
+    href: "/dashboard/tickets",
+    icon: Wrench,
+    bgColor: "bg-blue-600",
+  },
   {
     id: "help",
     name: "Centro de Ayuda",
@@ -307,6 +331,22 @@ export const itTools: Tool[] = [
         href: '/dashboard/it-tools/notes',
         icon: BookCopy,
         bgColor: 'bg-slate-700',
+    },
+    {
+        id: 'it-tools:assets:read',
+        name: 'Control de Activos de TI (ITAM)',
+        description: 'Gestión de equipos, periféricos, licencias de software, y alertas de RRHH.',
+        href: '/dashboard/it-tools/assets',
+        icon: Cpu,
+        bgColor: 'bg-indigo-700',
+    },
+    {
+        id: 'tickets:read',
+        name: 'Mesa de Tickets (Acceso Directo)',
+        description: 'Administrar solicitudes de soporte, reparaciones y consumos de inventario.',
+        href: '/dashboard/tickets',
+        icon: Wrench,
+        bgColor: 'bg-blue-600',
     }
 ];
 
@@ -448,12 +488,28 @@ export const adminTools: Tool[] = [
         bgColor: 'bg-lime-500',
       },
       {
+        id: "admin:settings:general", // Re-using general settings permissions
+        name: "Config. Inventario e Instancias",
+        description: "Gestionar prefijos, consecutivos y técnicos asignados por departamento.",
+        href: "/dashboard/admin/inventory",
+        icon: Settings,
+        bgColor: 'bg-indigo-600',
+      },
+      {
         id: "fleet:settings:manage",
         name: "Config. Flota",
         description: "Gestionar marcas, combustibles y tipos de permiso.",
         href: "/dashboard/admin/fleet",
         icon: Truck,
         bgColor: 'bg-blue-600',
+      },
+      {
+        id: "it-tools:assets:admin",
+        name: "Config. TI (Sedes y Licencias)",
+        description: "Gestionar sucursales y el catálogo de licencias de TI.",
+        href: "/dashboard/admin/it-tools",
+        icon: SlidersHorizontal,
+        bgColor: 'bg-indigo-600',
       },
       {
         id: "admin:logs:read",
@@ -470,6 +526,14 @@ export const adminTools: Tool[] = [
         href: "/dashboard/admin/automations",
         icon: BellRing,
         bgColor: 'bg-pink-600',
+      },
+      {
+        id: "deliveries:admin",
+        name: "Config. Operaciones",
+        description: "Gestionar rutas, parámetros globales y mermas de entregas.",
+        href: "/dashboard/admin/operations",
+        icon: Settings,
+        bgColor: 'bg-teal-700',
       }
 ];
 

@@ -144,7 +144,7 @@ export default function ApiSettingsPage() {
   
   const handleDeleteLaw = useCallback(() => {
       if (!lawToDelete) return;
-      setExemptionLaws(prevLaws => prevLaws.filter(law => law.docType !== lawToDelete.docType));
+      setExemptionLaws(prevLaws => (prevLaws || []).filter(law => law.docType !== lawToDelete.docType));
       logWarn("Exemption law deleted", { docType: lawToDelete.docType });
       toast({ title: "Ley Eliminada", description: "La ley de exoneración ha sido eliminada. Guarda los cambios para confirmar.", variant: "destructive"});
       setLawToDelete(null);

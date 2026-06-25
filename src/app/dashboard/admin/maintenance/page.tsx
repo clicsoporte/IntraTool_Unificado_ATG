@@ -391,7 +391,7 @@ export default function MaintenancePage() {
             const results = await runDatabaseAudit();
             setAuditResults(results);
             
-            const issues = results.filter(r => r.status !== 'ok').length;
+            const issues = (results || []).filter(r => r.status !== 'ok').length;
             if (issues > 0) {
                 toast({ 
                     title: "Auditoría Completada", 

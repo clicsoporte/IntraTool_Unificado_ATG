@@ -2,7 +2,7 @@ import { getDb } from '@/modules/core/lib/db';
 import { FLEET_TABLES } from './schema';
 import { logInfo, logError } from '@/modules/core/lib/logger';
 import { triggerNotificationEvent } from '@/modules/notifications/lib/notifications-engine';
-import { getVehicleById } from './db';
+import { getVehicleById, updateVehicleMileageAndCheckAlerts } from './db';
 import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
 
@@ -21,7 +21,12 @@ export interface TelegramLinkage {
   username: string | null;
   activationCode: string | null;
   createdAt: string;
+  allowFuel?: number;
+  allowMaintenance?: number;
+  allowDeliveries?: number;
+  allowWarehouse?: number;
   employeeName?: string;
+  isMechanic?: boolean;
 }
 
 /**
@@ -77,17 +82,51 @@ export async function deleteTelegramState(chatId: string): Promise<void> {
 export async function saveTelegramBotLog(
   db: any,
   vehicleId: number,
-  actionType: 'fuel' | 'maintenance' | 'rtv',
+  actionType: 'fuel' | 'maintenance' | 'rtv' | 'delivery',
   driverName: string,
   message: string,
   details?: any
 ): Promise<void> {
   try {
+    // Defensive check: Verify if vehicleId exists in fleet_vehicles to prevent FOREIGN KEY violation
+    let finalVehicleId = vehicleId;
+    const vehicleExists = db.prepare("SELECT id FROM fleet_vehicles WHERE id = ?").get(finalVehicleId);
+    
+    if (!vehicleExists) {
+      // Try to find the vehicle from the driver's active assignment
+      let activeVehicleId: number | null = null;
+      try {
+        const activeAss = db.prepare(`
+          SELECT vehiculo_id FROM ops_delivery_assignments a
+          JOIN core_employees e ON a.empleado_id = e.EMPLEADO
+          WHERE a.activa = 1 AND e.NOMBRE = ?
+          LIMIT 1
+        `).get(driverName) as { vehiculo_id: number } | undefined;
+        if (activeAss && activeAss.vehiculo_id) {
+          activeVehicleId = activeAss.vehiculo_id;
+        }
+      } catch (err) {
+        console.error("Error finding active vehicle for log fallback:", err);
+      }
+
+      if (activeVehicleId) {
+        finalVehicleId = activeVehicleId;
+      } else {
+        const fallbackVehicle = db.prepare("SELECT id FROM fleet_vehicles ORDER BY id ASC LIMIT 1").get() as { id: number } | undefined;
+        if (fallbackVehicle) {
+          finalVehicleId = fallbackVehicle.id;
+        } else {
+          console.warn("Skipping saveTelegramBotLog: No active vehicles registered in fleet_vehicles to satisfy FOREIGN KEY constraint.");
+          return;
+        }
+      }
+    }
+
     db.prepare(`
       INSERT INTO ${FLEET_TABLES.telegramBotLogs} (vehicleId, timestamp, actionType, driverName, message, details)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(
-      vehicleId,
+      finalVehicleId,
       new Date().toISOString(),
       actionType,
       driverName,
@@ -103,10 +142,11 @@ export async function getAllActiveBotStates(): Promise<any[]> {
   const db = await getDb();
   try {
     const rows = db.prepare(`
-      SELECT s.*, l.username, e.NOMBRE as employeeName
+      SELECT s.*, l.username, COALESCE(e.NOMBRE, u.name) as employeeName
       FROM ${FLEET_TABLES.telegramStates} s
       LEFT JOIN ${FLEET_TABLES.telegramLinkages} l ON s.chatId = l.chatId
       LEFT JOIN core_employees e ON l.employeeId = e.EMPLEADO
+      LEFT JOIN core_users u ON l.employeeId = ('U-' || u.id)
       ORDER BY s.updatedAt DESC
     `).all() as any[];
     return rows;
@@ -124,10 +164,11 @@ export async function getLinkageByChatId(chatId: string): Promise<TelegramLinkag
   const db = await getDb();
   try {
     const row = db.prepare(`
-      SELECT l.*, e.NOMBRE as employeeName 
+      SELECT l.*, COALESCE(e.NOMBRE, u.name) as employeeName 
       FROM ${FLEET_TABLES.telegramLinkages} l
-      JOIN core_employees e ON l.employeeId = e.EMPLEADO AND e.ACTIVO = 'S'
-      WHERE l.chatId = ?
+      LEFT JOIN core_employees e ON l.employeeId = e.EMPLEADO AND e.ACTIVO = 'S'
+      LEFT JOIN core_users u ON l.employeeId = ('U-' || u.id)
+      WHERE l.chatId = ? AND (e.EMPLEADO IS NOT NULL OR u.id IS NOT NULL)
     `).get(chatId) as TelegramLinkage | undefined;
     return row || null;
   } catch (error) {
@@ -140,10 +181,11 @@ export async function getLinkageByCode(code: string): Promise<TelegramLinkage | 
   const db = await getDb();
   try {
     const row = db.prepare(`
-      SELECT l.*, e.NOMBRE as employeeName
+      SELECT l.*, COALESCE(e.NOMBRE, u.name) as employeeName
       FROM ${FLEET_TABLES.telegramLinkages} l
-      JOIN core_employees e ON l.employeeId = e.EMPLEADO AND e.ACTIVO = 'S'
-      WHERE l.activationCode = ?
+      LEFT JOIN core_employees e ON l.employeeId = e.EMPLEADO AND e.ACTIVO = 'S'
+      LEFT JOIN core_users u ON l.employeeId = ('U-' || u.id)
+      WHERE l.activationCode = ? AND (e.EMPLEADO IS NOT NULL OR u.id IS NOT NULL)
     `).get(code.toUpperCase().trim()) as TelegramLinkage | undefined;
     return row || null;
   } catch (error) {
@@ -236,14 +278,39 @@ export async function removeLinkage(id: number): Promise<void> {
   }
 }
 
+export async function updateLinkagePermissions(
+  id: number,
+  permissions: { allowFuel: boolean; allowMaintenance: boolean; allowDeliveries: boolean; allowWarehouse: boolean }
+): Promise<void> {
+  const db = await getDb();
+  try {
+    db.prepare(`
+      UPDATE ${FLEET_TABLES.telegramLinkages}
+      SET allowFuel = ?, allowMaintenance = ?, allowDeliveries = ?, allowWarehouse = ?
+      WHERE id = ?
+    `).run(
+      permissions.allowFuel ? 1 : 0,
+      permissions.allowMaintenance ? 1 : 0,
+      permissions.allowDeliveries ? 1 : 0,
+      permissions.allowWarehouse ? 1 : 0,
+      id
+    );
+    await logInfo(`Permisos de Telegram actualizados para vinculación ID: ${id}`);
+  } catch (error: any) {
+    console.error(`Error in updateLinkagePermissions:`, error);
+    throw error;
+  }
+}
+
 export async function getAllLinkages(): Promise<TelegramLinkage[]> {
   const db = await getDb();
   try {
     const rows = db.prepare(`
-      SELECT l.*, e.NOMBRE as employeeName
+      SELECT l.*, COALESCE(e.NOMBRE, u.name) as employeeName
       FROM ${FLEET_TABLES.telegramLinkages} l
-      JOIN core_employees e ON l.employeeId = e.EMPLEADO
-      ORDER BY e.NOMBRE
+      LEFT JOIN core_employees e ON l.employeeId = e.EMPLEADO
+      LEFT JOIN core_users u ON l.employeeId = ('U-' || u.id)
+      ORDER BY COALESCE(e.NOMBRE, u.name)
     `).all() as TelegramLinkage[];
     return JSON.parse(JSON.stringify(rows));
   } catch (error) {
@@ -316,6 +383,19 @@ export async function getVehicleByPlate(plate: string): Promise<any | null> {
   } catch (error) {
     console.error(`Error in getVehicleByPlate for plate ${plate}:`, error);
     return null;
+  }
+}
+
+export async function getPlateSuggestions(plate: string): Promise<string[]> {
+  const db = await getDb();
+  try {
+    const cleanText = plate.trim().toUpperCase();
+    if (cleanText.length < 2) return [];
+    const rows = db.prepare(`SELECT plate FROM ${FLEET_TABLES.vehicles} WHERE UPPER(plate) LIKE ? LIMIT 5`).all(`%${cleanText}%`) as any[];
+    return rows.map(r => r.plate);
+  } catch (error) {
+    console.error(`Error in getPlateSuggestions for ${plate}:`, error);
+    return [];
   }
 }
 
@@ -399,25 +479,11 @@ export async function saveTelegramFuelLog(log: any, userName: string) {
         console.error('Failed to trigger fuel log notification', e);
     }
 
-    // Check for maintenance alerts via Engine
+    // Check for maintenance alerts and update mileage via central helper
     try {
-        const vehicle = await getVehicleById(log.vehicleId);
-        if (vehicle) {
-            const mileageSinceLast = log.mileageBefore - (vehicle.lastOilChangeMileage || 0);
-            const progress = (mileageSinceLast / vehicle.oilChangeInterval) * 100;
-            
-            if (progress >= 90) {
-                await triggerNotificationEvent('onFleetMaintenanceDue', {
-                    ...vehicle,
-                    currentMileage: log.mileageBefore,
-                    progress: progress.toFixed(0),
-                    remaining: Math.max(0, vehicle.oilChangeInterval - mileageSinceLast),
-                    odometerUnit: vehicle.odometerUnit || 'km'
-                });
-            }
-        }
+        await updateVehicleMileageAndCheckAlerts(db, log.vehicleId, log.mileageBefore, null);
     } catch (e: any) {
-        console.error('Failed to process maintenance alert via engine', e);
+        console.error('Failed to process maintenance alert via central helper', e);
     }
 }
 
@@ -483,6 +549,13 @@ export async function saveTelegramMaintenanceLog(log: any, userName: string) {
         throw error;
     }
 
+    // Check for maintenance alerts and update mileage via central helper
+    try {
+        await updateVehicleMileageAndCheckAlerts(db, log.vehicleId, log.mileage, null);
+    } catch (e: any) {
+        console.error('Failed to process maintenance alert via central helper', e);
+    }
+
     // Trigger Notification via Engine
     try {
         const vehicle = await getVehicleById(log.vehicleId);
@@ -499,3 +572,201 @@ export async function saveTelegramMaintenanceLog(log: any, userName: string) {
         console.error('Failed to trigger maintenance log notification', e);
     }
 }
+
+/**
+ * --- HELPER FUNCTIONS FOR SUPPORT TICKETS & MECHANIC TELEGRAM WORKFLOWS ---
+ */
+
+export async function checkIsMechanic(employeeId: string): Promise<boolean> {
+    const db = await getDb();
+    try {
+        let userRow;
+        if (employeeId.startsWith('U-')) {
+            userRow = db.prepare("SELECT id FROM core_users WHERE ('U-' || id) = ?").get(employeeId) as { id: number } | undefined;
+        } else {
+            userRow = db.prepare("SELECT id FROM core_users WHERE employeeId = ?").get(employeeId) as { id: number } | undefined;
+        }
+        if (!userRow) return false;
+        const mapping = db.prepare("SELECT 1 FROM inv_department_technicians WHERE department_id = 1 AND user_id = ?").get(userRow.id);
+        return !!mapping;
+    } catch (err) {
+        console.error("Error in checkIsMechanic:", err);
+        return false;
+    }
+}
+
+export async function getCoreUserIdFromLinkage(employeeId: string): Promise<number | null> {
+    const db = await getDb();
+    try {
+        let userRow;
+        if (employeeId.startsWith('U-')) {
+            userRow = db.prepare("SELECT id FROM core_users WHERE ('U-' || id) = ?").get(employeeId) as { id: number } | undefined;
+        } else {
+            userRow = db.prepare("SELECT id FROM core_users WHERE employeeId = ?").get(employeeId) as { id: number } | undefined;
+        }
+        return userRow ? userRow.id : null;
+    } catch (err) {
+        console.error("Error in getCoreUserIdFromLinkage:", err);
+        return null;
+    }
+}
+
+export async function createTicketFromTelegram(ticket: {
+    departmentId: number;
+    subject: string;
+    description: string;
+    priority?: string;
+    maintenanceType?: string;
+    equipmentName: string;
+    brand?: string;
+    model?: string;
+    serialNumber?: string;
+    user: string;
+}): Promise<string> {
+    const db = await getDb();
+    const now = new Date().toISOString();
+    return db.transaction(() => {
+        const settings = db.prepare('SELECT ticket_prefix, next_ticket_number FROM ticket_settings WHERE department_id = ?').get(ticket.departmentId) as { ticket_prefix: string; next_ticket_number: number } | undefined;
+        if (!settings) {
+            throw new Error('Configuración de tickets no encontrada para este departamento.');
+        }
+
+        const prefix = settings.ticket_prefix;
+        const nextNum = settings.next_ticket_number;
+        const consecutive = `${prefix}${String(nextNum).padStart(6, '0')}`;
+
+        db.prepare(`
+            INSERT INTO repair_tickets (
+                consecutive, department_id, subject, description, status, priority,
+                maintenance_type, equipment_name, brand, model, serial_number, created_at, created_by
+            ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            consecutive,
+            ticket.departmentId,
+            ticket.subject,
+            ticket.description,
+            ticket.priority || 'medium',
+            ticket.maintenanceType || 'corrective',
+            ticket.equipmentName,
+            ticket.brand || null,
+            ticket.model || null,
+            ticket.serialNumber || null,
+            now,
+            ticket.user
+        );
+
+        db.prepare('UPDATE ticket_settings SET next_ticket_number = ? WHERE department_id = ?').run(nextNum + 1, ticket.departmentId);
+        return consecutive;
+    })();
+}
+
+export async function getOpenTicketsForMechanic(userId: number | null): Promise<any[]> {
+    const db = await getDb();
+    try {
+        if (userId) {
+            return db.prepare(`
+                SELECT * FROM repair_tickets 
+                WHERE department_id = 1 AND status IN ('open', 'in_progress', 'on_hold')
+                  AND (assignee_id = ? OR assignee_id IS NULL)
+                ORDER BY id DESC LIMIT 15
+            `).all(userId) as any[];
+        } else {
+            return db.prepare(`
+                SELECT * FROM repair_tickets 
+                WHERE department_id = 1 AND status IN ('open', 'in_progress', 'on_hold')
+                ORDER BY id DESC LIMIT 15
+            `).all() as any[];
+        }
+    } catch (err) {
+        console.error("Error in getOpenTicketsForMechanic:", err);
+        return [];
+    }
+}
+
+export async function assignTicketToMechanic(ticketId: number, userId: number): Promise<void> {
+    const db = await getDb();
+    try {
+        db.prepare('UPDATE repair_tickets SET assignee_id = ? WHERE id = ?').run(userId, ticketId);
+    } catch (err) {
+        console.error("Error in assignTicketToMechanic:", err);
+        throw err;
+    }
+}
+
+export async function updateTicketStatusFromTelegram(ticketId: number, status: string, user: string): Promise<void> {
+    const db = await getDb();
+    const now = new Date().toISOString();
+    try {
+        db.transaction(() => {
+            if (status === 'completed' || status === 'canceled') {
+                db.prepare(`
+                    UPDATE repair_tickets 
+                    SET status = ?, closed_at = ?, closed_by = ? 
+                    WHERE id = ?
+                `).run(status, now, user, ticketId);
+            } else {
+                db.prepare(`
+                    UPDATE repair_tickets 
+                    SET status = ?, closed_at = NULL, closed_by = NULL 
+                    WHERE id = ?
+                `).run(status, ticketId);
+            }
+        })();
+    } catch (err) {
+        console.error("Error in updateTicketStatusFromTelegram:", err);
+        throw err;
+    }
+}
+
+export async function searchSpareParts(query: string): Promise<any[]> {
+    const db = await getDb();
+    try {
+        return db.prepare(`
+            SELECT id, name, brand, model, quantity, unit, price 
+            FROM inv_items 
+            WHERE department_id = 1 AND status = 'active'
+              AND (name LIKE ? OR brand LIKE ? OR id LIKE ?)
+            LIMIT 5
+        `).all(`%${query}%`, `%${query}%`, `%${query}%`) as any[];
+    } catch (err) {
+        console.error("Error in searchSpareParts:", err);
+        return [];
+    }
+}
+
+export async function consumeSparePartForTicket(ticketId: number, itemId: string, quantity: number, user: string): Promise<void> {
+    const db = await getDb();
+    const now = new Date().toISOString();
+    try {
+        db.transaction(() => {
+            const item = db.prepare('SELECT price, quantity, name, unit FROM inv_items WHERE id = ? AND department_id = 1').get(itemId) as { price: number; quantity: number; name: string; unit: string } | undefined;
+            if (!item) {
+                throw new Error('El repuesto no existe en el inventario del taller.');
+            }
+            if (item.quantity < quantity) {
+                throw new Error(`Stock insuficiente. Disponible: ${item.quantity} ${item.unit}`);
+            }
+
+            const ticket = db.prepare('SELECT consecutive FROM repair_tickets WHERE id = ?').get(ticketId) as { consecutive: string } | undefined;
+            if (!ticket) {
+                throw new Error('Ticket no encontrado.');
+            }
+
+            db.prepare('UPDATE inv_items SET quantity = quantity - ? WHERE id = ?').run(quantity, itemId);
+
+            db.prepare(`
+                INSERT INTO inv_transactions (item_id, quantity, type, reason, reference_id, created_at, created_by)
+                VALUES (?, ?, 'EXIT', ?, ?, ?, ?)
+            `).run(itemId, quantity, `Consumo en Ticket ${ticket.consecutive}`, ticket.consecutive, now, user);
+
+            db.prepare(`
+                INSERT INTO ticket_parts (ticket_id, item_id, quantity, price, created_at, created_by)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `).run(ticketId, itemId, quantity, item.price, now, user);
+        })();
+    } catch (err) {
+        console.error("Error in consumeSparePartForTicket:", err);
+        throw err;
+    }
+}
+

@@ -82,6 +82,10 @@ const parseDecimal = (str: any): number => {
     return parseFloat(s);
 };
 
+const roundTo4Decimals = (num: number): number => {
+    return Math.round(num * 10000) / 10000;
+};
+
 
 interface InvoiceParseResult {
     lines: Omit<CostAssistantLine, 'displayMargin' | 'displayTaxRate' | 'displayUnitCost' | 'displayUnitsPerPack' | 'finalSellPrice' | 'profitPerLine' | 'sellPriceWithoutTax' | 'isCostEdited'>[];
@@ -180,16 +184,17 @@ async function parseInvoice(xmlContent: string, fileIndex: number): Promise<Invo
         let taxRate = 0.13;
         let taxCode = '08';
         if (impuestoNode) {
-            taxRate = parseDecimal(getValue(impuestoNode, ['Tarifa'], '13')) / 100;
+            taxRate = roundTo4Decimals(parseDecimal(getValue(impuestoNode, ['Tarifa'], '13')) / 100);
             taxCode = getValue(impuestoNode, ['CodigoTarifaIVA'], '08');
         }
         
-        const unitGrossCostInColones = moneda === 'USD' ? precioUnitario * tipoCambio : precioUnitario;
-        const discountAmountInColones = moneda === 'USD' ? discountAmount * tipoCambio : discountAmount;
+        const unitGrossCostInColones = roundTo4Decimals(moneda === 'USD' ? precioUnitario * tipoCambio : precioUnitario);
+        const discountAmountInColones = roundTo4Decimals(moneda === 'USD' ? discountAmount * tipoCambio : discountAmount);
         const netCostPerPack = cantidad > 0 ? (subTotal / cantidad) : 0;
-
-        const discountAmountUnit = cantidad > 0 ? discountAmountInColones / cantidad : 0;
-        const discountPercentage = (unitGrossCostInColones * cantidad) > 0 ? discountAmountInColones / (unitGrossCostInColones * cantidad) : 0;
+        const netCostPerPackInColones = roundTo4Decimals(moneda === 'USD' ? netCostPerPack * tipoCambio : netCostPerPack);
+        
+        const discountAmountUnit = roundTo4Decimals(cantidad > 0 ? discountAmountInColones / cantidad : 0);
+        const discountPercentage = roundTo4Decimals((unitGrossCostInColones * cantidad) > 0 ? discountAmountInColones / (unitGrossCostInColones * cantidad) : 0);
         
         const numeroLinea = getValue(linea, ['NumeroLinea'], index + 1);
         const rawDescription = getValue(linea, ['Detalle']);
@@ -210,7 +215,7 @@ async function parseInvoice(xmlContent: string, fileIndex: number): Promise<Invo
             discountAmountUnit,
             discountPercentage,
             xmlGrossPackCost: unitGrossCostInColones,
-            xmlPackCost: netCostPerPack, // NET cost per pack/unit from XML
+            xmlPackCost: netCostPerPackInColones, // NET cost per pack/unit from XML in CRC
             unitCostWithoutTax: 0, // Placeholder, calculated on frontend
             taxRate,
             taxCode,

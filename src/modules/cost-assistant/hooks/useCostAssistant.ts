@@ -45,6 +45,10 @@ const parseDecimal = (str: any): number => {
     return isNaN(parsed) ? 0 : parsed;
 };
 
+const roundTo4Decimals = (num: number): number => {
+    return Math.round(num * 10000) / 10000;
+};
+
 
 const initialColumnVisibility: CostAssistantSettings['columnVisibility'] = {
     cabysCode: true,
@@ -414,10 +418,10 @@ export const useCostAssistant = () => {
     
             return {
                 ...line,
-                unitCostWithoutTax: finalUnitCostWithoutTax,
-                finalSellPrice,
-                sellPriceWithoutTax,
-                profitPerLine,
+                unitCostWithoutTax: roundTo4Decimals(finalUnitCostWithoutTax),
+                finalSellPrice: roundTo4Decimals(finalSellPrice),
+                sellPriceWithoutTax: roundTo4Decimals(sellPriceWithoutTax),
+                profitPerLine: roundTo4Decimals(profitPerLine),
             };
         });
     }, [state.lines, state.transportCost, state.otherCosts, state.discountHandling]);
@@ -435,7 +439,13 @@ export const useCostAssistant = () => {
         const totalSellValue = state.lines.reduce((sum, line) => sum + (line.finalSellPrice * line.quantity), 0);
         const estimatedGrossProfit = totalSellValue - totalFinalCost;
 
-        return { totalPurchaseCost, totalAdditionalCosts, totalFinalCost, totalSellValue, estimatedGrossProfit };
+        return {
+            totalPurchaseCost: roundTo4Decimals(totalPurchaseCost),
+            totalAdditionalCosts: roundTo4Decimals(totalAdditionalCosts),
+            totalFinalCost: roundTo4Decimals(totalFinalCost),
+            totalSellValue: roundTo4Decimals(totalSellValue),
+            estimatedGrossProfit: roundTo4Decimals(estimatedGrossProfit)
+        };
     }, [state.lines, state.transportCost, state.otherCosts]);
 
     const selectors = {

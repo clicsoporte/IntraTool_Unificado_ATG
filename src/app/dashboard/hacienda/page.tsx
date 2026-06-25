@@ -9,8 +9,7 @@ import { Input } from '@/components/ui/input';
 import { useToast } from '@/modules/core/hooks/use-toast';
 import { usePageTitle } from '@/modules/core/hooks/usePageTitle';
 import { useAuthorization } from '@/modules/core/hooks/useAuthorization';
-import { getContributorInfo, getEnrichedExemptionStatus } from '@/modules/hacienda/lib/actions';
-import { getAllExemptions } from '@/modules/core/lib/db';
+import { getContributorInfo, getEnrichedExemptionStatus, getExemptionsAction } from '@/modules/hacienda/lib/actions';
 import type { Customer, Exemption, HaciendaContributorInfo, EnrichedExemptionInfo, Product, EnrichedCabysItem } from '@/modules/core/types';
 import { Loader2, Search, ShieldCheck, ShieldX } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
@@ -267,7 +266,7 @@ export default function HaciendaQueryPage() {
                 logInfo('User accessed Hacienda module', { user: user.name });
             }
             try {
-                const exemptionsData = await getAllExemptions();
+                const exemptionsData = await getExemptionsAction();
                 setExemptions(exemptionsData);
             } catch (error) {
                 toast({ title: "Error de carga", description: "No se pudieron cargar los datos locales de exoneraciones.", variant: "destructive" });

@@ -13,11 +13,26 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Skeleton } from '@/components/ui/skeleton';
 import { SearchInput } from '@/components/ui/search-input';
 import { useFieldAssistant } from '@/modules/consignments/hooks/useFieldAssistant';
+import { useLoading } from '@/modules/core/hooks/useLoading';
 import { InventoryCountForm } from '@/components/consignments/inventory-count-form';
 
 export default function FieldAssistantPage() {
     const { state, actions, selectors } = useFieldAssistant();
     const { step, isLoading, isSubmitting, clientSearchTerm, isClientSearchOpen, selectedAgreement, productsToCount, counts, lastCreatedEntity } = state;
+    const { showLoading, hideLoading } = useLoading();
+
+    React.useEffect(() => {
+        if (isLoading && step !== 'select_client') {
+            showLoading("Cargando información del acuerdo...");
+        } else if (isSubmitting) {
+            showLoading("Procesando conteo y generando boletas...");
+        } else {
+            hideLoading();
+        }
+        return () => {
+            hideLoading();
+        };
+    }, [isLoading, step, isSubmitting, showLoading, hideLoading]);
 
     if (isLoading && step === 'select_client') {
         return (

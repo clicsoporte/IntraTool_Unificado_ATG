@@ -6,6 +6,7 @@ import { useToast } from '@/modules/core/hooks/use-toast';
 import { ShieldCheck, Loader2 } from 'lucide-react';
 import { runFleetAuditManuallyAction } from '../lib/actions';
 import { useRouter } from 'next/navigation';
+import { useLoading } from '@/modules/core/hooks/useLoading';
 import { 
   Dialog, 
   DialogContent, 
@@ -19,10 +20,12 @@ export default function RunAuditButton() {
     const router = useRouter();
     const [loading, setLoading] = useState(false);
     const [dialogOpen, setDialogOpen] = useState(false);
+    const { showLoading, hideLoading } = useLoading();
 
     const handleRunAudit = async (sendAlerts: boolean) => {
         setDialogOpen(false);
         setLoading(true);
+        showLoading(sendAlerts ? "Analizando vehículos y enviando alertas..." : "Realizando revisión silenciosa de flota...");
         try {
             const result = await runFleetAuditManuallyAction(sendAlerts);
             
@@ -50,6 +53,7 @@ export default function RunAuditButton() {
             });
         } finally {
             setLoading(false);
+            hideLoading();
         }
     };
 
@@ -60,17 +64,8 @@ export default function RunAuditButton() {
                 disabled={loading}
                 className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-700 text-white shadow-lg transition-all flex items-center justify-center gap-2"
             >
-                {loading ? (
-                    <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Analizando Flota...
-                    </>
-                ) : (
-                    <>
-                        <ShieldCheck className="w-4 h-4 mr-2" />
-                        Revisar todo lo pendiente
-                    </>
-                )}
+                <ShieldCheck className="w-4 h-4 mr-2" />
+                Revisar todo lo pendiente
             </Button>
 
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

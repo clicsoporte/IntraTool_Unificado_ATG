@@ -25,9 +25,9 @@ import {
     DialogClose 
 } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { PlusCircle, Trash2, Edit, BellRing, Clock, Send, Loader2, Mail, RefreshCw, Play, LayoutTemplate, Info, Save, ChevronRight, Eye, Bot, Smartphone, UserPlus, Link2, Unlink, CheckCircle2, AlertCircle, Key, Lock, User, UserCheck, Activity } from 'lucide-react';
+import { PlusCircle, Trash2, Edit, BellRing, Clock, Send, Loader2, Mail, RefreshCw, Play, LayoutTemplate, Info, Save, ChevronRight, Eye, Bot, Smartphone, UserPlus, Link2, Unlink, CheckCircle2, AlertCircle, Key, Lock, User, UserCheck, Activity, Sparkles, Cpu, Server, CheckCircle, XCircle, Settings2, HelpCircle } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
-import type { NotificationRule, ScheduledTask, NotificationServiceConfig, EmailSettings, NotificationTemplate } from '@/modules/core/types';
+import type { NotificationRule, ScheduledTask, NotificationServiceConfig, EmailSettings, NotificationTemplate, AiSettings } from '@/modules/core/types';
 import { 
     getAllNotificationRules, saveNotificationRule, deleteNotificationRule,
     getAllScheduledTasks, saveScheduledTask, deleteScheduledTask,
@@ -35,11 +35,14 @@ import {
     testTelegram, fetchTelegramChatId, testNotificationRule,
     getAllNotificationTemplates, saveNotificationTemplate
 } from '@/modules/notifications/lib/actions';
+import { getAiSettings, saveAiSettings } from '@/modules/core/lib/db';
+import { testAiConnection } from '@/modules/core/lib/ai-assistant-service';
 import { Badge } from '@/components/ui/badge';
 import {
     generateActivationCodeAction,
     linkTelegramManuallyAction,
     unlinkTelegramAction,
+    updateTelegramLinkagePermissionsAction,
     getAllLinkagesAction,
     getActiveBotStatesAction,
     clearBotStateAction,
@@ -66,6 +69,12 @@ const eventLabels: Record<string, string> = {
     onTicketStatusChanged: 'Cambio de Estado en Ticket',
     onFleetWeeklyFuelReport: 'Consolidado Semanal de Consumo de Combustible (Reporte)',
     onFleetAlertsSummary: 'Consolidado de Alertas de Flota (Reporte)',
+    onDeliveryUpdate: 'Actualización en Estado de Entrega (Logística)',
+    onAssetAssigned: 'Asignación de Activo Fijo TI (ITAM)',
+    onCollectAssigned: 'Solicitud de Recolecta Asignada a Ruta (Compras)',
+    onCollectUpdate: 'Actualización en Estado de Recolecta (Compras)',
+    onDeliveryRetry: 'Boleta de Retorno / Devolución Total de Entrega (Logística)',
+    onDeliveryPartial: 'Boleta de Entrega Incompleta / Faltante (Logística)',
 };
 
 const eventVariables: Record<string, string[]> = {
@@ -75,10 +84,16 @@ const eventVariables: Record<string, string[]> = {
     onFleetMaintenanceLogAdded: ['plate', 'brand', 'model', 'type', 'description', 'mileage', 'cost', 'performedBy'],
     onFleetOdometerAnomaly: ['plate', 'previousMileage', 'currentMileage', 'diff'],
     onNewSuggestion: ['userName', 'content'],
-    onTicketCreated: ['ticketId', 'title', 'description', 'category', 'priority', 'status', 'createdBy'],
-    onTicketStatusChanged: ['ticketId', 'title', 'previousStatus', 'newStatus', 'updatedBy'],
+    onTicketCreated: ['consecutive', 'subject', 'departmentName', 'maintenanceType', 'priority', 'equipmentName', 'brand', 'model', 'serialNumber', 'assigneeName', 'createdByName', 'requesterName', 'description'],
+    onTicketStatusChanged: ['consecutive', 'subject', 'departmentName', 'status', 'assigneeName', 'requesterName', 'partsTable', 'consumablesTable', 'historyTable'],
     onFleetWeeklyFuelReport: ['startDate', 'endDate', 'totalLiters', 'totalCost', 'avgCostPerLiter', 'avgEfficiency', 'consolidatedTable', 'fuelListTelegram'],
     onFleetAlertsSummary: ['totalAlerts', 'outOfServiceCount', 'mechanicalAlertsCount', 'legalAlertsCount', 'alertsTable', 'alertsListTelegram'],
+    onDeliveryUpdate: ['docNumero', 'clienteNombre', 'estadoLabel', 'estadoColor', 'estadoBg', 'tipoDoc', 'canal', 'gestionadoPor', 'comentario', 'infoEnvio', 'linesHtml', 'productosHtml', 'icon'],
+    onAssetAssigned: ['assigneeName', 'assigneeId', 'category', 'brand', 'model', 'serialNumber', 'assignedDate', 'assignedBy', 'notes'],
+    onCollectAssigned: ['consecutivo', 'proveedor', 'ordenCompra', 'factura', 'solicitanteNombre', 'choferNombre', 'rutaNombre', 'vehiculoPlaca', 'lugarEntrega', 'metodoPago', 'horarioProveedor', 'contactoNombre', 'contactoTelefono', 'whatsappLink'],
+    onCollectUpdate: ['consecutivo', 'proveedor', 'ordenCompra', 'factura', 'solicitanteNombre', 'choferNombre', 'rutaNombre', 'vehiculoPlaca', 'lugarEntrega', 'metodoPago', 'horarioProveedor', 'contactoNombre', 'contactoTelefono', 'whatsappLink', 'estadoLabel', 'comentarioChofer'],
+    onDeliveryRetry: ['documento_numero', 'cliente_nombre', 'cliente_id', 'lugar_entrega', 'contacto_nombre', 'contacto_telefono', 'fecha', 'ruta_nombre', 'chofer_nombre', 'chofer_id', 'motivo_devolucion'],
+    onDeliveryPartial: ['documento_numero', 'cliente_nombre', 'cliente_id', 'lugar_entrega', 'contacto_nombre', 'contacto_telefono', 'fecha', 'ruta_nombre', 'chofer_nombre', 'chofer_id', 'motivo_incompleto'],
 };
 
 function interpretCronExpression(cron: string): string {
@@ -256,7 +271,7 @@ export default function AutomationManagerPage() {
     const [manualUsername, setManualUsername] = useState('');
 
     const filteredEmployees = useMemo(() => {
-        return activeEmployees.filter(emp => {
+        return (activeEmployees || []).filter(emp => {
             if (showInactiveEmployees) return true;
             return emp.active === 'S';
         });
@@ -281,6 +296,12 @@ export default function AutomationManagerPage() {
     const [currentTask, setCurrentTask] = useState<Partial<ScheduledTask>>({
         name: '', schedule: '0 8 * * *', taskId: 'fleet-audit', enabled: true
     });
+
+    // AI Settings States
+    const [aiSettings, setAiSettings] = useState<AiSettings | null>(null);
+    const [isTestingAiConnection, setIsTestingAiConnection] = useState(false);
+    const [aiConnectionStatus, setAiConnectionStatus] = useState<{ success: boolean; message: string } | null>(null);
+    const [isSavingAi, setIsSavingAi] = useState(false);
 
     // States for Cron Visual Builder
     const [cronMode, setCronMode] = useState<'visual' | 'manual'>('visual');
@@ -411,25 +432,110 @@ export default function AutomationManagerPage() {
         }
     };
 
+    const handleToggleAiActive = (checked: boolean) => {
+        if (!aiSettings) return;
+        setAiSettings({ ...aiSettings, aiEnabled: checked ? 1 : 0 });
+    };
+
+    const handleAiProviderChange = (val: string) => {
+        if (!aiSettings) return;
+        setAiSettings({ ...aiSettings, provider: val });
+        setAiConnectionStatus(null);
+    };
+
+    const handleAiSettingChange = (id: keyof AiSettings, value: string) => {
+        if (!aiSettings) return;
+        setAiSettings({ ...aiSettings, [id]: value });
+    };
+
+    const handleTestAiConnection = async () => {
+        if (!aiSettings) return;
+        setIsTestingAiConnection(true);
+        setAiConnectionStatus(null);
+        try {
+            const res = await testAiConnection(aiSettings.provider as 'ollama' | 'gemini' | 'deepseek', {
+                ollamaHost: aiSettings.ollamaHost,
+                ollamaModel: aiSettings.ollamaModel,
+                geminiApiKey: aiSettings.geminiApiKey,
+                geminiModel: aiSettings.geminiModel,
+                deepseekApiKey: aiSettings.deepseekApiKey,
+                deepseekModel: aiSettings.deepseekModel,
+            });
+            setAiConnectionStatus(res);
+            toast({
+                title: res.success ? 'Conexión Exitosa' : 'Error de Conexión',
+                description: res.message,
+                variant: res.success ? 'default' : 'destructive'
+            });
+        } catch (err: any) {
+            setAiConnectionStatus({ success: false, message: err.message });
+        } finally {
+            setIsTestingAiConnection(false);
+        }
+    };
+
+    const handleSaveAiSettings = async () => {
+        if (!aiSettings) return;
+        setIsSavingAi(true);
+        try {
+            await saveAiSettings(aiSettings);
+            toast({
+                title: 'Configuración Guardada',
+                description: 'Los parámetros del Asistente de IA se han actualizado correctamente.',
+            });
+            fetchData();
+        } catch (err: any) {
+            toast({
+                title: 'Error al Guardar',
+                description: err.message,
+                variant: 'destructive'
+            });
+        } finally {
+            setIsSavingAi(false);
+        }
+    };
+
+    const handleTogglePermission = async (
+        linkId: number,
+        permissionKey: 'allowFuel' | 'allowMaintenance' | 'allowDeliveries' | 'allowWarehouse',
+        currentValue: boolean
+    ) => {
+        const link = linkages.find(l => l.id === linkId);
+        if (!link) return;
+
+        const permissions = {
+            allowFuel: link.allowFuel !== 0,
+            allowMaintenance: link.allowMaintenance !== 0,
+            allowDeliveries: link.allowDeliveries !== 0,
+            allowWarehouse: link.allowWarehouse !== 0,
+            [permissionKey]: !currentValue
+        };
+
+        try {
+            await updateTelegramLinkagePermissionsAction(linkId, permissions);
+            toast({ title: 'Permisos actualizados', description: 'Los accesos del bot fueron guardados.' });
+            fetchTelegramBotData();
+        } catch (error: any) {
+            toast({ title: 'Error', description: 'No se pudieron guardar los permisos.', variant: 'destructive' });
+        }
+    };
+
     const fetchData = useCallback(async () => {
         setIsLoading(true);
         try {
-            const [rulesData, tasksData, settings, templatesData] = await Promise.all([
+            const [rulesData, tasksData, settings, templatesData, aiSettingsData] = await Promise.all([
                 getAllNotificationRules(),
                 getAllScheduledTasks(),
                 getNotificationServiceSettings('telegram'),
-                getAllNotificationTemplates()
+                getAllNotificationTemplates(),
+                getAiSettings()
             ]);
             setRules(rulesData);
             setTasks(tasksData);
             setTemplates(templatesData);
             if (settings) setTelegramSettings(settings);
+            if (aiSettingsData) setAiSettings(aiSettingsData);
             
-            if (templatesData.length > 0 && !selectedTemplateId) {
-                setSelectedTemplateId(templatesData[0].eventId);
-                setEditingTemplate(templatesData[0]);
-            }
-
             // Sync telegram bot linkages and states
             await fetchTelegramBotData();
 
@@ -440,7 +546,14 @@ export default function AutomationManagerPage() {
             setIsLoading(false);
             setIsInitialLoading(false);
         }
-    }, [toast, selectedTemplateId, fetchTelegramBotData]);
+    }, [toast, fetchTelegramBotData]);
+
+    useEffect(() => {
+        if (templates.length > 0 && !selectedTemplateId) {
+            setSelectedTemplateId(templates[0].eventId);
+            setEditingTemplate(templates[0]);
+        }
+    }, [templates, selectedTemplateId]);
 
     useEffect(() => {
         setTitle('Gestor de Automatizaciones');
@@ -636,9 +749,13 @@ export default function AutomationManagerPage() {
     const handleFetchChatId = async () => {
         setIsFetchingChatId(true);
         try {
-            const chat = await fetchTelegramChatId();
-            setTelegramSettings({ ...telegramSettings, chatId: chat.id });
-            toast({ title: "Chat Detectado", description: `Se encontró: ${chat.name}` });
+            const res = await fetchTelegramChatId();
+            if (res.success) {
+                setTelegramSettings({ ...telegramSettings, chatId: res.id! });
+                toast({ title: "Chat Detectado", description: `Se encontró: ${res.name}` });
+            } else {
+                toast({ title: "Búsqueda Fallida", description: res.error, variant: "destructive" });
+            }
         } catch (error: any) {
             toast({ title: "Búsqueda Fallida", description: error.message, variant: "destructive" });
         } finally {
@@ -682,12 +799,13 @@ export default function AutomationManagerPage() {
                 </div>
 
                 <Tabs defaultValue="scheduled">
-                    <TabsList className="grid w-full grid-cols-5">
+                    <TabsList className="grid w-full grid-cols-6">
                         <TabsTrigger value="scheduled" className="flex gap-2"><Clock className="h-4 w-4" /> Tareas Cron</TabsTrigger>
                         <TabsTrigger value="rules" className="flex gap-2"><BellRing className="h-4 w-4" /> Reglas de Envío</TabsTrigger>
                         <TabsTrigger value="templates" className="flex gap-2 text-primary font-black uppercase tracking-tighter"><LayoutTemplate className="h-4 w-4" /> Diseño Mensajes</TabsTrigger>
                         <TabsTrigger value="services" className="flex gap-2"><Send className="h-4 w-4" /> Servicios Externos</TabsTrigger>
                         <TabsTrigger value="telegram-bot" className="flex gap-2"><Bot className="h-4 w-4" /> Bot Telegram</TabsTrigger>
+                        <TabsTrigger value="ai-copilot" className="flex gap-2"><Sparkles className="h-4 w-4" /> Asistente IA</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="rules" className="space-y-4 pt-4">
@@ -1008,7 +1126,7 @@ export default function AutomationManagerPage() {
                     <TabsContent value="telegram-bot" className="space-y-6 pt-4">
                         {/* SELECTOR DE BOTS MULTIFUNCIONAL */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                            {/* Bot de Flota (Activo) */}
+                            {/* Bot General (Activo) */}
                             <Card className={cn(
                                 "border-2 relative overflow-hidden transition-all duration-300 hover:shadow-lg",
                                 selectedBotId === 'fleet' ? "border-primary/50 bg-primary/5" : "border-border"
@@ -1019,9 +1137,9 @@ export default function AutomationManagerPage() {
                                 </div>
                                 <CardHeader>
                                     <Bot className="h-10 w-10 text-primary mb-2" />
-                                    <CardTitle className="text-lg">Bot de Flota</CardTitle>
+                                    <CardTitle className="text-lg">Bot General</CardTitle>
                                     <CardDescription>
-                                        Choferes y mecánicos registran repostajes y mantenimientos desde Telegram de forma instantánea.
+                                        Asistente inteligente unificado. Choferes, mecánicos y operarios gestionan repostajes, mantenimientos, entregas y consultas de almacén desde un único chat.
                                     </CardDescription>
                                 </CardHeader>
                                 <CardContent className="pt-0">
@@ -1083,7 +1201,7 @@ export default function AutomationManagerPage() {
                                         <CardHeader>
                                             <CardTitle className="text-md flex items-center gap-2">
                                                 <Bot className="h-5 w-5 text-primary" />
-                                                Servicio del Bot de Flota
+                                                Servicio del Bot General
                                             </CardTitle>
                                             <CardDescription>
                                                 Sincroniza y valida la conexión en tiempo real con el API de Telegram.
@@ -1227,6 +1345,7 @@ export default function AutomationManagerPage() {
                                                         <TableHead>Empleado</TableHead>
                                                         <TableHead>Usuario Telegram</TableHead>
                                                         <TableHead>Chat ID</TableHead>
+                                                        <TableHead>Permisos del Bot</TableHead>
                                                         <TableHead>Estado / Código Activo</TableHead>
                                                         <TableHead className="text-right">Acciones</TableHead>
                                                     </TableRow>
@@ -1234,7 +1353,7 @@ export default function AutomationManagerPage() {
                                                 <TableBody>
                                                     {linkages.length === 0 ? (
                                                         <TableRow>
-                                                            <TableCell colSpan={5} className="text-center text-xs text-muted-foreground py-8">
+                                                            <TableCell colSpan={6} className="text-center text-xs text-muted-foreground py-8">
                                                                 Ningún empleado vinculado actualmente. Genere un código o realice una vinculación manual para comenzar.
                                                             </TableCell>
                                                         </TableRow>
@@ -1246,6 +1365,46 @@ export default function AutomationManagerPage() {
                                                                     {link.username ? `@${link.username}` : link.chatId ? 'Vinculado (sin @usuario)' : '-'}
                                                                 </TableCell>
                                                                 <TableCell className="font-mono text-xs text-muted-foreground">{link.chatId || '-'}</TableCell>
+                                                                <TableCell className="text-xs">
+                                                                    <div className="flex flex-wrap gap-x-3 gap-y-1.5 items-center">
+                                                                        <label className="flex items-center gap-1 cursor-pointer select-none text-[11px] font-semibold text-muted-foreground hover:text-primary">
+                                                                            <input 
+                                                                                type="checkbox"
+                                                                                checked={link.allowFuel !== 0}
+                                                                                onChange={() => handleTogglePermission(link.id, 'allowFuel', link.allowFuel !== 0)}
+                                                                                className="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
+                                                                            />
+                                                                            <span>⛽ Comb.</span>
+                                                                        </label>
+                                                                        <label className="flex items-center gap-1 cursor-pointer select-none text-[11px] font-semibold text-muted-foreground hover:text-primary">
+                                                                            <input 
+                                                                                type="checkbox"
+                                                                                checked={link.allowMaintenance !== 0}
+                                                                                onChange={() => handleTogglePermission(link.id, 'allowMaintenance', link.allowMaintenance !== 0)}
+                                                                                className="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
+                                                                            />
+                                                                            <span>🔧 Mec.</span>
+                                                                        </label>
+                                                                        <label className="flex items-center gap-1 cursor-pointer select-none text-[11px] font-semibold text-muted-foreground hover:text-primary">
+                                                                            <input 
+                                                                                type="checkbox"
+                                                                                checked={link.allowDeliveries !== 0}
+                                                                                onChange={() => handleTogglePermission(link.id, 'allowDeliveries', link.allowDeliveries !== 0)}
+                                                                                className="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
+                                                                            />
+                                                                            <span>🚚 Ent.</span>
+                                                                        </label>
+                                                                        <label className="flex items-center gap-1 cursor-pointer select-none text-[11px] font-semibold text-muted-foreground hover:text-primary">
+                                                                            <input 
+                                                                                type="checkbox"
+                                                                                checked={link.allowWarehouse !== 0}
+                                                                                onChange={() => handleTogglePermission(link.id, 'allowWarehouse', link.allowWarehouse !== 0)}
+                                                                                className="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
+                                                                            />
+                                                                            <span>📦 Bod.</span>
+                                                                        </label>
+                                                                    </div>
+                                                                </TableCell>
                                                                 <TableCell>
                                                                     {link.chatId ? (
                                                                         <Badge variant="default" className="text-[10px] font-bold py-0.5 px-2 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
@@ -1435,6 +1594,229 @@ export default function AutomationManagerPage() {
                                 </Card>
                             </div>
                         )}
+                    </TabsContent>
+
+                    <TabsContent value="ai-copilot" className="space-y-4 pt-4 animate-in fade-in duration-300">
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <div className="lg:col-span-2 space-y-6">
+                                <Card className="shadow-sm">
+                                    <CardHeader className="bg-primary/5 pb-4 border-b">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-3">
+                                                <Settings2 className="h-5 w-5 text-primary" />
+                                                <div>
+                                                    <CardTitle className="text-lg">Configuración de IA Copiloto</CardTitle>
+                                                    <CardDescription>Configura el motor de IA que ayuda a guiar a los usuarios en Telegram.</CardDescription>
+                                                </div>
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                <Label htmlFor="ai-active" className="text-sm font-semibold cursor-pointer">Activar Asistencia</Label>
+                                                <Switch
+                                                    id="ai-active"
+                                                    checked={aiSettings?.aiEnabled === 1}
+                                                    onCheckedChange={handleToggleAiActive}
+                                                />
+                                            </div>
+                                        </div>
+                                    </CardHeader>
+                                    <CardContent className="space-y-6 pt-6">
+                                        <div className="space-y-2">
+                                            <Label htmlFor="ai-provider" className="flex items-center gap-2 text-sm font-semibold">
+                                                <Cpu className="h-4 w-4 text-muted-foreground" />
+                                                Proveedor de IA
+                                            </Label>
+                                            <Select value={aiSettings?.provider} onValueChange={handleAiProviderChange}>
+                                                <SelectTrigger className="w-full">
+                                                    <SelectValue placeholder="Selecciona un proveedor" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="ollama">Ollama (Servicio Local)</SelectItem>
+                                                    <SelectItem value="gemini">Google Gemini (Nube)</SelectItem>
+                                                    <SelectItem value="deepseek">DeepSeek (API Nube)</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+
+                                        {aiSettings?.provider === 'ollama' && (
+                                            <div className="space-y-4 border-t pt-4 animate-in slide-in-from-top-4 duration-300">
+                                                <div className="space-y-2">
+                                                    <Label htmlFor="ollamaHost" className="flex items-center gap-2 text-sm font-semibold">
+                                                        <Server className="h-4 w-4 text-muted-foreground" />
+                                                        Host de Ollama
+                                                    </Label>
+                                                    <Input
+                                                        id="ollamaHost"
+                                                        placeholder="http://localhost:11434"
+                                                        value={aiSettings.ollamaHost}
+                                                        onChange={(e) => handleAiSettingChange("ollamaHost", e.target.value)}
+                                                    />
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <Label htmlFor="ollamaModel" className="flex items-center gap-2 text-sm font-semibold">
+                                                        <Bot className="h-4 w-4 text-muted-foreground" />
+                                                        Modelo de Ollama
+                                                    </Label>
+                                                    <Input
+                                                        id="ollamaModel"
+                                                        placeholder="llama3.2:3b"
+                                                        value={aiSettings.ollamaModel}
+                                                        onChange={(e) => handleAiSettingChange("ollamaModel", e.target.value)}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {aiSettings?.provider === 'gemini' && (
+                                            <div className="space-y-4 border-t pt-4 animate-in slide-in-from-top-4 duration-300">
+                                                <div className="space-y-2">
+                                                    <Label htmlFor="geminiApiKey" className="flex items-center gap-2 text-sm font-semibold">
+                                                        <Key className="h-4 w-4 text-muted-foreground" />
+                                                        Gemini API Key
+                                                    </Label>
+                                                    <Input
+                                                        id="geminiApiKey"
+                                                        type="password"
+                                                        placeholder="AIzaSy..."
+                                                        value={aiSettings.geminiApiKey}
+                                                        onChange={(e) => handleAiSettingChange("geminiApiKey", e.target.value)}
+                                                    />
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <Label htmlFor="geminiModel" className="flex items-center gap-2 text-sm font-semibold">
+                                                        <Bot className="h-4 w-4 text-muted-foreground" />
+                                                        Modelo de Gemini
+                                                    </Label>
+                                                    <Input
+                                                        id="geminiModel"
+                                                        placeholder="gemini-1.5-flash"
+                                                        value={aiSettings.geminiModel}
+                                                        onChange={(e) => handleAiSettingChange("geminiModel", e.target.value)}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {aiSettings?.provider === 'deepseek' && (
+                                            <div className="space-y-4 border-t pt-4 animate-in slide-in-from-top-4 duration-300">
+                                                <div className="space-y-2">
+                                                    <Label htmlFor="deepseekApiKey" className="flex items-center gap-2 text-sm font-semibold">
+                                                        <Key className="h-4 w-4 text-muted-foreground" />
+                                                        DeepSeek API Key
+                                                    </Label>
+                                                    <Input
+                                                        id="deepseekApiKey"
+                                                        type="password"
+                                                        placeholder="sk-..."
+                                                        value={aiSettings.deepseekApiKey}
+                                                        onChange={(e) => handleAiSettingChange("deepseekApiKey", e.target.value)}
+                                                    />
+                                                </div>
+                                                <div className="space-y-2">
+                                                    <Label htmlFor="deepseekModel" className="flex items-center gap-2 text-sm font-semibold">
+                                                        <Bot className="h-4 w-4 text-muted-foreground" />
+                                                        Modelo de DeepSeek
+                                                    </Label>
+                                                    <Input
+                                                        id="deepseekModel"
+                                                        placeholder="deepseek-v4-flash"
+                                                        value={aiSettings.deepseekModel}
+                                                        onChange={(e) => handleAiSettingChange("deepseekModel", e.target.value)}
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+                                    </CardContent>
+                                    <CardFooter className="flex justify-end gap-3 border-t pt-4 bg-muted/20">
+                                        <Button onClick={handleSaveAiSettings} disabled={isSavingAi} className="h-9">
+                                            {isSavingAi ? 'Guardando...' : 'Guardar Configuración'}
+                                        </Button>
+                                    </CardFooter>
+                                </Card>
+
+                                <Card className="shadow-sm">
+                                    <CardHeader>
+                                        <div className="flex items-center gap-3">
+                                            <HelpCircle className="h-5 w-5 text-primary" />
+                                            <div>
+                                                <CardTitle className="text-md">Prompt de Sistema</CardTitle>
+                                                <CardDescription>Modifica las directivas de comportamiento y formato para el asistente conversacional.</CardDescription>
+                                            </div>
+                                        </div>
+                                    </CardHeader>
+                                    <CardContent className="pt-2">
+                                        <Textarea
+                                            id="systemPrompt"
+                                            rows={6}
+                                            className="font-mono text-sm leading-relaxed"
+                                            placeholder="Escribe las directivas de personalidad de la IA aquí..."
+                                            value={aiSettings?.systemPrompt || ''}
+                                            onChange={(e) => handleAiSettingChange("systemPrompt", e.target.value)}
+                                        />
+                                    </CardContent>
+                                    <CardFooter className="flex justify-end gap-3 border-t pt-4 bg-muted/20">
+                                        <Button onClick={handleSaveAiSettings} disabled={isSavingAi} className="h-9">
+                                            {isSavingAi ? 'Guardando...' : 'Guardar Configuración'}
+                                        </Button>
+                                    </CardFooter>
+                                </Card>
+                            </div>
+
+                            <div className="space-y-6">
+                                <Card className="shadow-sm border-secondary/50">
+                                    <CardHeader className="pb-3 border-b bg-secondary/5">
+                                        <CardTitle className="text-sm font-bold flex items-center gap-2">
+                                            <Activity className="h-4 w-4 text-primary animate-pulse" />
+                                            Prueba de Conexión
+                                        </CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="pt-4 space-y-4">
+                                        {aiConnectionStatus ? (
+                                            <div className={`p-4 rounded-xl border flex flex-col gap-2 text-xs ${aiConnectionStatus.success ? 'bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-400' : 'bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-400'}`}>
+                                                <div className="flex items-center gap-2 font-bold">
+                                                    {aiConnectionStatus.success ? <CheckCircle className="h-4 w-4 text-green-600" /> : <XCircle className="h-4 w-4 text-red-600" />}
+                                                    {aiConnectionStatus.success ? 'Servicio Activo' : 'Error de Conexión'}
+                                                </div>
+                                                <p className="font-medium leading-relaxed">{aiConnectionStatus.message}</p>
+                                            </div>
+                                        ) : (
+                                            <div className="p-4 bg-muted/40 rounded-xl border text-center text-xs text-muted-foreground">
+                                                No se ha realizado la prueba de conexión para el proveedor activo.
+                                            </div>
+                                        )}
+
+                                        <Button
+                                            variant="outline"
+                                            className="w-full gap-2 flex items-center justify-center h-9"
+                                            disabled={isTestingAiConnection}
+                                            onClick={handleTestAiConnection}
+                                        >
+                                            <RefreshCw className={`h-4 w-4 ${isTestingAiConnection ? 'animate-spin' : ''}`} />
+                                            Probar Conectividad
+                                        </Button>
+                                    </CardContent>
+                                </Card>
+
+                                <Card className="shadow-sm bg-primary/5 border-primary/10">
+                                    <CardHeader className="pb-2">
+                                        <CardTitle className="text-xs font-bold flex items-center gap-2 text-primary">
+                                            <Bot className="h-4 w-4" />
+                                            ¿Cómo funciona la IA?
+                                        </CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="text-[11px] text-muted-foreground space-y-3 leading-relaxed">
+                                        <p>
+                                            El asistente de IA se activará automáticamente cuando un chofer o usuario ingrese un texto inválido o no reconocido por el menú actual del bot de Telegram.
+                                        </p>
+                                        <p>
+                                            La IA analizará el paso actual y explicará amigablemente qué debe hacer.
+                                        </p>
+                                        <p>
+                                            Si la IA se encuentra inactiva, apagada o genera algún error de red, el bot continuará su flujo tradicional sin interrupciones.
+                                        </p>
+                                    </CardContent>
+                                </Card>
+                            </div>
+                        </div>
                     </TabsContent>
                 </Tabs>
 

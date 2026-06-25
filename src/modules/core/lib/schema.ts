@@ -7,7 +7,7 @@
 import type { Role, Company, TransitStatusAlias } from '@/modules/core/types';
 import { initialRoles, initialCompany } from './data';
 
-export const CORE_SCHEMA_VERSION = 3;
+export const CORE_SCHEMA_VERSION = 9;
 
 export const CORE_TABLE_NAMES = {
     users: 'core_users',
@@ -15,6 +15,7 @@ export const CORE_TABLE_NAMES = {
     companySettings: 'core_company_settings',
     logs: 'core_logs',
     apiSettings: 'core_api_settings',
+    aiSettings: 'core_ai_settings',
     analyticsSettings: 'core_analytics_settings',
     customers: 'core_customers',
     products: 'core_products',
@@ -41,6 +42,8 @@ export const CORE_TABLE_NAMES = {
     notificationTemplates: 'notification_templates',
     notificationScheduledTasks: 'notification_scheduled_tasks',
     notificationConfigs: 'notification_configs',
+    geographyData: 'core_geography_data',
+    customerShipmentAddresses: 'core_customer_shipment_addresses',
     migrations: '_core_migrations'
 };
 
@@ -63,7 +66,8 @@ export const CORE_TABLES = `
         securityAnswer TEXT,
         forcePasswordChange BOOLEAN DEFAULT FALSE,
         activeWizardSession TEXT,
-        employeeId TEXT
+        employeeId TEXT,
+        is_active INTEGER DEFAULT 1
     );
 
     CREATE INDEX IF NOT EXISTS idx_core_users_email ON ${CORE_TABLE_NAMES.users}(email);
@@ -81,7 +85,8 @@ export const CORE_TABLES = `
         searchDebounceTime INTEGER, syncWarningHours REAL, lastSyncTimestamp TEXT,
         importMode TEXT, customerFilePath TEXT, productFilePath TEXT, exemptionFilePath TEXT, stockFilePath TEXT, locationFilePath TEXT, cabysFilePath TEXT, supplierFilePath TEXT,
         erpPurchaseOrderHeaderFilePath TEXT, erpPurchaseOrderLineFilePath TEXT,
-        erpInvoiceHeaderFilePath TEXT, erpInvoiceLineFilePath TEXT
+        erpInvoiceHeaderFilePath TEXT, erpInvoiceLineFilePath TEXT,
+        timeZone TEXT DEFAULT 'America/Costa_Rica'
     );
 
     CREATE TABLE IF NOT EXISTS ${CORE_TABLE_NAMES.logs} (
@@ -98,6 +103,19 @@ export const CORE_TABLES = `
         haciendaExemptionApi TEXT,
         haciendaTributariaApi TEXT,
         recopeApi TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS ${CORE_TABLE_NAMES.aiSettings} (
+        id INTEGER PRIMARY KEY,
+        aiEnabled INTEGER DEFAULT 0,
+        provider TEXT DEFAULT 'ollama',
+        ollamaHost TEXT DEFAULT 'http://localhost:11434',
+        ollamaModel TEXT DEFAULT 'llama3.2:3b',
+        geminiApiKey TEXT DEFAULT '',
+        geminiModel TEXT DEFAULT 'gemini-1.5-flash',
+        deepseekApiKey TEXT DEFAULT '',
+        deepseekModel TEXT DEFAULT 'deepseek-v4-flash',
+        systemPrompt TEXT DEFAULT 'Eres un asistente experto en usabilidad. Tu objetivo es guiar al usuario a completar el flujo del bot.'
     );
 
     CREATE TABLE IF NOT EXISTS ${CORE_TABLE_NAMES.analyticsSettings} (
@@ -290,6 +308,7 @@ export const CORE_TABLES = `
         FECHA TEXT,
         FECHA_ENTREGA TEXT,
         ANULADA TEXT,
+        DIREC_EMBARQUE TEXT,
         EMBARCAR_A TEXT,
         DIRECCION_FACTURA TEXT,
         OBSERVACIONES TEXT,
@@ -360,6 +379,27 @@ export const CORE_TABLES = `
         config TEXT NOT NULL -- JSON blob
     );
 
+    CREATE TABLE IF NOT EXISTS ${CORE_TABLE_NAMES.geographyData} (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS ${CORE_TABLE_NAMES.customerShipmentAddresses} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        cliente_id TEXT NOT NULL,
+        direccion_id TEXT NOT NULL,
+        detalle_direccion TEXT,
+        descripcion TEXT,
+        contacto TEXT,
+        cargo TEXT,
+        telefono1 TEXT,
+        telefono2 TEXT,
+        latitude REAL,
+        longitude REAL,
+        UNIQUE(cliente_id, direccion_id)
+    );
+
     -- Production Indexes for Core
     CREATE INDEX IF NOT EXISTS idx_core_logs_timestamp ON ${CORE_TABLE_NAMES.logs}(timestamp);
     CREATE INDEX IF NOT EXISTS idx_core_notifications_user_unread ON ${CORE_TABLE_NAMES.notifications}(userId, isRead);
@@ -368,16 +408,21 @@ export const CORE_TABLES = `
     CREATE INDEX IF NOT EXISTS idx_erp_order_headers_cliente ON ${CORE_TABLE_NAMES.erpOrderHeaders}(CLIENTE);
     CREATE INDEX IF NOT EXISTS idx_erp_purchase_order_headers_proveedor ON ${CORE_TABLE_NAMES.erpPurchaseOrderHeaders}(PROVEEDOR);
     CREATE INDEX IF NOT EXISTS idx_erp_invoice_lines_articulo ON ${CORE_TABLE_NAMES.erpInvoiceLines}(ARTICULO);
+    CREATE INDEX IF NOT EXISTS idx_cust_ship_addr_client_dir ON ${CORE_TABLE_NAMES.customerShipmentAddresses}(cliente_id, direccion_id);
 `;
 
 /**
  * Initial data for the Core module.
  */
 export function initializeCoreData(db: any) {
-    // Roles
+    // Roles - Ensure admin role is always overwritten to get the latest allAdminPermissions
     const insertRole = db.prepare(`INSERT OR IGNORE INTO ${CORE_TABLE_NAMES.roles} (id, name, permissions) VALUES (@id, @name, @permissions)`);
     for (const role of initialRoles) {
-        insertRole.run({ ...role, permissions: JSON.stringify(role.permissions) });
+        if (role.id === 'admin') {
+            db.prepare(`INSERT OR REPLACE INTO ${CORE_TABLE_NAMES.roles} (id, name, permissions) VALUES ('admin', 'Admin', ?)`).run(JSON.stringify(role.permissions));
+        } else {
+            insertRole.run({ ...role, permissions: JSON.stringify(role.permissions) });
+        }
     }
 
     // Company Settings
@@ -398,7 +443,6 @@ export function initializeCoreData(db: any) {
         quoterShowTaxId: initialCompany.quoterShowTaxId ? 1 : 0 
     });
 
-    // API Settings
     db.prepare(`
         INSERT OR IGNORE INTO ${CORE_TABLE_NAMES.apiSettings} (
             id, exchangeRateApi, haciendaExemptionApi, haciendaTributariaApi, recopeApi
@@ -407,6 +451,15 @@ export function initializeCoreData(db: any) {
             'https://api.hacienda.go.cr/fe/ex?autorizacion=', 
             'https://api.hacienda.go.cr/fe/ae?identificacion=',
             ''
+        )
+    `).run();
+
+    // AI Settings
+    db.prepare(`
+        INSERT OR IGNORE INTO ${CORE_TABLE_NAMES.aiSettings} (
+            id, aiEnabled, provider, ollamaHost, ollamaModel, geminiApiKey, geminiModel, deepseekApiKey, deepseekModel, systemPrompt
+        ) VALUES (
+            1, 0, 'ollama', 'http://localhost:11434', 'llama3.2:3b', '', 'gemini-1.5-flash', '', 'deepseek-v4-flash', 'Eres un asistente experto en usabilidad. Tu objetivo es guiar al usuario a completar el flujo del bot.'
         )
     `).run();
 
@@ -441,6 +494,143 @@ export const CORE_MIGRATIONS: ((db: any) => void)[] = [
             console.log("[Migration] Columna 'employeeId' agregada exitosamente a 'core_users'.");
         } catch (e: any) {
             console.warn("[Migration] Columna 'employeeId' ya existe o hubo un error menor:", e.message);
+        }
+    },
+    // Version 4: Add core_geography_data table
+    (db: any) => {
+        try {
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS core_geography_data (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updatedAt TEXT DEFAULT CURRENT_TIMESTAMP
+                );
+            `);
+            console.log("[Migration] Tabla 'core_geography_data' creada exitosamente.");
+        } catch (e: any) {
+            console.warn("[Migration] Error creando la tabla 'core_geography_data':", e.message);
+        }
+    },
+    // Version 5: Add timeZone to core_company_settings (Safe migration)
+    (db: any) => {
+        try {
+            const tableInfo = db.prepare("PRAGMA table_info('core_company_settings')").all();
+            const columnExists = tableInfo.some((col: any) => col.name === 'timeZone');
+            
+            if (!columnExists) {
+                db.exec(`ALTER TABLE core_company_settings ADD COLUMN timeZone TEXT DEFAULT 'America/Costa_Rica';`);
+                console.log("[Migration v5] ✅ Columna 'timeZone' agregada exitosamente a 'core_company_settings'.");
+            } else {
+                console.log("[Migration v5] ℹ️ Columna 'timeZone' ya existe, omitiendo.");
+            }
+        } catch (e: any) {
+            console.error("[Migration v5] ❌ Error inesperado en migración v5:", e);
+            throw e;
+        }
+    },
+    // Version 6: Add is_active to core_users and additional payroll fields to core_employees
+    (db: any) => {
+        try {
+            // 1. core_users.is_active
+            const userTableInfo = db.prepare("PRAGMA table_info('core_users')").all();
+            const userIsActiveExists = userTableInfo.some((col: any) => col.name === 'is_active');
+            if (!userIsActiveExists) {
+                db.exec(`ALTER TABLE core_users ADD COLUMN is_active INTEGER DEFAULT 1;`);
+                console.log("[Migration v6] ✅ Columna 'is_active' agregada a 'core_users'.");
+            }
+
+            // 2. core_employees fields
+            const empTableInfo = db.prepare("PRAGMA table_info('core_employees')").all();
+            const columnsToAdd = [
+                'IDENTIFICACION',
+                'DIRECCION_HAB',
+                'PASAPORTE',
+                'PAIS',
+                'PERMISO_CONDUCIR',
+                'FECHA_INGRESO',
+                'FECHA_SALIDA'
+            ];
+
+            for (const col of columnsToAdd) {
+                const exists = empTableInfo.some((c: any) => c.name === col);
+                if (!exists) {
+                    db.exec(`ALTER TABLE core_employees ADD COLUMN ${col} TEXT;`);
+                    console.log(`[Migration v6] ✅ Columna '${col}' agregada a 'core_employees'.`);
+                }
+            }
+        } catch (e: any) {
+            console.error("[Migration v6] ❌ Error inesperado en migración v6:", e);
+            throw e;
+        }
+    },
+    // Version 7: Add core_customer_shipment_addresses table
+    (db: any) => {
+        try {
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS core_customer_shipment_addresses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cliente_id TEXT NOT NULL,
+                    direccion_id TEXT NOT NULL,
+                    detalle_direccion TEXT,
+                    descripcion TEXT,
+                    contacto TEXT,
+                    cargo TEXT,
+                    telefono1 TEXT,
+                    telefono2 TEXT,
+                    latitude REAL,
+                    longitude REAL,
+                    UNIQUE(cliente_id, direccion_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_cust_ship_addr_client_dir ON core_customer_shipment_addresses(cliente_id, direccion_id);
+            `);
+            console.log("[Migration v7] ✅ Tabla 'core_customer_shipment_addresses' e índices creados exitosamente.");
+        } catch (e: any) {
+            console.error("[Migration v7] ❌ Error inesperado en migración v7:", e);
+            throw e;
+        }
+    },
+    // Version 8: Add DIREC_EMBARQUE to core_erp_invoice_headers
+    (db: any) => {
+        try {
+            const tableInfo = db.prepare("PRAGMA table_info('core_erp_invoice_headers')").all();
+            const exists = tableInfo.some((col: any) => col.name === 'DIREC_EMBARQUE');
+            if (!exists) {
+                db.exec(`ALTER TABLE core_erp_invoice_headers ADD COLUMN DIREC_EMBARQUE TEXT;`);
+                console.log("[Migration v8] ✅ Columna 'DIREC_EMBARQUE' agregada a 'core_erp_invoice_headers'.");
+            }
+        } catch (e: any) {
+            console.error("[Migration v8] ❌ Error en migración v8:", e);
+            throw e;
+        }
+    },
+    // Version 9: Add core_ai_settings table
+    (db: any) => {
+        try {
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS core_ai_settings (
+                    id INTEGER PRIMARY KEY,
+                    aiEnabled INTEGER DEFAULT 0,
+                    provider TEXT DEFAULT 'ollama',
+                    ollamaHost TEXT DEFAULT 'http://localhost:11434',
+                    ollamaModel TEXT DEFAULT 'llama3.2:3b',
+                    geminiApiKey TEXT DEFAULT '',
+                    geminiModel TEXT DEFAULT 'gemini-1.5-flash',
+                    deepseekApiKey TEXT DEFAULT '',
+                    deepseekModel TEXT DEFAULT 'deepseek-v4-flash',
+                    systemPrompt TEXT DEFAULT 'Eres un asistente experto en usabilidad. Tu objetivo es guiar al usuario a completar el flujo del bot.'
+                );
+            `);
+            db.prepare(`
+                INSERT OR IGNORE INTO core_ai_settings (
+                    id, aiEnabled, provider, ollamaHost, ollamaModel, geminiApiKey, geminiModel, deepseekApiKey, deepseekModel, systemPrompt
+                ) VALUES (
+                    1, 0, 'ollama', 'http://localhost:11434', 'llama3.2:3b', '', 'gemini-1.5-flash', '', 'deepseek-v4-flash', 'Eres un asistente experto en usabilidad. Tu objetivo es guiar al usuario a completar el flujo del bot.'
+                )
+            `).run();
+            console.log("[Migration v9] ✅ Tabla 'core_ai_settings' creada y sembrada.");
+        } catch (e: any) {
+            console.error("[Migration v9] ❌ Error en migración v9:", e);
+            throw e;
         }
     }
 ];

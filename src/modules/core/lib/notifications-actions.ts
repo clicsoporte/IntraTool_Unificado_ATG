@@ -4,12 +4,23 @@
 "use server";
 
 import { revalidatePath } from 'next/cache';
-import { getNotifications as dbGetNotifications, markNotificationsAsRead as dbMarkAsRead, createNotification as dbCreateNotification, getNotificationById, deleteNotificationById, getAllRoles as getAllRolesFromDb } from './db';
+import { getNotifications as dbGetNotifications, markNotificationsAsRead as dbMarkAsRead, createNotification as dbCreateNotification, getNotificationById, deleteNotificationById, getAllRoles as getAllRolesFromDb, clearAllNotifications as dbClearAllNotifications, clearReadNotifications as dbClearReadNotifications } from './db';
 import { getAllUsers as dbGetAllUsers } from './auth';
 import type { Notification, User, ProductionOrderStatus, PurchaseRequestStatus } from '../types';
 import { updateStatus as updatePlannerStatus, confirmModification } from '@/modules/planner/lib/db';
 import { updateStatus as updateRequestStatus, updatePendingAction } from '@/modules/requests/lib/db';
 import { logError } from './logger';
+
+export async function clearAllNotificationsAction(userId: number): Promise<void> {
+    await dbClearAllNotifications(userId);
+    revalidatePath('/dashboard');
+}
+
+export async function clearReadNotificationsAction(userId: number): Promise<void> {
+    await dbClearReadNotifications(userId);
+    revalidatePath('/dashboard');
+}
+
 
 
 /**

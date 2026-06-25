@@ -6,7 +6,7 @@
  */
 "use server";
 
-import { getDb, getAllRoles, getCompanySettings, getAllCustomers, getAllProducts, getAllStock, getAllExemptions, getExemptionLaws, getUnreadSuggestions, getDbModules, getStockSettings, getWarehouseData } from './db';
+import { getDb, getAllRoles, getCompanySettings, getAllCustomers, getAllProducts, getAllStock, getAllExemptions, getExemptionLaws, getUnreadSuggestions, getDbModules, getStockSettings, getWarehouseData, getUserPreferences, saveUserPreferences } from './db';
 import { sendEmail, getEmailSettings as getEmailSettingsFromDb } from './email-service';
 import type { User, ExchangeRateApiResponse, EmailSettings, Role } from '@/modules/core/types';
 import bcrypt from 'bcryptjs';
@@ -16,10 +16,11 @@ import { getExchangeRate, getEmailSettings } from './api-actions';
 import { NewUserSchema, UserSchema } from './auth-schemas';
 import { revalidatePath } from 'next/cache';
 import { authorizeAction } from './auth-guard';
+import { checkPermissionInTree } from './permissions';
 
 const SALT_ROUNDS = 10;
 const SESSION_COOKIE_NAME = 'clic-tools-session';
-const SESSION_DURATION = 8 * 60 * 60 * 1000; // 8 hours in milliseconds
+const SESSION_DURATION = 12 * 60 * 60 * 1000; // 12 hours in milliseconds
 
 /**
  * Checks if a user has a specific permission.
@@ -41,8 +42,8 @@ export async function hasPermission(userId: number, permission: string): Promise
 
         const permissions: string[] = JSON.parse(role.permissions);
         
-        // Strict check: The role's permissions array must explicitly include the required permission.
-        return permissions.includes(permission);
+        // Hierarchy check: Check if the role grants the required permission in the permission tree.
+        return checkPermissionInTree(permissions, permission);
 
     } catch (error: any) {
         await logError('Error in hasPermission check', { error: error.message, userId, permission });
@@ -71,6 +72,11 @@ export async function login(email: string, passwordProvided: string): Promise<{ 
     const user: User | undefined = stmt.get(email) as User | undefined;
 
     if (user && user.password) {
+      if (user.is_active === 0) {
+        await logWarn(`Failed login attempt for email: ${email} - User account is manually deactivated.`, logMeta);
+        return { user: null, forcePasswordChange: false };
+      }
+
       if (user.employeeId) {
         const emp = db.prepare('SELECT ACTIVO FROM core_employees WHERE EMPLEADO = ?').get(user.employeeId) as { ACTIVO: string } | undefined;
         if (emp && emp.ACTIVO === 'N') {
@@ -211,11 +217,13 @@ export async function addUser(userData: Omit<User, 'id' | 'avatar' | 'recentActi
     erpAlias: validationResult.data.erpAlias || "",
     forcePasswordChange: validationResult.data.forcePasswordChange,
     employeeId: validationResult.data.employeeId || null,
+    salespersonId: validationResult.data.salespersonId || null,
+    is_active: validationResult.data.is_active !== undefined ? validationResult.data.is_active : 1,
   };
   
   const stmt = db.prepare(
-    `INSERT INTO core_users (id, name, email, password, phone, whatsapp, erpAlias, avatar, role, recentActivity, securityQuestion, securityAnswer, forcePasswordChange, employeeId) 
-     VALUES (@id, @name, @email, @password, @phone, @whatsapp, @erpAlias, @avatar, @role, @recentActivity, @securityQuestion, @securityAnswer, @forcePasswordChange, @employeeId)`
+    `INSERT INTO core_users (id, name, email, password, phone, whatsapp, erpAlias, avatar, role, recentActivity, securityQuestion, securityAnswer, forcePasswordChange, employeeId, salespersonId, is_active) 
+     VALUES (@id, @name, @email, @password, @phone, @whatsapp, @erpAlias, @avatar, @role, @recentActivity, @securityQuestion, @securityAnswer, @forcePasswordChange, @employeeId, @salespersonId, @is_active)`
   );
   
   stmt.run({
@@ -227,6 +235,8 @@ export async function addUser(userData: Omit<User, 'id' | 'avatar' | 'recentActi
     securityAnswer: userToCreate.securityAnswer || null,
     forcePasswordChange: userToCreate.forcePasswordChange ? 1 : 0,
     employeeId: userToCreate.employeeId || null,
+    salespersonId: userToCreate.salespersonId || null,
+    is_active: userToCreate.is_active,
   });
 
   const { password: _, ...userWithoutPassword } = userToCreate;
@@ -273,6 +283,8 @@ export async function updateUser(user: User): Promise<User> {
         securityAnswer: validatedUser.securityAnswer || null,
         forcePasswordChange: validatedUser.forcePasswordChange ? 1 : 0,
         employeeId: validatedUser.employeeId || null,
+        salespersonId: validatedUser.salespersonId || null,
+        is_active: validatedUser.is_active !== undefined ? validatedUser.is_active : 1,
     };
     
     db.prepare(`
@@ -281,7 +293,8 @@ export async function updateUser(user: User): Promise<User> {
             phone = @phone, whatsapp = @whatsapp, erpAlias = @erpAlias,
             avatar = @avatar, role = @role, recentActivity = @recentActivity,
             securityQuestion = @securityQuestion, securityAnswer = @securityAnswer,
-            forcePasswordChange = @forcePasswordChange, employeeId = @employeeId
+            forcePasswordChange = @forcePasswordChange, employeeId = @employeeId,
+            salespersonId = @salespersonId, is_active = @is_active
         WHERE id = @id
     `).run(userToUpdate);
     
@@ -316,14 +329,15 @@ export async function saveAllUsers(users: User[]): Promise<void> {
    await authorizeAction('users:update');
    const db = await getDb();
    const upsert = db.prepare(`
-    INSERT INTO core_users (id, name, email, password, phone, whatsapp, erpAlias, avatar, role, recentActivity, securityQuestion, securityAnswer, forcePasswordChange, employeeId) 
-    VALUES (@id, @name, @email, @password, @phone, @whatsapp, @erpAlias, @avatar, @role, @recentActivity, @securityQuestion, @securityAnswer, @forcePasswordChange, @employeeId)
+    INSERT INTO core_users (id, name, email, password, phone, whatsapp, erpAlias, avatar, role, recentActivity, securityQuestion, securityAnswer, forcePasswordChange, employeeId, salespersonId, is_active) 
+    VALUES (@id, @name, @email, @password, @phone, @whatsapp, @erpAlias, @avatar, @role, @recentActivity, @securityQuestion, @securityAnswer, @forcePasswordChange, @employeeId, @salespersonId, @is_active)
     ON CONFLICT(id) DO UPDATE SET
         name = excluded.name, email = excluded.email, password = excluded.password,
         phone = excluded.phone, whatsapp = excluded.whatsapp, erpAlias = excluded.erpAlias,
         avatar = excluded.avatar, role = excluded.role, recentActivity = excluded.recentActivity,
         securityQuestion = excluded.securityQuestion, securityAnswer = excluded.securityAnswer,
-        forcePasswordChange = excluded.forcePasswordChange, employeeId = excluded.employeeId
+        forcePasswordChange = excluded.forcePasswordChange, employeeId = excluded.employeeId,
+        salespersonId = excluded.salespersonId, is_active = excluded.is_active
    `);
 
     const transaction = db.transaction((usersToSave: User[]) => {
@@ -361,6 +375,8 @@ export async function saveAllUsers(users: User[]): Promise<void> {
             securityAnswer: validatedUser.securityAnswer || null,
             forcePasswordChange: validatedUser.forcePasswordChange ? 1 : 0,
             employeeId: validatedUser.employeeId || null,
+            salespersonId: validatedUser.salespersonId || null,
+            is_active: validatedUser.is_active !== undefined ? validatedUser.is_active : 1,
           };
           upsert.run(userToInsert);
         }
@@ -419,7 +435,7 @@ export async function getCurrentUser(): Promise<User | null> {
         const db = await getDb();
         const user = db.prepare('SELECT * FROM core_users WHERE id = ?').get(userId) as User | undefined;
 
-        if (!user) {
+        if (!user || user.is_active === 0) {
             return null;
         }
 
@@ -544,3 +560,93 @@ export async function sendPasswordRecoveryEmail(email: string): Promise<void> {
         throw new Error("No se pudo enviar el correo de recuperación. Revisa la configuración de SMTP.");
     }
 }
+
+export async function getUserPreferenceAction(userId: number, key: string): Promise<any | null> {
+    return await getUserPreferences(userId, key);
+}
+
+export async function saveUserPreferenceAction(userId: number, key: string, value: any): Promise<void> {
+    await saveUserPreferences(userId, key, value);
+}
+
+/**
+ * Permite a cualquier usuario autenticado actualizar de forma segura su propio perfil
+ * (Nombre, Email, Teléfono, WhatsApp, Alias de ERP, avatar, pregunta y respuesta de seguridad, contraseña)
+ * sin requerir el privilegio administrativo global 'users:update'.
+ */
+export async function updateOwnProfile(userData: Partial<User>): Promise<{ success: boolean; error?: string }> {
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+        throw new Error("No autenticado.");
+    }
+    const db = await getDb();
+    
+    const name = userData.name || currentUser.name;
+    const email = userData.email || currentUser.email;
+    const phone = userData.phone !== undefined ? userData.phone : currentUser.phone;
+    const whatsapp = userData.whatsapp !== undefined ? userData.whatsapp : currentUser.whatsapp;
+    const erpAlias = userData.erpAlias !== undefined ? userData.erpAlias : currentUser.erpAlias;
+    const avatar = userData.avatar !== undefined ? userData.avatar : currentUser.avatar;
+    const securityQuestion = userData.securityQuestion !== undefined ? userData.securityQuestion : currentUser.securityQuestion;
+    const securityAnswer = userData.securityAnswer !== undefined ? userData.securityAnswer : currentUser.securityAnswer;
+    
+    let passwordToSave = currentUser.password;
+    if (userData.password) {
+        passwordToSave = bcrypt.hashSync(userData.password, SALT_ROUNDS);
+    } else {
+        const existing = db.prepare('SELECT password FROM core_users WHERE id = ?').get(currentUser.id) as { password?: string } | undefined;
+        passwordToSave = existing?.password;
+    }
+    
+    try {
+        db.prepare(`
+            UPDATE core_users SET
+                name = ?, email = ?, password = ?,
+                phone = ?, whatsapp = ?, erpAlias = ?,
+                avatar = ?, securityQuestion = ?, securityAnswer = ?
+            WHERE id = ?
+        `).run(
+            name, email, passwordToSave,
+            phone || null, whatsapp || null, erpAlias || null,
+            avatar || "", securityQuestion || null, securityAnswer || null,
+            currentUser.id
+        );
+        
+        await logInfo(`User '${currentUser.name}' updated their own profile.`, { name, email });
+        revalidatePath('/dashboard/profile');
+        revalidatePath('/dashboard/admin/users');
+        return { success: true };
+    } catch (e: any) {
+        await logError("Failed to update own profile", { error: e.message, userId: currentUser.id });
+        return { success: false, error: e.message };
+    }
+}
+
+/**
+ * Permite a un usuario autenticado completar su cambio obligatorio de contraseña (forcePasswordChange = 1)
+ * de forma segura sin privilegios administrativos globales.
+ */
+export async function completeForcedPasswordChange(newPassword: string): Promise<{ success: boolean; error?: string }> {
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+        throw new Error("No autenticado.");
+    }
+    if (newPassword.length < 6) {
+        return { success: false, error: "La contraseña debe tener al menos 6 caracteres." };
+    }
+    const db = await getDb();
+    try {
+        const hashedPassword = bcrypt.hashSync(newPassword, SALT_ROUNDS);
+        db.prepare('UPDATE core_users SET password = ?, forcePasswordChange = 0 WHERE id = ?')
+          .run(hashedPassword, currentUser.id);
+        
+        await logInfo(`User '${currentUser.name}' completed their forced password change successfully.`);
+        revalidatePath('/dashboard/profile');
+        revalidatePath('/dashboard/admin/users');
+        return { success: true };
+    } catch (e: any) {
+        await logError("Failed forced password change", { error: e.message, userId: currentUser.id });
+        return { success: false, error: e.message };
+    }
+}
+

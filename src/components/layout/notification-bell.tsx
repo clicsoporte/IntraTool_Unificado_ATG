@@ -5,12 +5,12 @@
 "use client";
 
 import { useAuth } from "@/modules/core/hooks/useAuth";
-import { markNotificationAsRead, markAllNotificationsAsRead, executeNotificationAction } from "@/modules/core/lib/notifications-actions";
+import { markNotificationAsRead, markAllNotificationsAsRead, executeNotificationAction, clearAllNotificationsAction, clearReadNotificationsAction } from "@/modules/core/lib/notifications-actions";
 import { markSuggestionAsRead } from "@/modules/core/lib/suggestions-actions";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Bell, CheckCheck, MessageSquare, ThumbsUp, ThumbsDown, Loader2 } from "lucide-react";
+import { Bell, CheckCheck, MessageSquare, ThumbsUp, ThumbsDown, Loader2, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { formatDistanceToNow, parseISO } from "date-fns";
 import { es } from "date-fns/locale";
@@ -31,7 +31,7 @@ export function NotificationBell() {
     const { user, unreadNotificationsCount, notifications, fetchUnreadNotifications, unreadSuggestionsCount, updateUnreadSuggestionsCount } = useAuth();
     const { toast } = useToast();
     const [isActionLoading, setIsActionLoading] = useState<number | null>(null);
-    const totalUnread = unreadNotificationsCount + unreadSuggestionsCount;
+    const totalUnread = unreadNotificationsCount;
 
     const handleMarkAsRead = async (notification: Notification) => {
         if (!user || notification.isRead) return;
@@ -47,6 +47,22 @@ export function NotificationBell() {
         if (!user || unreadNotificationsCount === 0) return;
         await markAllNotificationsAsRead(user.id);
         await fetchUnreadNotifications();
+    };
+
+    const handleClearAll = async () => {
+        if (!user || notifications.length === 0) return;
+        if (confirm("¿Estás seguro de que deseas eliminar todas las notificaciones?")) {
+            await clearAllNotificationsAction(user.id);
+            await fetchUnreadNotifications();
+            toast({ title: 'Notificaciones eliminadas', description: 'Se han borrado todas tus notificaciones.' });
+        }
+    };
+
+    const handleClearRead = async () => {
+        if (!user) return;
+        await clearReadNotificationsAction(user.id);
+        await fetchUnreadNotifications();
+        toast({ title: 'Notificaciones leídas eliminadas', description: 'Se han borrado las notificaciones que ya habías leído.' });
     };
 
     const handleActionClick = async (e: React.MouseEvent, notification: Notification, action: 'approve' | 'reject') => {
@@ -79,7 +95,7 @@ export function NotificationBell() {
                     <Button size="sm" variant="destructive" className="h-7 text-xs" onClick={(e) => handleActionClick(e, notification, 'reject')}>
                         <ThumbsDown className="mr-1 h-3 w-3" /> Rechazar
                     </Button>
-                </div>
+                 </div>
             );
         }
         return null;
@@ -98,11 +114,24 @@ export function NotificationBell() {
                 </Button>
             </PopoverTrigger>
             <PopoverContent className="w-96 p-0">
-                <div className="p-4 border-b">
-                    <h4 className="font-medium leading-none">Notificaciones</h4>
-                    <p className="text-sm text-muted-foreground">
-                        Tienes {totalUnread} {totalUnread === 1 ? 'notificación' : 'notificaciones'} sin leer.
-                    </p>
+                <div className="p-4 border-b flex justify-between items-start">
+                    <div>
+                        <h4 className="font-medium leading-none">Notificaciones</h4>
+                        <p className="text-sm text-muted-foreground mt-1">
+                            Tienes {totalUnread} {totalUnread === 1 ? 'notificación' : 'notificaciones'} sin leer.
+                        </p>
+                    </div>
+                    {notifications.length > 0 && (
+                        <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10" 
+                            onClick={handleClearAll}
+                            title="Eliminar todas las notificaciones"
+                        >
+                            <Trash2 className="h-4 w-4" />
+                        </Button>
+                    )}
                 </div>
                 <ScrollArea className="h-80">
                     <div className="p-2 space-y-1">
@@ -132,12 +161,21 @@ export function NotificationBell() {
                         )}
                     </div>
                 </ScrollArea>
-                {unreadNotificationsCount > 0 && (
-                    <div className="p-2 border-t text-center">
-                        <Button variant="link" size="sm" onClick={handleMarkAllAsRead}>
-                            <CheckCheck className="mr-2 h-4 w-4" />
-                            Marcar todas como leídas
-                        </Button>
+                {notifications.length > 0 && (
+                    <div className="p-2 border-t flex items-center justify-between text-xs">
+                        {unreadNotificationsCount > 0 ? (
+                            <Button variant="link" size="sm" onClick={handleMarkAllAsRead} className="h-8 px-2">
+                                <CheckCheck className="mr-1 h-4 w-4" />
+                                Marcar leídas
+                            </Button>
+                        ) : (
+                            <span />
+                        )}
+                        {notifications.some(n => n.isRead) && (
+                            <Button variant="ghost" size="sm" onClick={handleClearRead} className="h-8 px-2 text-muted-foreground hover:text-foreground">
+                                Limpiar leídas
+                            </Button>
+                        )}
                     </div>
                 )}
             </PopoverContent>

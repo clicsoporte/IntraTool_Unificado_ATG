@@ -23,7 +23,10 @@ import {
     savePreventativePlan,
     deletePreventativePlan,
     deleteFuelLog,
-    deleteMaintenanceLog
+    deleteMaintenanceLog,
+    getDeletedLogs,
+    getDeletedVehicles,
+    restoreDeletedLog
 } from '@/modules/fleet/lib/db';
 import { saveFleetFile } from '@/modules/fleet/lib/files';
 import { revalidatePath } from 'next/cache';
@@ -588,7 +591,7 @@ export async function getTelegramBotLogsAction(vehicleId: number) {
         const db = await getDb();
         const rows = db.prepare(`
             SELECT * FROM fleet_telegram_bot_logs 
-            WHERE vehicleId = ? 
+            WHERE vehicleId = ? AND actionType IN ('fuel', 'maintenance', 'rtv')
             ORDER BY timestamp DESC
         `).all(vehicleId) as any[];
         return JSON.parse(JSON.stringify(rows));
@@ -596,4 +599,23 @@ export async function getTelegramBotLogsAction(vehicleId: number) {
         console.error("Error fetching Telegram bot logs:", error);
         return [];
     }
+}
+
+// --- Soft-Deleted Logs Actions ---
+
+export async function getDeletedLogsAction(vehicleId: number) {
+    return getDeletedLogs(vehicleId);
+}
+
+export async function getDeletedVehiclesAction() {
+    return getDeletedVehicles();
+}
+
+export async function restoreDeletedLogAction(archiveId: number, vehicleId?: number) {
+    const res = await restoreDeletedLog(archiveId);
+    if (res.success) {
+        if (vehicleId) revalidatePath(`/dashboard/fleet/vehicles/${vehicleId}`);
+        revalidatePath('/dashboard/fleet');
+    }
+    return res;
 }

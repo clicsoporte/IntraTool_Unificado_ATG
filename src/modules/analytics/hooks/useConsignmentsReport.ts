@@ -104,7 +104,7 @@ export function useConsignmentsReport() {
                     updateState({ 
                         agreements: agreementsData, 
                         isLoading: false,
-                        visibleColumns: prefs?.visibleColumns || state.visibleColumns,
+                        ...(prefs?.visibleColumns ? { visibleColumns: prefs.visibleColumns } : {}),
                     });
                 } catch (error) {
                     logError('Failed to fetch consignment agreements for report', { error });
@@ -118,7 +118,7 @@ export function useConsignmentsReport() {
         } else {
              updateState({ isLoading: false });
         }
-    }, [setTitle, isAuthorized, toast, updateState, user, state.visibleColumns]);
+    }, [setTitle, isAuthorized, toast, updateState, user]);
 
     const handleGenerateReport = useCallback(async () => {
         if (!state.selectedAgreementId) {

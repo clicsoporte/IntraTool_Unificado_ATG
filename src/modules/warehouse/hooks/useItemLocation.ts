@@ -11,7 +11,7 @@ import {
     getLocations, getAllItemLocations, assignItemToLocation, 
     unassignItemFromLocation, getSelectableLocations, unassignAllByProduct, 
     unassignAllByLocation, checkAssignmentConflict, unassignAllByRack, unassignAllByLevel,
-    getWarehouseSettings,
+    getWarehouseSettings, getItemLocationsPaginated,
 } from '@/modules/warehouse/lib/actions';
 import type { Product, Customer, WarehouseLocation, ItemLocation, WarehouseSettings } from '@/modules/core/types';
 import { useAuth } from '@/modules/core/hooks/useAuth';
@@ -73,6 +73,7 @@ interface State {
     moveAndMixConfirmOpen: boolean;
     conflictingItems: Product[];
     isTargetLocationMixed: boolean;
+    totalCount: number;
 }
 
 export function useItemLocation() {
@@ -109,6 +110,7 @@ export function useItemLocation() {
         moveAndMixConfirmOpen: false,
         conflictingItems: [],
         isTargetLocationMixed: false,
+        totalCount: 0,
     });
     
     const [debouncedProductSearch] = useDebounce(state.productSearchTerm, companyData?.searchDebounceTime ?? 500);
@@ -121,12 +123,27 @@ export function useItemLocation() {
         setState(prevState => ({ ...prevState, ...newState }));
     }, []);
 
+    const fetchAssignments = useCallback(async () => {
+        try {
+            const { assignments, totalCount } = await getItemLocationsPaginated({
+                page: state.currentPage,
+                limit: state.rowsPerPage,
+                search: debouncedGlobalFilter,
+                sortKey: state.sortKey,
+                sortDirection: state.sortDirection
+            });
+            setAllAssignments(assignments);
+            updateState({ totalCount });
+        } catch (error) {
+            logError("Failed to load paginated assignments", { error });
+        }
+    }, [state.currentPage, state.rowsPerPage, debouncedGlobalFilter, state.sortKey, state.sortDirection, updateState]);
+
     const loadInitialData = useCallback(async () => {
         updateState({ isLoading: true });
         try {
-            const [locs, allAssigns, settings] = await Promise.all([getLocations(), getAllItemLocations(), getWarehouseSettings()]);
+            const [locs, settings] = await Promise.all([getLocations(), getWarehouseSettings()]);
             setAllLocations(locs);
-            setAllAssignments(allAssigns.sort((a, b) => (b.id ?? 0) - (a.id ?? 0)));
             updateState({ warehouseSettings: settings });
         } catch (error) {
             logError("Failed to load data for assignment page", { error });
@@ -141,6 +158,12 @@ export function useItemLocation() {
             loadInitialData();
         }
     }, [isAuthorized, loadInitialData]);
+
+    useEffect(() => {
+        if (isAuthorized && allLocations.length > 0) {
+            fetchAssignments();
+        }
+    }, [isAuthorized, allLocations.length, fetchAssignments]);
     
     const selectableLocations = useMemo(() => getSelectableLocations(allLocations), [allLocations]);
     
@@ -314,6 +337,7 @@ export function useItemLocation() {
             await assignItemToLocation(payload, mode);
             
             await loadInitialData();
+            await fetchAssignments();
             toast({ title: state.isEditing ? "Asignación Actualizada" : "Asignación Creada" });
             
             updateState({ isFormOpen: false });
@@ -335,7 +359,7 @@ export function useItemLocation() {
         updateState({ isSubmitting: true });
         try {
             await unassignItemFromLocation(assignmentId);
-            setAllAssignments(prev => prev.filter(a => a.id !== assignmentId));
+            await fetchAssignments();
             toast({ title: "Asignación Eliminada", variant: "destructive" });
         } catch (e: any) {
             logError('Failed to delete item assignment', { error: e.message });
@@ -346,68 +370,12 @@ export function useItemLocation() {
     };
     
     const filteredAssignments = useMemo(() => {
-        let assignments = [...allAssignments];
-        if (debouncedGlobalFilter) {
-            const lowerCaseFilter = debouncedGlobalFilter.toLowerCase();
-            assignments = assignments.filter(a => {
-                const product = authProducts.find(p => p.id === a.itemId);
-                const client = authCustomers.find(c => c.id === a.clientId);
-                const locationString = renderLocationPathAsString(a.locationId, allLocations);
-                return (
-                    product?.id.toLowerCase().includes(lowerCaseFilter) ||
-                    product?.description.toLowerCase().includes(lowerCaseFilter) ||
-                    client?.name.toLowerCase().includes(lowerCaseFilter) ||
-                    locationString.toLowerCase().includes(lowerCaseFilter)
-                );
-            });
-        }
-        
-        assignments.sort((a, b) => {
-            const dir = state.sortDirection === 'asc' ? 1 : -1;
-            let valA: string, valB: string;
-    
-            switch (state.sortKey) {
-                case 'product':
-                    valA = a.itemId;
-                    valB = b.itemId;
-                    break;
-                case 'description':
-                    valA = authProducts.find(p => p.id === a.itemId)?.description || '';
-                    valB = authProducts.find(p => p.id === b.itemId)?.description || '';
-                    break;
-                case 'client':
-                    valA = authCustomers.find(c => c.id === a.clientId)?.name || 'zzzz';
-                    valB = authCustomers.find(c => c.id === b.clientId)?.name || 'zzzz';
-                    break;
-                case 'location':
-                    valA = renderLocationPathAsString(a.locationId, allLocations);
-                    valB = renderLocationPathAsString(b.locationId, allLocations);
-                    break;
-                case 'type':
-                    valA = a.isExclusive ? 'Exclusivo' : 'General';
-                    valB = b.isExclusive ? 'Exclusivo' : 'General';
-                    break;
-                case 'updatedAt':
-                    valA = a.updatedAt || '';
-                    valB = b.updatedAt || '';
-                    return (valB.localeCompare(valA)) * dir;
-                default:
-                    return 0;
-            }
-    
-            return valA.localeCompare(valB, 'es', { numeric: true }) * dir;
-        });
-
-        return assignments;
-    }, [allAssignments, debouncedGlobalFilter, authProducts, authCustomers, allLocations, state.sortKey, state.sortDirection]);
+        return { length: state.totalCount } as any as ItemLocation[];
+    }, [state.totalCount]);
     
     useEffect(() => { updateState({ currentPage: 0 }); }, [debouncedGlobalFilter, state.rowsPerPage, updateState]);
     
-    const paginatedAssignments = useMemo(() => {
-        const start = state.currentPage * state.rowsPerPage;
-        const end = start + state.rowsPerPage;
-        return filteredAssignments.slice(start, end);
-    }, [filteredAssignments, state.currentPage, state.rowsPerPage]);
+    const paginatedAssignments = allAssignments;
 
     const handleSort = (key: SortKey) => {
         updateState({ 
@@ -437,6 +405,7 @@ export function useItemLocation() {
                 toast({ title: "Limpieza de Nivel Completada", description: `Se eliminaron todas las asignaciones del nivel ${level?.name || ''}.` });
             }
             await loadInitialData(); // Refresh data
+            await fetchAssignments(); // Refresh assignments
         } catch (e: any) {
             logError('Failed to perform cleanup', { error: e.message, type, id });
             toast({ title: "Error en la Limpieza", description: e.message, variant: "destructive" });
@@ -445,7 +414,7 @@ export function useItemLocation() {
         }
     };
     
-    const totalPages = Math.ceil(filteredAssignments.length / state.rowsPerPage);
+    const totalPages = Math.ceil(state.totalCount / state.rowsPerPage);
 
     return {
         state,

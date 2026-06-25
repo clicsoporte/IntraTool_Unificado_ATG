@@ -14,6 +14,10 @@ import { format, parseISO, isValid } from 'date-fns';
 
 type ViewMode = 'detailed' | 'summary';
 
+const roundTo4Decimals = (num: number): number => {
+    return Math.round(num * 10000) / 10000;
+};
+
 export interface UiInvoiceReportLine extends InvoiceReportLine {
     // This type inherits from the core InvoiceReportLine
 }
@@ -101,12 +105,47 @@ export const useInvoiceReporter = () => {
     const updateLine = (id: string, updatedFields: Partial<UiInvoiceReportLine>) => {
         setState(prevState => ({
             ...prevState,
-            processedData: prevState.processedData.map(invoice => ({
-                ...invoice,
-                lines: invoice.lines.map(line =>
-                    line.id === id ? { ...line, ...updatedFields } : line
-                ),
-            })),
+            processedData: prevState.processedData.map(invoice => {
+                const hasLine = invoice.lines.some(line => line.id === id);
+                if (!hasLine) return invoice;
+
+                const updatedLines = invoice.lines.map(line => {
+                    if (line.id !== id) return line;
+
+                    let newLine = { ...line, ...updatedFields };
+                    const taxRate = newLine.taxRate !== undefined ? newLine.taxRate : 0;
+
+                    if ('quantity' in updatedFields || 'unitPrice' in updatedFields) {
+                        newLine.unitPrice = roundTo4Decimals(newLine.unitPrice);
+                        newLine.quantity = roundTo4Decimals(newLine.quantity);
+                        newLine.unitPriceWithTax = roundTo4Decimals(newLine.unitPrice * (1 + taxRate));
+                        newLine.totalLine = roundTo4Decimals(newLine.quantity * newLine.unitPrice);
+                        newLine.totalLineWithTax = roundTo4Decimals(newLine.quantity * newLine.unitPriceWithTax);
+                    } else if ('unitPriceWithTax' in updatedFields) {
+                        newLine.unitPriceWithTax = roundTo4Decimals(newLine.unitPriceWithTax);
+                        newLine.unitPrice = roundTo4Decimals(newLine.unitPriceWithTax / (1 + taxRate));
+                        newLine.totalLine = roundTo4Decimals(newLine.quantity * newLine.unitPrice);
+                        newLine.totalLineWithTax = roundTo4Decimals(newLine.quantity * newLine.unitPriceWithTax);
+                    } else if ('totalLine' in updatedFields) {
+                        newLine.totalLine = roundTo4Decimals(newLine.totalLine);
+                        newLine.unitPrice = roundTo4Decimals(newLine.quantity > 0 ? newLine.totalLine / newLine.quantity : 0);
+                        newLine.unitPriceWithTax = roundTo4Decimals(newLine.unitPrice * (1 + taxRate));
+                        newLine.totalLineWithTax = roundTo4Decimals(newLine.totalLine * (1 + taxRate));
+                    } else if ('totalLineWithTax' in updatedFields) {
+                        newLine.totalLineWithTax = roundTo4Decimals(newLine.totalLineWithTax);
+                        newLine.totalLine = roundTo4Decimals(newLine.totalLineWithTax / (1 + taxRate));
+                        newLine.unitPriceWithTax = roundTo4Decimals(newLine.quantity > 0 ? newLine.totalLineWithTax / newLine.quantity : 0);
+                        newLine.unitPrice = roundTo4Decimals(newLine.unitPriceWithTax / (1 + taxRate));
+                    }
+
+                    return newLine;
+                });
+
+                return {
+                    ...invoice,
+                    lines: updatedLines,
+                };
+            }),
         }));
     };
 
@@ -184,14 +223,23 @@ export const useInvoiceReporter = () => {
     
     const selectors = {
         detailedLines: useMemo(() => state.processedData.flatMap(invoice => invoice.lines), [state.processedData]),
-        summaryLines: useMemo(() => state.processedData.map(invoice => ({
-            id: invoice.info.invoiceNumber,
-            isSelected: invoice.isSelected,
-            invoiceNumber: invoice.info.invoiceNumber,
-            supplierName: invoice.info.supplierName,
-            invoiceDate: invoice.info.invoiceDate,
-            ...invoice.summary,
-        })), [state.processedData]),
+        summaryLines: useMemo(() => state.processedData.map(invoice => {
+            const activeLines = invoice.lines.filter(l => l.isSelected);
+            const totalVentaNeta = roundTo4Decimals(activeLines.reduce((sum, l) => sum + l.totalLine, 0));
+            const totalComprobante = roundTo4Decimals(activeLines.reduce((sum, l) => sum + l.totalLineWithTax, 0));
+            const totalImpuesto = roundTo4Decimals(totalComprobante - totalVentaNeta);
+
+            return {
+                id: invoice.info.invoiceNumber,
+                isSelected: invoice.isSelected,
+                invoiceNumber: invoice.info.invoiceNumber,
+                supplierName: invoice.info.supplierName,
+                invoiceDate: invoice.info.invoiceDate,
+                totalVentaNeta,
+                totalImpuesto,
+                totalComprobante,
+            };
+        }), [state.processedData]),
         areAllDetailedSelected: useMemo(() => {
             const allLines = state.processedData.flatMap(inv => inv.lines);
             return allLines.length > 0 && allLines.every(l => l.isSelected);

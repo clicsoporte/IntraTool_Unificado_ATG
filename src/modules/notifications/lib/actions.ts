@@ -71,18 +71,29 @@ export async function testTelegram(chatId: string) {
 export async function fetchTelegramChatId() {
     try {
         const config = await db.getNotificationConfig('telegram');
-        if (!config.botToken) throw new Error("Bot token no configurado.");
+        if (!config.botToken) {
+            return { success: false, error: "Bot token no configurado." };
+        }
         
         const res = await fetch(`https://api.telegram.org/bot${config.botToken}/getUpdates`);
+        if (!res.ok) {
+            return { success: false, error: `Error de la API de Telegram: ${res.statusText}` };
+        }
         const data = await res.json();
         
         if (data.result && data.result.length > 0) {
             const lastMsg = data.result[data.result.length - 1].message;
-            return { id: String(lastMsg.chat.id), name: lastMsg.chat.title || lastMsg.chat.first_name };
+            if (lastMsg && lastMsg.chat) {
+                return { 
+                    success: true, 
+                    id: String(lastMsg.chat.id), 
+                    name: lastMsg.chat.title || lastMsg.chat.first_name 
+                };
+            }
         }
-        throw new Error("No se encontraron mensajes recientes. Envía un mensaje al bot primero.");
+        return { success: false, error: "No se encontraron mensajes recientes. Envía un mensaje al bot primero." };
     } catch (e: any) {
-        throw new Error(e.message);
+        return { success: false, error: e.message || "Error al conectar con la API de Telegram." };
     }
 }
 

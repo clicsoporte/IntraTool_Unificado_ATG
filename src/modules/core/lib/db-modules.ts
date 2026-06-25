@@ -53,5 +53,10 @@ export const DB_MODULES: { id: string, name: string, dbFile: string }[] = [
         id: 'consignments',
         name: 'Gestión de Consignaciones',
         dbFile: 'clic_tools.db',
+    },
+    {
+        id: 'erp-imports',
+        name: 'Importaciones ERP (Facturas, Pedidos y Vendedores)',
+        dbFile: 'clic_tools.db',
     }
 ];

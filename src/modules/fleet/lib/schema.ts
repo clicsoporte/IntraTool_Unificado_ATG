@@ -12,7 +12,8 @@ export const FLEET_TABLES = {
     migrations: '_fleet_migrations',
     telegramStates: 'fleet_telegram_bot_states',
     telegramLinkages: 'fleet_telegram_linkages',
-    telegramBotLogs: 'fleet_telegram_bot_logs'
+    telegramBotLogs: 'fleet_telegram_bot_logs',
+    archive: 'fleet_deleted_logs_archive'
 } as const;
 
 export async function initializeFleetSchema(db: Database) {
@@ -117,6 +118,18 @@ export async function initializeFleetSchema(db: Database) {
         )
     `);
 
+    // Auto-migrate fleet_maintenance_logs columns
+    const maintLogsInfo = db.prepare(`PRAGMA table_info(${FLEET_TABLES.maintenanceLogs})`).all() as any[];
+    const existingMaintLogsColumns = maintLogsInfo.map(c => c.name);
+    if (!existingMaintLogsColumns.includes('ticket_id')) {
+        try {
+            db.exec(`ALTER TABLE ${FLEET_TABLES.maintenanceLogs} ADD COLUMN ticket_id INTEGER`);
+            console.log('[Fleet Schema Seeder] Added ticket_id column to fleet_maintenance_logs successfully.');
+        } catch (error) {
+            console.error('[Fleet Schema Seeder] Error adding ticket_id column to fleet_maintenance_logs:', error);
+        }
+    }
+
     // 4. Permits
     db.exec(`
         CREATE TABLE IF NOT EXISTS ${FLEET_TABLES.permits} (
@@ -125,9 +138,21 @@ export async function initializeFleetSchema(db: Database) {
             type TEXT NOT NULL, -- 'pesos_dimensiones', 'material_peligroso', 'seguro', etc.
             expirationDate TEXT NOT NULL,
             documentUrl TEXT,
+            amount REAL,
             FOREIGN KEY (vehicleId) REFERENCES ${FLEET_TABLES.vehicles}(id) ON DELETE CASCADE
         )
     `);
+
+    // Auto-migrate permits columns
+    const permitsInfo = db.prepare(`PRAGMA table_info(${FLEET_TABLES.permits})`).all() as any[];
+    const existingPermitsColumns = permitsInfo.map(c => c.name);
+    if (!existingPermitsColumns.includes('amount')) {
+        try {
+            db.exec(`ALTER TABLE ${FLEET_TABLES.permits} ADD COLUMN amount REAL`);
+        } catch (error) {
+            console.error(`[Fleet Migration] Error adding column amount to permits:`, error);
+        }
+    }
 
     // 4b. Preventative Plans
     db.exec(`
@@ -196,8 +221,8 @@ export async function initializeFleetSchema(db: Database) {
     // 9. Telegram Linkages
     try {
         const tableSql = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='${FLEET_TABLES.telegramLinkages}'`).get() as { sql: string } | undefined;
-        if (tableSql && tableSql.sql && !tableSql.sql.includes('employeeId TEXT UNIQUE')) {
-            console.log('[Fleet Schema] Detectada tabla fleet_telegram_linkages heredada sin restricción UNIQUE. Recreando tabla...');
+        if (tableSql && tableSql.sql && (!tableSql.sql.includes('employeeId TEXT UNIQUE') || !tableSql.sql.includes('allowFuel') || !tableSql.sql.includes('allowWarehouse'))) {
+            console.log('[Fleet Schema] Detectada tabla fleet_telegram_linkages antigua o sin permisos. Recreando tabla...');
             db.exec(`DROP TABLE IF EXISTS ${FLEET_TABLES.telegramLinkages}`);
         }
     } catch (e) {
@@ -211,7 +236,11 @@ export async function initializeFleetSchema(db: Database) {
             employeeId TEXT UNIQUE NOT NULL,
             username TEXT,
             activationCode TEXT UNIQUE,
-            createdAt TEXT
+            createdAt TEXT,
+            allowFuel INTEGER DEFAULT 1,
+            allowMaintenance INTEGER DEFAULT 1,
+            allowDeliveries INTEGER DEFAULT 1,
+            allowWarehouse INTEGER DEFAULT 1
         )
     `);
 
@@ -226,6 +255,21 @@ export async function initializeFleetSchema(db: Database) {
             message TEXT NOT NULL,
             details TEXT, -- JSON blob with additional data
             FOREIGN KEY (vehicleId) REFERENCES ${FLEET_TABLES.vehicles}(id) ON DELETE CASCADE
+        )
+    `);
+
+    // 11. Deleted Logs Archive (Soft-Delete Repository for Audit & Rollbacks)
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS ${FLEET_TABLES.archive} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            originalId INTEGER NOT NULL,
+            vehicleId INTEGER,
+            logType TEXT NOT NULL,       -- 'fuel', 'maintenance', 'permit', 'preventative_plan', 'vehicle'
+            date TEXT NOT NULL,          -- Event date or deletion date
+            amount REAL,                 -- Liters / cost depending on type for overview
+            payload TEXT NOT NULL,       -- Entire row data serialized in JSON
+            deletedAt TEXT DEFAULT CURRENT_TIMESTAMP,
+            deletedBy TEXT NOT NULL
         )
     `);
 
