@@ -1,44 +1,72 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# dependencies
+# Dependencies
 /node_modules
 /.pnp
 .pnp.js
 .yarn/install-state.gz
 
-# testing
-/coverage
-
-# next.js
+# Next.js & Build Output
 /.next/
 /out/
+/build/
+*.tsbuildinfo
+next-env.d.ts
 
-# production
-/build
+# User & Runtime Uploads (Evidencias de Choferes, Firmas y Fotos)
+/fleet_uploads/
+/public/uploads/
+/docs/
 
-# misc
-.DS_Store
-*.pem
+# Databases & Backups
+/dbs/
+*.db
+*.sqlite
+*.sqlite3
+*.zip
+*.rar
+*.tar.gz
+/00-Old/
 
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-# debug files in the Next.js folder
-.next/debug
+# C# / .NET Agent Builds (Agente_Windows)
+/Agente_Windows/**/bin/
+/Agente_Windows/**/obj/
 
-# local env files
+# Flutter / Android Temp & Build Folders (Solo preserva código fuente)
+/Android/.dart_tool/
+/Android/build/
+/Android/.gradle/
+/Android/.idea/
+/Android/.flutter-plugins-dependencies
+/Android/*.zip
+/Android/*.lnk
+/Android/*.iml
+/Android/linux/flutter/ephemeral/
+/Android/windows/flutter/ephemeral/
+/Android/macos/flutter/ephemeral/
+/Android/ios/Flutter/App.framework/
+/Android/ios/Flutter/Flutter.framework/
+/Android/ios/Flutter/Flutter.podspec
+/Android/ios/Runner.xcworkspace/
+
+# IDE & Editor Configs
+.vscode/
+.idea/
+.idx/
+*.code-workspace
+
+# Temporary Scratch Scripts
+/scratch/
+query.js
+
+# Local environment files & credentials
+.env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+*.pem
 
-# vercel
-.vercel
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-
-# Clic-Tools specific
-/dbs/
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
