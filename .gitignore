@@ -25,6 +25,7 @@ next-env.d.ts
 *.rar
 *.tar.gz
 /00-Old/
+/Android_Old/
 
 # C# / .NET Agent Builds (Agente_Windows)
 /Agente_Windows/**/bin/
