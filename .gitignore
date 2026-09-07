@@ -47,6 +47,8 @@ next-env.d.ts
 /Android/ios/Flutter/Flutter.framework/
 /Android/ios/Flutter/Flutter.podspec
 /Android/ios/Runner.xcworkspace/
+/Android/Sinpe_Movil/android/
+/docs/**/android/
 
 # IDE & Editor Configs
 .vscode/
