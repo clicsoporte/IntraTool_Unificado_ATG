@@ -134,6 +134,7 @@ export async function getSqliteTablesCatalogAction(): Promise<SqliteTableCatalog
 
 /**
  * Extrae datos relevantes de las tablas autorizadas para alimentar el contexto de la IA de forma mecánica y dirigida.
+ * Implementa scripts de agregación predeterminados para auditorías rápidas de bajo consumo de tokens.
  */
 async function fetchAuthorizedDatabaseContext(allowedTables: string[], userMessage: string = ""): Promise<string> {
   const db = await getDb();
@@ -142,17 +143,52 @@ async function fetchAuthorizedDatabaseContext(allowedTables: string[], userMessa
   const lowerMsg = userMessage.toLowerCase();
   const isSixHoursFilter = lowerMsg.includes("6 horas") || lowerMsg.includes("seis horas") || lowerMsg.includes("horas") || lowerMsg.includes("reciente");
   const isTodayFilter = isSixHoursFilter || lowerMsg.includes("hoy") || lowerMsg.includes("today") || lowerMsg.includes("ahora") || lowerMsg.includes("actual");
-  const isAllLogsFilter = lowerMsg.includes("todos") || lowerMsg.includes("general") || lowerMsg.includes("global") || lowerMsg.includes("visor");
   const isNetworkFilter = lowerMsg.includes("red") || lowerMsg.includes("socket") || lowerMsg.includes("wireguard") || lowerMsg.includes("conexion") || lowerMsg.includes("vpn");
-  const isDriverFilter = lowerMsg.includes("chofer") || lowerMsg.includes("driver") || lowerMsg.includes("apk") || lowerMsg.includes("factura");
-  const isItamFilter = lowerMsg.includes("activo") || lowerMsg.includes("computadora") || lowerMsg.includes("laptop") || lowerMsg.includes("licencia") || lowerMsg.includes("hardware") || lowerMsg.includes("servidor");
 
+  // --- SCRIPT 1: AUDITORÍA DE CELULARES ANDROID / MDM ---
+  if (allowedTables.includes("fleet_registered_devices") && (lowerMsg.includes("celular") || lowerMsg.includes("mdm") || lowerMsg.includes("bater") || lowerMsg.includes("ota") || lowerMsg.includes("android"))) {
+    try {
+      const mobileAudit = db.prepare(`
+        SELECT hardware_id, device_name, last_driver_name, phone_number, current_app_version, 
+               current_version_code, battery_level, is_charging, network_type, sim_carrier, 
+               ota_paused, install_failed_count, last_install_error, shutdown_reason, last_seen
+        FROM fleet_registered_devices
+        WHERE battery_level <= 20 OR ota_paused = 1 OR install_failed_count > 0 OR shutdown_reason IS NOT NULL
+        ORDER BY last_seen DESC LIMIT 20
+      `).all();
+
+      if (mobileAudit.length > 0) {
+        contextReport += `\n--- 📱 ALERTAS PREDETERMINADAS: CELULARES ANDROID / MDM EN RIESGO ---\n`;
+        contextReport += JSON.stringify(mobileAudit, null, 2) + "\n";
+      }
+    } catch (_) {}
+  }
+
+  // --- SCRIPT 2: AUDITORÍA DE AGENTES WINDOWS / ITAM ---
+  if (allowedTables.includes("it_asset_telemetry") && (lowerMsg.includes("agente") || lowerMsg.includes("windows") || lowerMsg.includes("ram") || lowerMsg.includes("smart") || lowerMsg.includes("disco") || lowerMsg.includes("bsod"))) {
+    try {
+      const windowsAudit = db.prepare(`
+        SELECT t.asset_id, t.hostname, a.brand as asset_brand, a.model as asset_model, 
+               t.cpu_usage, t.ram_used_percent, t.disk_smart_status, t.ip_address_local, t.agent_version, t.last_seen
+        FROM it_asset_telemetry t
+        LEFT JOIN it_assets a ON t.asset_id = a.id
+        WHERE t.ram_used_percent > 85 OR t.disk_smart_status NOT LIKE '%OK%' OR t.cpu_usage > 90
+        ORDER BY t.last_seen DESC LIMIT 15
+      `).all();
+
+      if (windowsAudit.length > 0) {
+        contextReport += `\n--- 💻 ALERTAS PREDETERMINADAS: TELEMETRÍA AGENTES WINDOWS EN RIESGO ---\n`;
+        contextReport += JSON.stringify(windowsAudit, null, 2) + "\n";
+      }
+    } catch (_) {}
+  }
+
+  // --- SCRIPT 3: BÚSQUEDA GENERAL Y TABLAS SELECCIONADAS ---
   for (const tableName of allowedTables) {
     const tableInfo = SQLITE_TABLES_CATALOG.find((t) => t.name === tableName);
     if (!tableInfo) continue;
 
     try {
-      // Verificar si la tabla existe en SQLite
       const exists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(tableName);
       if (!exists) continue;
 
@@ -160,7 +196,7 @@ async function fetchAuthorizedDatabaseContext(allowedTables: string[], userMessa
 
       if (tableName === "core_logs") {
         let sql = `SELECT timestamp, type, message, details FROM core_logs WHERE 1=1`;
-        if (!isAllLogsFilter) {
+        if (!lowerMsg.includes("todos") && !lowerMsg.includes("info")) {
           sql += ` AND type IN ('WARN', 'ERROR')`;
         }
         if (isSixHoursFilter) {
@@ -168,33 +204,24 @@ async function fetchAuthorizedDatabaseContext(allowedTables: string[], userMessa
         } else if (isTodayFilter) {
           sql += ` AND DATE(timestamp) = DATE('now', 'localtime')`;
         }
-        sql += ` ORDER BY timestamp DESC LIMIT 35`;
+        sql += ` ORDER BY id DESC LIMIT 30`;
         rows = db.prepare(sql).all();
       } else if (tableName === "ops_driver_logs") {
-        let sql = `SELECT timestamp, chofer_nombre, user_name, level, category, message FROM ops_driver_logs WHERE 1=1`;
+        let sql = `SELECT id, timestamp, chofer_nombre, placa_vehiculo, ruta_nombre, level, category, message FROM ops_driver_logs WHERE 1=1`;
         if (isSixHoursFilter) {
           sql += ` AND timestamp >= datetime('now', '-6 hours', 'localtime')`;
         } else if (isTodayFilter) {
           sql += ` AND DATE(timestamp) = DATE('now', 'localtime')`;
         }
         if (isNetworkFilter) {
-          sql += ` AND (message LIKE '%Socket%' OR message LIKE '%WireGuard%' OR message LIKE '%Exception%' OR message LIKE '%fail%' OR message LIKE '%error%' OR message LIKE '%red%' OR category = 'network')`;
+          sql += ` AND (message LIKE '%Socket%' OR message LIKE '%WireGuard%' OR message LIKE '%Exception%' OR message LIKE '%fail%' OR message LIKE '%error%' OR category = 'network')`;
         }
-        sql += ` ORDER BY timestamp DESC LIMIT 35`;
-        rows = db.prepare(sql).all();
-      } else if (tableName === "fleet_telegram_bot_logs") {
-        let sql = `SELECT timestamp, actionType, driverName, message, details FROM fleet_telegram_bot_logs WHERE 1=1`;
-        if (isSixHoursFilter) {
-          sql += ` AND timestamp >= datetime('now', '-6 hours', 'localtime')`;
-        } else if (isTodayFilter) {
-          sql += ` AND DATE(timestamp) = DATE('now', 'localtime')`;
-        }
-        sql += ` ORDER BY id DESC LIMIT 20`;
+        sql += ` ORDER BY id DESC LIMIT 35`;
         rows = db.prepare(sql).all();
       } else if (tableName === "ops_delivery_queue") {
-        let sql = `SELECT documento_numero, tipo_documento, cliente_nombre, estado, fecha_registro, fecha_entrega, comentario FROM ops_delivery_queue WHERE estado NOT IN ('completo')`;
-        if (isSixHoursFilter || isTodayFilter) {
-          sql += ` AND (DATE(fecha_registro) = DATE('now', 'localtime') OR DATE(fecha_entrega) = DATE('now', 'localtime'))`;
+        let sql = `SELECT id, documento_numero, tipo_documento, cliente_nombre, estado, entregado, fecha_registro, fecha_entrega, comentario FROM ops_delivery_queue WHERE 1=1`;
+        if (lowerMsg.includes("pendiente") || lowerMsg.includes("incompleto")) {
+          sql += ` AND estado NOT IN ('completo')`;
         }
         sql += ` ORDER BY id DESC LIMIT 20`;
         rows = db.prepare(sql).all();
@@ -204,20 +231,8 @@ async function fetchAuthorizedDatabaseContext(allowedTables: string[], userMessa
                  b.name as branch_name, a.purchase_date, a.notes
           FROM it_assets a
           LEFT JOIN it_branches b ON a.branch_id = b.id
-          ORDER BY a.id DESC
-          LIMIT 30
+          ORDER BY a.id DESC LIMIT 25
         `).all();
-      } else if (tableName === "it_asset_assignments") {
-        rows = db.prepare(`
-          SELECT asg.id, asg.asset_id, a.brand as asset_brand, a.model as asset_model, asg.assignee_type, 
-                 asg.user_id, asg.employee_code, asg.assigned_date, asg.assigned_by, asg.returned_date
-          FROM it_asset_assignments asg
-          LEFT JOIN it_assets a ON asg.asset_id = a.id
-          ORDER BY asg.assigned_date DESC
-          LIMIT 25
-        `).all();
-      } else if (tableName === "it_licenses_catalog") {
-        rows = db.prepare(`SELECT * FROM it_licenses_catalog ORDER BY name ASC`).all();
       } else if (tableName === "it_asset_licenses") {
         rows = db.prepare(`
           SELECT al.id, l.name as license_name, a.brand as asset_brand, a.model as asset_model, 
@@ -225,45 +240,23 @@ async function fetchAuthorizedDatabaseContext(allowedTables: string[], userMessa
           FROM it_asset_licenses al
           LEFT JOIN it_licenses_catalog l ON al.license_id = l.id
           LEFT JOIN it_assets a ON al.asset_id = a.id
-          ORDER BY al.expiration_date ASC
-          LIMIT 25
-        `).all();
-      } else if (tableName === "it_notes") {
-        rows = db.prepare(`
-          SELECT id, title, category, author_name, created_at, content 
-          FROM it_notes 
-          ORDER BY created_at DESC 
-          LIMIT 15
-        `).all();
-      } else if (tableName === "it_branches") {
-        rows = db.prepare(`SELECT * FROM it_branches ORDER BY name ASC`).all();
-      } else if (tableName === "it_asset_telemetry") {
-        rows = db.prepare(`
-          SELECT t.asset_id, t.hostname, a.brand as asset_brand, a.model as asset_model, 
-                 t.cpu_usage, t.ram_used_percent, t.ip_address_local, t.ip_address_public, t.last_seen
-          FROM it_asset_telemetry t
-          LEFT JOIN it_assets a ON t.asset_id = a.id
-          ORDER BY t.last_seen DESC
-          LIMIT 15
+          ORDER BY al.expiration_date ASC LIMIT 20
         `).all();
       } else if (tableName === "fleet_registered_devices") {
         rows = db.prepare(`
           SELECT hardware_id, device_name, last_driver_name, phone_number, current_app_version, 
-                 current_app_version_code, battery_level, is_charging, wifi_ssid, cellular_network_type, 
-                 ip_address, ota_failures, ota_paused, last_seen
+                 current_version_code, battery_level, is_charging, network_type, sim_carrier, 
+                 ota_paused, install_failed_count, last_install_error, last_seen
           FROM fleet_registered_devices
-          ORDER BY last_seen DESC
-          LIMIT 25
+          ORDER BY last_seen DESC LIMIT 20
         `).all();
-      } else if (tableName === "ops_app_version_settings") {
-        rows = db.prepare(`SELECT * FROM ops_app_version_settings WHERE id = 1`).all();
       } else {
         rows = db.prepare(`SELECT * FROM ${tableName} ORDER BY 1 DESC LIMIT 15`).all();
       }
 
       if (rows.length > 0) {
         contextReport += `\n--- TABLA [${tableName}] (${tableInfo.description}) ---\n`;
-        contextReport += JSON.stringify(rows, null, 2).substring(0, 4000);
+        contextReport += JSON.stringify(rows, null, 2).substring(0, 3500);
         contextReport += "\n";
       }
     } catch (e: any) {
