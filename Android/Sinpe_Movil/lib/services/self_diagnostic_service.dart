@@ -309,7 +309,10 @@ class SelfDiagnosticService {
     updateStep('NOTIF_TG', (s) => s.copyWith(isRunning: true, message: 'Consultando salud de Telegram Bot...'));
     updateStep('NOTIF_EMAIL', (s) => s.copyWith(isRunning: true, message: 'Consultando transporte SMTP...'));
     try {
-      final res = await http.get(Uri.parse('$activeBaseUrl/api/fleet/test-notifications')).timeout(const Duration(seconds: 8));
+      final res = await http.get(
+        Uri.parse('$activeBaseUrl/api/fleet/test-notifications'),
+        headers: ApiService.defaultHeaders,
+      ).timeout(const Duration(seconds: 8));
       if (res.statusCode == 200) {
         final notifData = jsonDecode(res.body);
         final tg = notifData['data']?['telegram'];

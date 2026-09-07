@@ -5,10 +5,17 @@ import { getCurrentUser } from '@/modules/core/lib/auth';
 import nodemailer from 'nodemailer';
 
 export async function GET(req: NextRequest) {
-  // [Auth Guard] Administradores o dispositivos móviles registrados
+  // [Auth Guard] Administradores, clientes legítimos ClicDriver o dispositivos móviles registrados
   const hwid = req.headers.get('x-device-hardware-id') || req.headers.get('x-hardware-id');
+  const fleetAppHeader = req.headers.get('x-fleet-app') || req.headers.get('X-Fleet-App');
+  const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
   const webUser = await getCurrentUser();
-  const isDriverOrMobile = Boolean(hwid && hwid.trim().length > 3);
+
+  const isDriverOrMobile = Boolean(
+    (hwid && hwid.trim().length > 3) ||
+    fleetAppHeader === 'ClicDriver' ||
+    (authHeader && authHeader.startsWith('Bearer '))
+  );
 
   if (!webUser && !isDriverOrMobile) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
