@@ -15,6 +15,7 @@ next-env.d.ts
 /fleet_uploads/
 /public/uploads/
 /docs/
+*.apk
 
 # Databases & Backups
 /dbs/
