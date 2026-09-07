@@ -19,6 +19,7 @@ import {
     AlertTriangle, 
     ShieldAlert, 
     Mail, 
+    Send,
     Clock, 
     SlidersHorizontal,
     RefreshCw,
@@ -43,6 +44,67 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+
+const PlatformBadge = ({ type }: { type: 'web' | 'telegram' | 'both' | 'apk' | 'web_apk' | 'bot_apk' | 'all' }) => {
+    if (type === 'web') {
+        return (
+            <Badge variant="outline" className="text-[10px] font-extrabold bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800 gap-1 py-0.5 px-2 shrink-0">
+                🌐 Solo Web
+            </Badge>
+        );
+    }
+    if (type === 'telegram') {
+        return (
+            <Badge variant="outline" className="text-[10px] font-extrabold bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-800 gap-1 py-0.5 px-2 shrink-0">
+                🤖 Solo Telegram
+            </Badge>
+        );
+    }
+    if (type === 'apk') {
+        return (
+            <Badge variant="outline" className="text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800 gap-1 py-0.5 px-2 shrink-0">
+                📱 Solo APK Nativa
+            </Badge>
+        );
+    }
+    if (type === 'web_apk') {
+        return (
+            <Badge variant="outline" className="text-[10px] font-extrabold bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-950/40 dark:text-teal-300 dark:border-teal-800 gap-1 py-0.5 px-2 shrink-0">
+                🖥️ Web & APK
+            </Badge>
+        );
+    }
+    if (type === 'bot_apk') {
+        return (
+            <Badge variant="outline" className="text-[10px] font-extrabold bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/40 dark:text-indigo-300 dark:border-indigo-800 gap-1 py-0.5 px-2 shrink-0">
+                🔄 Bot & APK
+            </Badge>
+        );
+    }
+    if (type === 'all') {
+        return (
+            <Badge variant="outline" className="text-[10px] font-extrabold bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800 gap-1 py-0.5 px-2 shrink-0">
+                ✨ Web, Bot & APK
+            </Badge>
+        );
+    }
+    return (
+        <Badge variant="outline" className="text-[10px] font-extrabold bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/40 dark:text-purple-300 dark:border-purple-800 gap-1 py-0.5 px-2 shrink-0">
+            🔄 Web & Telegram
+        </Badge>
+    );
+};
 
 export default function AdminOperationsPage() {
     const { toast } = useToast();
@@ -53,7 +115,7 @@ export default function AdminOperationsPage() {
     const [creatingRoute, setCreatingRoute] = useState(false);
 
     // Settings State
-    const [settings, setSettings] = useState({
+    const [settings, setSettings] = useState<Record<string, string>>({
         delivery_mode: 'sencillo',
         release_codes_enabled: 'false',
         release_codes_override_min: '5',
@@ -61,6 +123,11 @@ export default function AdminOperationsPage() {
         hora_barrido_fin_jornada: '19:00',
         limite_coincidencias: '5',
         notificaciones_email: 'true',
+        tracking_source: 'hybrid',
+        tiempo_maximo_cliente_min: '20',
+        parqueo_latitud: '10.025541',
+        parqueo_longitud: '-84.273252',
+        parqueo_radio_metros: '500',
         pedidos_enabled: 'true',
         bot_ask_next_client: 'true',
         bot_next_client_mandatory: 'false',
@@ -78,16 +145,52 @@ export default function AdminOperationsPage() {
         bot_require_invoice_photo: 'disabled',
         collect_consecutive_prefix: 'REC-',
         collect_consecutive_next: '1',
+        boleta_consecutive_prefix: 'BOL-',
+        boleta_consecutive_next: '1',
         default_retry_email: 'logistica@empresa.com',
         default_partial_email: 'logistica@empresa.com',
         route_consecutive_prefix: 'RUT-',
         route_consecutive_next: '1',
-        notificaciones_ruta_emails: 'logistica@empresa.com'
+        notificaciones_ruta_emails: 'logistica@empresa.com',
+        driver_boleta_pdf_enabled: 'true',
+        driver_boleta_email_enabled: 'true',
+        driver_boleta_print_enabled: 'true',
+        driver_boleta_paper_size: '80mm',
+        driver_boleta_print_method: 'all',
+        gps_modo_predeterminado: 'autoAjuste',
+        gps_tour_tiempo_sec: '10',
+        gps_tour_zoom_level: '17',
+        gps_auto_ajuste_interval_sec: '15',
+        gps_geocoding_threshold_m: '200',
+        gps_ui_refresh_sec: '5',
+        intervalo_consulta_gps: '12',
+        allow_driver_revert_delivery: '1',
+        apk_require_evidence_photo: 'disabled',
+        apk_require_invoice_photo: 'disabled',
+        apk_require_signature: 'false',
+        apk_print_show_client: 'true',
+        apk_print_show_lines: 'true',
+        apk_print_footer_text: '¡Gracias por preferirnos!\nEl articulo viaja por cuenta y riesgo del cliente.',
+        apk_block_if_gps_off: 'true',
+        apk_block_if_bluetooth_off: 'false',
+        apk_block_tethering: 'false',
+        apk_alert_on_tamper: 'true',
+        apk_enable_break_timer: 'true',
+        apk_background_sync_minutes: '5',
+        apk_tracking_interval_minutes: '5',
+        notification_strategy: 'solamente_telegram',
+        sms_gateway_url: '',
+        sms_gateway_token: '',
+        telefonos_departamento_ti: '',
+        break_time_breakfast_min: '15',
+        break_time_lunch_min: '45',
+        break_time_snack_min: '15',
+        ops_enable_gps_tamper_detection: 'true',
     });
 
     const handleToggleAskNextClient = (checked: boolean) => {
-        setSettings(prev => {
-            const next = { ...prev, bot_ask_next_client: checked ? 'true' : 'false' };
+        setSettings((prev: Record<string, string>) => {
+            const next: Record<string, string> = { ...prev, bot_ask_next_client: checked ? 'true' : 'false' };
             if (!checked) {
                 next.bot_next_client_mandatory = 'false';
             }
@@ -96,8 +199,8 @@ export default function AdminOperationsPage() {
     };
 
     const handleToggleNextClientMandatory = (checked: boolean) => {
-        setSettings(prev => {
-            const next = { ...prev, bot_next_client_mandatory: checked ? 'true' : 'false' };
+        setSettings((prev: Record<string, string>) => {
+            const next: Record<string, string> = { ...prev, bot_next_client_mandatory: checked ? 'true' : 'false' };
             if (checked) {
                 next.bot_ask_next_client = 'true';
             }
@@ -106,8 +209,8 @@ export default function AdminOperationsPage() {
     };
 
     const handleToggleAskLocation = (checked: boolean) => {
-        setSettings(prev => {
-            const next = { ...prev, bot_ask_location: checked ? 'true' : 'false' };
+        setSettings((prev: Record<string, string>) => {
+            const next: Record<string, string> = { ...prev, bot_ask_location: checked ? 'true' : 'false' };
             if (!checked) {
                 next.bot_location_mandatory = 'false';
             }
@@ -116,8 +219,8 @@ export default function AdminOperationsPage() {
     };
 
     const handleToggleLocationMandatory = (checked: boolean) => {
-        setSettings(prev => {
-            const next = { ...prev, bot_location_mandatory: checked ? 'true' : 'false' };
+        setSettings((prev: Record<string, string>) => {
+            const next: Record<string, string> = { ...prev, bot_location_mandatory: checked ? 'true' : 'false' };
             if (checked) {
                 next.bot_ask_location = 'true';
             }
@@ -126,8 +229,8 @@ export default function AdminOperationsPage() {
     };
 
     const handleToggleLiveTracking = (checked: boolean) => {
-        setSettings(prev => {
-            const next = { ...prev, bot_live_tracking: checked ? 'true' : 'false' };
+        setSettings((prev: Record<string, string>) => {
+            const next: Record<string, string> = { ...prev, bot_live_tracking: checked ? 'true' : 'false' };
             if (!checked) {
                 next.bot_live_tracking_mandatory = 'false';
             }
@@ -136,8 +239,8 @@ export default function AdminOperationsPage() {
     };
 
     const handleToggleLiveTrackingMandatory = (checked: boolean) => {
-        setSettings(prev => {
-            const next = { ...prev, bot_live_tracking_mandatory: checked ? 'true' : 'false' };
+        setSettings((prev: Record<string, string>) => {
+            const next: Record<string, string> = { ...prev, bot_live_tracking_mandatory: checked ? 'true' : 'false' };
             if (checked) {
                 next.bot_live_tracking = 'true';
             }
@@ -160,6 +263,9 @@ export default function AdminOperationsPage() {
     const [savingGeo, setSavingGeo] = useState(false);
     const [restoringGeo, setRestoringGeo] = useState(false);
 
+    // Registered Devices state
+    const [registeredDevices, setRegisteredDevices] = useState<any[]>([]);
+
     useEffect(() => {
         setTitle('Configuración de Entregas');
     }, [setTitle]);
@@ -168,16 +274,20 @@ export default function AdminOperationsPage() {
         async function loadData() {
             setLoading(true);
             try {
-                const [fetchedSettings, fetchedRoutes, fetchedGeo] = await Promise.all([
+                const [fetchedSettings, fetchedRoutes, fetchedGeo, devicesRes] = await Promise.all([
                     getDeliverySettings(),
                     getDeliveryRoutes(),
-                    getCostaRicaGeography()
+                    getCostaRicaGeography(),
+                    fetch('/api/fleet/device-config?list=true').then(r => r.json()).catch(() => ({ devices: [] }))
                 ]);
                 if (fetchedSettings && Object.keys(fetchedSettings).length > 0) {
                     setSettings((prev) => ({ ...prev, ...fetchedSettings }));
                 }
                 setRoutes(fetchedRoutes);
                 setGeographyData(fetchedGeo);
+                if (devicesRes?.devices) {
+                    setRegisteredDevices(devicesRes.devices);
+                }
                 if (fetchedGeo) {
                     setRawGeoJson(JSON.stringify(fetchedGeo, null, 4));
                 }
@@ -270,11 +380,12 @@ export default function AdminOperationsPage() {
         }
     }
 
-    async function handleDeleteRoute(id: number, name: string) {
-        if (!confirm(`¿Está seguro de eliminar la ruta "${name}"? Esta acción no se puede deshacer y eliminará las asignaciones asociadas.`)) {
-            return;
-        }
+    // State for Delete Route Alert Dialog
+    const [routeToDelete, setRouteToDelete] = useState<{ id: number; name: string } | null>(null);
 
+    async function executeDeleteRoute() {
+        if (!routeToDelete) return;
+        const { id, name } = routeToDelete;
         try {
             const res = await deleteDeliveryRoute(id);
             if (res.success) {
@@ -289,11 +400,17 @@ export default function AdminOperationsPage() {
             }
         } catch (e: any) {
             toast({
-                title: 'Error al eliminar',
-                description: e.message || 'No se pudo eliminar la ruta.',
+                title: 'Error al eliminar ruta',
+                description: e.message,
                 variant: 'destructive'
             });
+        } finally {
+            setRouteToDelete(null);
         }
+    }
+
+    function handleDeleteRoute(id: number, name: string) {
+        setRouteToDelete({ id, name });
     }
 
     const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -354,10 +471,11 @@ export default function AdminOperationsPage() {
         }
     }
 
-    async function handleRestoreGeography() {
-        if (!confirm('¿Está seguro de restaurar el catálogo geográfico por defecto? Esto sobrescribirá cualquier cambio manual que haya realizado.')) {
-            return;
-        }
+    // State for Restore Geography Alert Dialog
+    const [showRestoreGeoDialog, setShowRestoreGeoDialog] = useState<boolean>(false);
+
+    async function executeRestoreGeography() {
+        setShowRestoreGeoDialog(false);
         setRestoringGeo(true);
         try {
             const res = await restoreDefaultGeographyAction();
@@ -379,13 +497,17 @@ export default function AdminOperationsPage() {
             }
         } catch (e: any) {
             toast({
-                title: 'Error al restaurar',
-                description: e.message || 'No se pudo restablecer la geografía.',
+                title: 'Error al restaurar catálogo',
+                description: e.message,
                 variant: 'destructive'
             });
         } finally {
             setRestoringGeo(false);
         }
+    }
+
+    function handleRestoreGeography() {
+        setShowRestoreGeoDialog(true);
     }
 
     // Geography parsing helpers
@@ -429,8 +551,17 @@ export default function AdminOperationsPage() {
                 </p>
             </div>
             
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* General Settings */}
+            <Tabs defaultValue="general" className="w-full space-y-6">
+                <TabsList className="bg-muted/50 p-1 rounded-xl">
+                    <TabsTrigger value="general" className="rounded-lg font-bold">Ajustes Generales</TabsTrigger>
+                    <TabsTrigger value="apk" className="rounded-lg font-bold flex items-center gap-2">
+                        <span className="text-emerald-500">📱</span> APK Nativa
+                    </TabsTrigger>
+                </TabsList>
+
+                <TabsContent value="general" className="mt-0 outline-none">
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        {/* General Settings */}
                 <div className="lg:col-span-2 space-y-6">
                     <Card className="border-none shadow-md overflow-hidden relative bg-card">
                         <div className="absolute top-0 right-0 w-32 h-32 -mr-8 -mt-8 rounded-full bg-blue-500/10 pointer-events-none" />
@@ -445,16 +576,30 @@ export default function AdminOperationsPage() {
                         </CardHeader>
                         
                         <CardContent className="space-y-6">
+                            {/* Leyenda Guía de Ámbito */}
+                            <div className="flex items-center gap-2 text-xs bg-muted/40 p-3 rounded-xl border border-muted/60 flex-wrap">
+                                <span className="font-bold text-foreground text-xs">📍 Guía de Ámbito de Aplicación:</span>
+                                <PlatformBadge type="web" />
+                                <span className="text-[11px] text-muted-foreground mr-2">Configuración App / Portal Web</span>
+                                <PlatformBadge type="telegram" />
+                                <span className="text-[11px] text-muted-foreground mr-2">Configuración Bot Telegram</span>
+                                <PlatformBadge type="both" />
+                                <span className="text-[11px] text-muted-foreground">Aplica a ambas plataformas</span>
+                            </div>
+
                             {/* Delivery Mode Toggle */}
                             <div className="space-y-3 p-4 bg-muted/30 rounded-xl border border-muted/50">
-                                <div className="flex items-center justify-between">
+                                <div className="flex items-center justify-between gap-4">
                                     <div className="space-y-1">
-                                        <Label className="text-sm font-bold block">Modo de Operación y Entrega</Label>
-                                        <span className="text-xs text-muted-foreground font-medium">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <Label className="text-sm font-bold block">Modo de Operación y Entrega</Label>
+                                            <PlatformBadge type="both" />
+                                        </div>
+                                        <span className="text-xs text-muted-foreground font-medium block">
                                             Selecciona si deseas flujos rápidos y simples, o controles detallados de inventario.
                                         </span>
                                     </div>
-                                    <div className="flex items-center gap-2 bg-background p-1.5 rounded-lg border shadow-sm">
+                                    <div className="flex items-center gap-2 bg-background p-1.5 rounded-lg border shadow-sm shrink-0">
                                         <Button
                                             variant={settings.delivery_mode === 'sencillo' ? 'default' : 'ghost'}
                                             size="sm"
@@ -496,12 +641,15 @@ export default function AdminOperationsPage() {
                             {/* Toggles & Selects */}
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                 {/* Release Codes Switch */}
-                                <div className="flex flex-row items-center justify-between p-4 bg-muted/20 rounded-xl border border-muted/40">
+                                <div className="flex flex-row items-center justify-between p-4 bg-muted/20 rounded-xl border border-muted/40 gap-3">
                                     <div className="space-y-1">
-                                        <Label className="text-sm font-bold flex items-center gap-1.5">
-                                            <SlidersHorizontal className="w-4 h-4 text-purple-500" />
-                                            Códigos de Validación
-                                        </Label>
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            <Label className="text-sm font-bold flex items-center gap-1.5">
+                                                <SlidersHorizontal className="w-4 h-4 text-purple-500" />
+                                                Códigos de Validación
+                                            </Label>
+                                            <PlatformBadge type="both" />
+                                        </div>
                                         <span className="text-xs text-muted-foreground font-medium block">
                                             Exigir código de 6 dígitos en mermas.
                                         </span>
@@ -513,12 +661,15 @@ export default function AdminOperationsPage() {
                                 </div>
 
                                 {/* Email notification Switch */}
-                                <div className="flex flex-row items-center justify-between p-4 bg-muted/20 rounded-xl border border-muted/40">
+                                <div className="flex flex-row items-center justify-between p-4 bg-muted/20 rounded-xl border border-muted/40 gap-3">
                                     <div className="space-y-1">
-                                        <Label className="text-sm font-bold flex items-center gap-1.5">
-                                            <Mail className="w-4 h-4 text-emerald-500" />
-                                            Notificar Creador ERP
-                                        </Label>
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            <Label className="text-sm font-bold flex items-center gap-1.5">
+                                                <Mail className="w-4 h-4 text-emerald-500" />
+                                                Notificar Creador ERP
+                                            </Label>
+                                            <PlatformBadge type="both" />
+                                        </div>
                                         <span className="text-xs text-muted-foreground font-medium block">
                                             Enviar correo al facturador sobre incidencias.
                                         </span>
@@ -530,12 +681,15 @@ export default function AdminOperationsPage() {
                                 </div>
 
                                 {/* Habilitar Pedidos ERP Switch */}
-                                <div className="flex flex-row items-center justify-between p-4 bg-muted/20 rounded-xl border border-muted/40">
+                                <div className="flex flex-row items-center justify-between p-4 bg-muted/20 rounded-xl border border-muted/40 gap-3">
                                     <div className="space-y-1">
-                                        <Label className="text-sm font-bold flex items-center gap-1.5">
-                                            <Settings className="w-4 h-4 text-blue-500" />
-                                            Habilitar Pedidos ERP
-                                        </Label>
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            <Label className="text-sm font-bold flex items-center gap-1.5">
+                                                <Settings className="w-4 h-4 text-blue-500" />
+                                                Habilitar Pedidos ERP
+                                            </Label>
+                                            <PlatformBadge type="both" />
+                                        </div>
                                         <span className="text-xs text-muted-foreground font-medium block">
                                             Importar pedidos en cola y bot de Telegram.
                                         </span>
@@ -545,14 +699,363 @@ export default function AdminOperationsPage() {
                                         onCheckedChange={(val) => setSettings(prev => ({ ...prev, pedidos_enabled: val ? 'true' : 'false' }))}
                                     />
                                 </div>
+
+                                {/* Opciones de Boletas e Impresión Móvil Chofer */}
+                                <div className="col-span-1 md:col-span-3 space-y-4 p-5 bg-indigo-950/10 rounded-xl border border-indigo-500/20">
+                                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                                        <div className="flex items-center gap-2.5">
+                                            <span className="text-xl">🖨️</span>
+                                            <div>
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <Label className="text-sm font-extrabold text-indigo-900 dark:text-indigo-300">
+                                                        Opciones de Boleta e Impresoras Térmicas en Portal Móvil Chofer
+                                                    </Label>
+                                                    <PlatformBadge type="web" />
+                                                </div>
+                                                <span className="text-xs text-muted-foreground block font-medium">
+                                                    Habilite o deshabilite las acciones disponibles para el chofer al finalizar o revisar entregas.
+                                                </span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                                        <div className="flex items-center justify-between p-3 bg-background rounded-lg border shadow-sm gap-2">
+                                            <div className="space-y-0.5 pr-2">
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                    <Label className="text-xs font-bold block">📄 Descargar PDF</Label>
+                                                    <PlatformBadge type="both" />
+                                                </div>
+                                                <span className="text-[10px] text-muted-foreground block">Permitir guardar PDF boleta</span>
+                                            </div>
+                                            <Switch
+                                                checked={settings.driver_boleta_pdf_enabled !== 'false'}
+                                                onCheckedChange={(val) => setSettings(prev => ({ ...prev, driver_boleta_pdf_enabled: val ? 'true' : 'false' }))}
+                                            />
+                                        </div>
+
+                                        <div className="flex items-center justify-between p-3 bg-background rounded-lg border shadow-sm gap-2">
+                                            <div className="space-y-0.5 pr-2">
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                    <Label className="text-xs font-bold block">📧 Enviar por Correo</Label>
+                                                    <PlatformBadge type="both" />
+                                                </div>
+                                                <span className="text-[10px] text-muted-foreground block">Despachar boleta por email</span>
+                                            </div>
+                                            <Switch
+                                                checked={settings.driver_boleta_email_enabled !== 'false'}
+                                                onCheckedChange={(val) => setSettings(prev => ({ ...prev, driver_boleta_email_enabled: val ? 'true' : 'false' }))}
+                                            />
+                                        </div>
+
+                                        <div className="flex items-center justify-between p-3 bg-background rounded-lg border shadow-sm gap-2">
+                                            <div className="space-y-0.5 pr-2">
+                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                    <Label className="text-xs font-bold block">🖨️ Impresión Térmica</Label>
+                                                    <PlatformBadge type="web" />
+                                                </div>
+                                                <span className="text-[10px] text-muted-foreground block">Imprimir recibo Bluetooth</span>
+                                            </div>
+                                            <Switch
+                                                checked={settings.driver_boleta_print_enabled !== 'false'}
+                                                onCheckedChange={(val) => setSettings(prev => ({ ...prev, driver_boleta_print_enabled: val ? 'true' : 'false' }))}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="pt-3 border-t border-indigo-500/20 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                        <div className="space-y-0.5">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <Label className="text-xs font-bold text-indigo-900 dark:text-indigo-200 block">
+                                                    Formato de Papel para Impresoras de Recibos / Bluetooth
+                                                </Label>
+                                                <PlatformBadge type="web" />
+                                            </div>
+                                            <span className="text-[11px] text-muted-foreground block">
+                                                Seleccione el ancho físico estándar del papel térmico de la empresa (Epson TMU o Datáfonos/POS).
+                                            </span>
+                                        </div>
+
+                                        <Select 
+                                            value={settings.driver_boleta_paper_size || '80mm'} 
+                                            onValueChange={(val) => setSettings(prev => ({ ...prev, driver_boleta_paper_size: val }))}
+                                        >
+                                            <SelectTrigger className="w-full sm:w-64 h-9 font-bold text-xs bg-background shrink-0">
+                                                <SelectValue placeholder="Seleccionar Formato" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="80mm">80 mm (Epson TMU / Térmica)</SelectItem>
+                                                <SelectItem value="57mm">57 mm (Datáfono / POS)</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <Separator />
+
+                            {/* Tracking Source & Customer Stay Alerts */}
+                            <div className="space-y-4 p-4 bg-slate-900/5 rounded-xl border border-slate-200">
+                                <div className="flex items-center justify-between gap-3 flex-wrap">
+                                    <div className="space-y-1">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                            <Label className="text-sm font-bold text-indigo-900 flex items-center gap-1.5">
+                                                📡 Fuente de Rastreo de Flota en Vivo
+                                            </Label>
+                                            <PlatformBadge type="both" />
+                                        </div>
+                                        <span className="text-xs text-muted-foreground font-medium block">
+                                            Seleccione el origen de las coordenadas geográficas de los camiones.
+                                        </span>
+                                    </div>
+
+                                    <Select 
+                                        value={settings.tracking_source || 'hybrid'} 
+                                        onValueChange={(val) => setSettings(prev => ({ ...prev, tracking_source: val }))}
+                                    >
+                                        <SelectTrigger className="w-72 h-9 font-bold text-xs bg-background">
+                                            <SelectValue placeholder="Seleccionar Fuente" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="telegram">Sólo GPS del Teléfono (APK Móvil / Bot)</SelectItem>
+                                            <SelectItem value="gps_navixy">Sólo GPS Camión (Navixy Satelital)</SelectItem>
+                                            <SelectItem value="hybrid">Modo Híbrido (GPS Camión + APK / Bot)</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-slate-200/80">
+                                    <div className="space-y-2">
+                                        <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                                            <Clock className="w-3.5 h-3.5 text-amber-600" />
+                                            Tiempo Máx. en Cliente (Min)
+                                        </Label>
+                                        <Input
+                                            type="number"
+                                            min="5"
+                                            max="180"
+                                            value={settings.tiempo_maximo_cliente_min || '20'}
+                                            onChange={(e) => setSettings(prev => ({ ...prev, tiempo_maximo_cliente_min: e.target.value }))}
+                                            className="rounded-lg font-bold"
+                                        />
+                                        <span className="text-[10px] text-muted-foreground block">
+                                            Emite alerta si el camión permanece detenido en cliente más de estos minutos.
+                                        </span>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                                            <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-600" />
+                                            Radio Parqueo Sede (Metros)
+                                        </Label>
+                                        <Input
+                                            type="number"
+                                            min="50"
+                                            max="2000"
+                                            value={settings.parqueo_radio_metros || '500'}
+                                            onChange={(e) => setSettings(prev => ({ ...prev, parqueo_radio_metros: e.target.value }))}
+                                            className="rounded-lg font-bold"
+                                        />
+                                        <span className="text-[10px] text-muted-foreground block">
+                                            Radio de geocerca del patio/sede central (m) para detectar entrada y salida.
+                                        </span>
+                                    </div>
+
+                                    {/* Auto-inicio de ruta por salida de patio */}
+                                    <div className="flex flex-row items-center justify-between p-3 bg-muted/20 rounded-xl border border-muted/40">
+                                        <div className="space-y-0.5 pr-2">
+                                            <Label className="text-xs font-bold">Auto-Iniciar Ruta al Salir del Patio</Label>
+                                            <span className="text-[10px] text-muted-foreground block">
+                                                Activa la hoja de ruta y registra la hora de salida automáticamente si el camión sale del radio sin tocar el botón.
+                                            </span>
+                                        </div>
+                                        <Switch
+                                            checked={settings.auto_start_route_on_depot_exit !== 'false'}
+                                            onCheckedChange={(val) => setSettings(prev => ({ ...prev, auto_start_route_on_depot_exit: val ? 'true' : 'false' }))}
+                                        />
+                                    </div>
+
+                                    {/* Auto-llegada de ruta por entrada a patio */}
+                                    <div className="flex flex-row items-center justify-between p-3 bg-muted/20 rounded-xl border border-muted/40">
+                                        <div className="space-y-0.5 pr-2">
+                                            <Label className="text-xs font-bold">Auto-Registrar Llegada al Entrar al Patio</Label>
+                                            <span className="text-[10px] text-muted-foreground block">
+                                                Captura la hora exacta de retorno al ingresar al radio tras concluir las entregas para consolidar tiempos en analítica.
+                                            </span>
+                                        </div>
+                                        <Switch
+                                            checked={settings.auto_record_arrival_on_depot_entry !== 'false'}
+                                            onCheckedChange={(val) => setSettings(prev => ({ ...prev, auto_record_arrival_on_depot_entry: val ? 'true' : 'false' }))}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* NUEVA TARJETA: MONITOR DE ESTADOS GPS & TOUR */}
+                            <div className="space-y-4 p-4 bg-sky-950/10 rounded-xl border border-sky-500/20">
+                                <div className="flex items-center justify-between gap-3 flex-wrap">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-lg">🎯</span>
+                                        <div>
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <Label className="text-sm font-bold text-sky-900 dark:text-sky-300">
+                                                    Configuración de Pantalla y Modo Tour (Monitor GPS)
+                                                </Label>
+                                                <PlatformBadge type="web" />
+                                            </div>
+                                            <span className="text-xs text-muted-foreground block font-medium">
+                                                Personalice el comportamiento predeterminado del Monitor GPS de la Flota en tiempo real.
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-sky-500/20">
+                                    {/* Modo Predeterminado */}
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                                            Modo Predeterminado
+                                        </Label>
+                                        <Select 
+                                            value={settings.gps_modo_predeterminado || 'autoAjuste'} 
+                                            onValueChange={(val) => setSettings(prev => ({ ...prev, gps_modo_predeterminado: val }))}
+                                        >
+                                            <SelectTrigger className="h-9 font-bold text-xs bg-background">
+                                                <SelectValue placeholder="Modo Inicial" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="autoAjuste">🎯 Auto Ajuste (Encuadre General)</SelectItem>
+                                                <SelectItem value="modoTour">🔄 Modo Tour (Carrusel Animado)</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                        <span className="text-[10px] text-muted-foreground block">
+                                            Modo activo al abrir la pantalla de monitoreo.
+                                        </span>
+                                    </div>
+
+                                    {/* Tiempo Tour */}
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                                            Tiempo por Vehículo en Tour (Seg)
+                                        </Label>
+                                        <Input
+                                            type="number"
+                                            min="3"
+                                            max="60"
+                                            value={settings.gps_tour_tiempo_sec || '10'}
+                                            onChange={(e) => setSettings(prev => ({ ...prev, gps_tour_tiempo_sec: e.target.value }))}
+                                            className="h-9 font-bold text-xs"
+                                        />
+                                        <span className="text-[10px] text-muted-foreground block">
+                                            Segundos enfocado en cada camión en Modo Tour.
+                                        </span>
+                                    </div>
+
+                                    {/* Zoom Level */}
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                                            Nivel de Zoom en Tour
+                                        </Label>
+                                        <Select 
+                                            value={settings.gps_tour_zoom_level || '17'} 
+                                            onValueChange={(val) => setSettings(prev => ({ ...prev, gps_tour_zoom_level: val }))}
+                                        >
+                                            <SelectTrigger className="h-9 font-bold text-xs bg-background">
+                                                <SelectValue placeholder="Zoom" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="15">Zoom 15 (Ciudad/Sector)</SelectItem>
+                                                <SelectItem value="16">Zoom 16 (Cercano)</SelectItem>
+                                                <SelectItem value="17">Zoom 17 (Detallado)</SelectItem>
+                                                <SelectItem value="18">Zoom 18 (Máximo Zoom)</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                        <span className="text-[10px] text-muted-foreground block">
+                                            Acercamiento de cámara al hacer foco en un vehículo.
+                                        </span>
+                                    </div>
+
+                                    {/* Frecuencia AutoAjuste */}
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                                            Frecuencia Auto Ajuste (Seg)
+                                        </Label>
+                                        <Input
+                                            type="number"
+                                            min="5"
+                                            max="120"
+                                            value={settings.gps_auto_ajuste_interval_sec || '15'}
+                                            onChange={(e) => setSettings(prev => ({ ...prev, gps_auto_ajuste_interval_sec: e.target.value }))}
+                                            className="h-9 font-bold text-xs"
+                                        />
+                                        <span className="text-[10px] text-muted-foreground block">
+                                            Segundos para re-encuadrar el grupo completo.
+                                        </span>
+                                    </div>
+
+                                    {/* Umbral Desplazamiento Geocodificación */}
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                                            Umbral Geocodificación (Mts)
+                                        </Label>
+                                        <Input
+                                            type="number"
+                                            min="100"
+                                            max="2000"
+                                            value={settings.gps_geocoding_threshold_m || '200'}
+                                            onChange={(e) => setSettings(prev => ({ ...prev, gps_geocoding_threshold_m: e.target.value }))}
+                                            className="h-9 font-bold text-xs"
+                                        />
+                                        <span className="text-[10px] text-muted-foreground block">
+                                            Desplazamiento mínimo para actualizar nombre de ciudad.
+                                        </span>
+                                    </div>
+
+                                    {/* Frecuencia Refresco UI */}
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider">
+                                            Refresco de Pantalla UI (Seg)
+                                        </Label>
+                                        <Input
+                                            type="number"
+                                            min="2"
+                                            max="30"
+                                            value={settings.gps_ui_refresh_sec || '5'}
+                                            onChange={(e) => setSettings(prev => ({ ...prev, gps_ui_refresh_sec: e.target.value }))}
+                                            className="h-9 font-bold text-xs"
+                                        />
+                                        <span className="text-[10px] text-muted-foreground block">
+                                            Tiempo entre actualizaciones de contadores de interfaz.
+                                        </span>
+                                    </div>
+
+                                    {/* Frecuencia de Consulta a Navixy API */}
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                                            📡 Consulta Navixy API (Seg)
+                                        </Label>
+                                        <Input
+                                            type="number"
+                                            min="12"
+                                            max="120"
+                                            value={settings.intervalo_consulta_gps || '12'}
+                                            onChange={(e) => setSettings(prev => ({ ...prev, intervalo_consulta_gps: e.target.value }))}
+                                            className="h-9 font-bold text-xs"
+                                        />
+                                        <span className="text-[10px] text-muted-foreground block">
+                                            Tiempo entre llamadas al servidor Navixy (Mín. 12s para rate-limit).
+                                        </span>
+                                    </div>
+                                </div>
                             </div>
 
                             <Separator />
 
                             <div className="space-y-4">
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap">
                                     <SlidersHorizontal className="w-5 h-5 text-sky-500" />
                                     <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Configuración del Bot de Telegram</h3>
+                                    <PlatformBadge type="telegram" />
                                 </div>
                                 <p className="text-xs text-muted-foreground font-medium">
                                     Personalice las preguntas del asistente de Telegram que realizan los choferes en la calle. Las dependencias entre preguntas se gestionan de forma automática.
@@ -927,22 +1430,26 @@ export default function AdminOperationsPage() {
                             {/* Consecutivos de Recolecta */}
                             <div className="space-y-4">
                                 <div className="flex items-center gap-1.5">
-                                    <span className="text-sm font-bold text-purple-600 dark:text-purple-400">Consecutivo de Recolectas de Proveedores</span>
+                                    <SlidersHorizontal className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                                    <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">Consecutivo de Boletas de Entregas (Incidencias / Devoluciones)</span>
                                 </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 bg-purple-500/5 dark:bg-purple-950/10 border border-purple-500/10 rounded-xl">
+                                <p className="text-xs text-muted-foreground font-medium">
+                                    Configure el prefijo y número correlativo automático que se imprimirá e identificará las Boletas oficiales de Entrega (ej. BOL-000001).
+                                </p>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 bg-emerald-500/5 dark:bg-emerald-950/10 border border-emerald-500/10 rounded-xl">
                                     <div className="space-y-2">
                                         <Label className="text-xs font-bold flex items-center gap-1.5 text-muted-foreground uppercase tracking-wider">
                                             Prefijo de Consecutivo
                                          </Label>
                                         <Input
                                             type="text"
-                                            value={settings.collect_consecutive_prefix || ''}
-                                            onChange={(e) => setSettings(prev => ({ ...prev, collect_consecutive_prefix: e.target.value }))}
-                                            className="rounded-lg font-bold focus-visible:ring-purple-500"
-                                            placeholder="REC-"
+                                            value={settings.boleta_consecutive_prefix || ''}
+                                            onChange={(e) => setSettings(prev => ({ ...prev, boleta_consecutive_prefix: e.target.value }))}
+                                            className="rounded-lg font-bold focus-visible:ring-emerald-500"
+                                            placeholder="BOL-"
                                         />
                                         <span className="text-[10px] text-muted-foreground block font-medium">
-                                            Ej: REC-, RET-, COMP-, etc.
+                                            Prefijo utilizado al generar boletas de chofer (ej. BOL-, INC-, DEV-).
                                         </span>
                                     </div>
 
@@ -953,13 +1460,13 @@ export default function AdminOperationsPage() {
                                         <Input
                                             type="number"
                                             min="1"
-                                            value={settings.collect_consecutive_next || ''}
-                                            onChange={(e) => setSettings(prev => ({ ...prev, collect_consecutive_next: e.target.value }))}
-                                            className="rounded-lg font-bold focus-visible:ring-purple-500"
+                                            value={settings.boleta_consecutive_next || ''}
+                                            onChange={(e) => setSettings(prev => ({ ...prev, boleta_consecutive_next: e.target.value }))}
+                                            className="rounded-lg font-bold focus-visible:ring-emerald-500"
                                             placeholder="1"
                                         />
                                         <span className="text-[10px] text-muted-foreground block font-medium">
-                                            Siguiente correlativo a asignar (se incrementa automáticamente).
+                                            Siguiente correlativo a asignar secuencialmente.
                                         </span>
                                     </div>
                                 </div>
@@ -1017,7 +1524,7 @@ export default function AdminOperationsPage() {
                                         <span className="text-sm font-bold text-purple-600 dark:text-purple-400">Consecutivo de Solicitudes de Recolecta</span>
                                     </div>
                                     <p className="text-xs text-muted-foreground font-medium">
-                                        Configure el prefijo y el número siguiente para las solicitudes de recolecta creadas en el sistema.
+                                        Configure el prefijo y el número secuencial para las órdenes de retiro y solicitudes de recolecta a proveedor (`/dashboard/operations/logistics/collect`).
                                     </p>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6 p-4 bg-purple-500/5 dark:bg-purple-950/10 border border-purple-500/10 rounded-xl">
                                         <div className="space-y-2">
@@ -1032,7 +1539,7 @@ export default function AdminOperationsPage() {
                                                 placeholder="REC-"
                                             />
                                             <span className="text-[10px] text-muted-foreground block font-medium">
-                                                Prefijo utilizado al generar el identificador (ej. REC-).
+                                                Prefijo utilizado al generar la solicitud (ej. REC-).
                                             </span>
                                         </div>
 
@@ -1048,7 +1555,7 @@ export default function AdminOperationsPage() {
                                                 placeholder="1"
                                             />
                                             <span className="text-[10px] text-muted-foreground block font-medium">
-                                                El siguiente número secuencial que se asignará.
+                                                El siguiente número secuencial que se asignará automáticamente.
                                             </span>
                                         </div>
                                     </div>
@@ -1111,8 +1618,115 @@ export default function AdminOperationsPage() {
                                                 Correos separados por comas.
                                             </span>
                                         </div>
+
+                                        <div className="space-y-2 md:col-span-3">
+                                            <Label className="text-xs font-bold flex items-center gap-1.5 text-muted-foreground uppercase tracking-wider">
+                                                🏷️ Código Documental y Control ISO 9001 (Membrete Superior)
+                                            </Label>
+                                            <Input
+                                                type="text"
+                                                value={settings.route_sheet_iso_text || ''}
+                                                onChange={(e) => setSettings(prev => ({ ...prev, route_sheet_iso_text: e.target.value }))}
+                                                className="rounded-lg font-bold focus-visible:ring-sky-500"
+                                                placeholder="DOC-LOG-04 | Ver. 02 | Sistema de Gestión de Calidad ISO 9001:2015"
+                                            />
+                                            <span className="text-[10px] text-muted-foreground block font-medium">
+                                                Este texto se imprimirá en el membrete superior de todas las hojas para cumplimiento de control de información documentada ISO 9001.
+                                            </span>
+                                        </div>
                                     </div>
                                 </div>
+
+                                <Separator />
+
+                                 {/* Notificaciones Omnicanal (SMS Gateway) */}
+                                 <div className="space-y-4 pt-2">
+                                     <div className="flex items-center gap-2 flex-wrap">
+                                         <Send className="w-5 h-5 text-emerald-500" />
+                                         <h3 className="text-sm font-bold text-foreground uppercase tracking-wider">Servidor SMS Gateway & Notificaciones Omnicanal</h3>
+                                         <PlatformBadge type="all" />
+                                     </div>
+                                     <p className="text-xs text-muted-foreground font-medium">
+                                         Configure la estrategia de notificaciones de la operación y el servidor Gateway SMS (Telegram + SMS Gateway con fallback).
+                                     </p>
+
+                                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                         {/* Frecuencia de rastreo GPS APK */}
+                                         <div className="space-y-2">
+                                             <Label className="text-xs font-bold flex items-center gap-1.5 text-muted-foreground uppercase tracking-wider">
+                                                 ⏱️ Rastreo GPS APK (Min)
+                                             </Label>
+                                             <Select 
+                                                 value={settings.apk_tracking_interval_minutes || '5'}
+                                                 onValueChange={(val) => setSettings(prev => ({ ...prev, apk_tracking_interval_minutes: val }))}
+                                             >
+                                                 <SelectTrigger className="h-9 font-bold text-xs rounded-lg">
+                                                     <SelectValue placeholder="Seleccione intervalo" />
+                                                 </SelectTrigger>
+                                                 <SelectContent>
+                                                     <SelectItem value="3">Cada 3 minutos (Alta precisión)</SelectItem>
+                                                     <SelectItem value="5">Cada 5 minutos (Predeterminado - Recomendado)</SelectItem>
+                                                     <SelectItem value="10">Cada 10 minutos (Ahorro batería)</SelectItem>
+                                                     <SelectItem value="15">Cada 15 minutos</SelectItem>
+                                                 </SelectContent>
+                                             </Select>
+                                             <span className="text-[10px] text-muted-foreground block font-medium">
+                                                 Intervalo del despertador background en la APK Flutter (~1.5% batería/día).
+                                             </span>
+                                         </div>
+
+                                         {/* Estrategia de Notificación */}
+                                         <div className="space-y-2">
+                                             <Label className="text-xs font-bold flex items-center gap-1.5 text-muted-foreground uppercase tracking-wider">
+                                                 📲 Estrategia de Avisos
+                                             </Label>
+                                             <Select 
+                                                 value={settings.notification_strategy || 'solamente_telegram'}
+                                                 onValueChange={(val) => setSettings(prev => ({ ...prev, notification_strategy: val }))}
+                                             >
+                                                 <SelectTrigger className="h-9 font-bold text-xs rounded-lg">
+                                                     <SelectValue placeholder="Seleccione estrategia" />
+                                                 </SelectTrigger>
+                                                 <SelectContent>
+                                                     <SelectItem value="solamente_telegram">Solamente Telegram Bot</SelectItem>
+                                                     <SelectItem value="solamente_sms">Solamente SMS Gateway (Android)</SelectItem>
+                                                     <SelectItem value="ambos">Ambos Canales en Paralelo (Telegram + SMS)</SelectItem>
+                                                     <SelectItem value="fallback_sms">Fallback Inteligente (Telegram ➔ SMS si falla)</SelectItem>
+                                                 </SelectContent>
+                                             </Select>
+                                             <span className="text-[10px] text-muted-foreground block font-medium">
+                                                 Los SMS usan el número registrado en el perfil (/dashboard/profile).
+                                             </span>
+                                         </div>
+
+                                         {/* IP / URL Servidor SMS Gateway */}
+                                         <div className="space-y-2">
+                                             <Label className="text-xs font-bold flex items-center gap-1.5 text-muted-foreground uppercase tracking-wider">
+                                                 🌐 URL Servidor SMS Gateway
+                                             </Label>
+                                             <Input
+                                                 type="text"
+                                                 value={settings.sms_gateway_url || ''}
+                                                 onChange={(e) => setSettings(prev => ({ ...prev, sms_gateway_url: e.target.value }))}
+                                                 className="rounded-lg font-bold text-xs"
+                                                 placeholder="http://192.168.1.50:8082"
+                                             />
+                                             <span className="text-[10px] text-muted-foreground block font-medium">
+                                                 IP local o remota del teléfono Android ejecutando traccar-sms-gateway.
+                                             </span>
+                                         </div>
+
+                                         {/* Centralized Note pointing to IT Tools Mobile */}
+                                         <div className="space-y-1 md:col-span-3 p-3 bg-amber-50/50 dark:bg-amber-950/20 rounded-xl border border-amber-200/60 dark:border-amber-900/40 text-xs">
+                                             <span className="font-bold text-amber-900 dark:text-amber-300 flex items-center gap-1.5">
+                                                 🚨 Teléfonos Departamento de TI (Alertas Críticas SMS)
+                                             </span>
+                                             <p className="text-[11px] text-muted-foreground">
+                                                 Los números celulares del Departamento de TI para alertas de emergencia SMS han sido reubicados y unificados en <a href="/dashboard/it-tools/mobile" className="underline font-bold text-amber-800 dark:text-amber-300 hover:text-amber-950">Herramientas TI / Gestión Móvil MDM (/dashboard/it-tools/mobile)</a> junto al canal de contingencia Telegram.
+                                             </p>
+                                         </div>
+                                     </div>
+                                 </div>
                             </div>
                         </CardContent>
 
@@ -1177,7 +1791,7 @@ export default function AdminOperationsPage() {
                                 </div>
                                 <Textarea
                                     value={rawGeoJson}
-                                    onChange={(e) => setRawGeoJson(e.target.value)}
+                                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setRawGeoJson(e.target.value)}
                                     className="w-full h-80 font-mono text-[11px] leading-relaxed p-4 bg-muted/30 border border-muted/70 rounded-xl focus:ring-indigo-500"
                                     placeholder="Cargando JSON geográfico..."
                                     spellCheck={false}
@@ -1356,7 +1970,451 @@ export default function AdminOperationsPage() {
                         </CardContent>
                     </Card>
                 </div>
-            </div>
+                    </div>
+                </TabsContent>
+
+                <TabsContent value="apk" className="mt-0 outline-none">
+                    <Card className="border-none shadow-md overflow-hidden relative bg-card">
+                        <div className="absolute top-0 right-0 w-32 h-32 -mr-8 -mt-8 rounded-full bg-emerald-500/10 pointer-events-none" />
+                        <CardHeader className="pb-4">
+                            <div className="flex items-center gap-2">
+                                <span className="text-2xl">📱</span>
+                                <CardTitle className="text-xl">Configuración Remota de APK Nativa</CardTitle>
+                            </div>
+                            <CardDescription>
+                                Ajuste los permisos, botones y comportamientos del teléfono móvil del chofer remotamente. (Los cambios aplicarán en la próxima sincronización del dispositivo).
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-6">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                {/* Signature Settings */}
+                                <div className="flex flex-row items-center justify-between p-4 bg-muted/20 rounded-xl border border-muted/40 gap-3">
+                                    <div className="space-y-1">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            <Label className="text-sm font-bold flex items-center gap-1.5">
+                                                Firma Digital Obligatoria
+                                            </Label>
+                                            <PlatformBadge type="apk" />
+                                        </div>
+                                        <span className="text-xs text-muted-foreground font-medium block">
+                                            Obligar al chofer a recabar firma al cliente en pantalla.
+                                        </span>
+                                    </div>
+                                    <Switch
+                                        checked={settings.apk_require_signature === 'true'}
+                                        onCheckedChange={(val) => setSettings(prev => ({ ...prev, apk_require_signature: val ? 'true' : 'false' }))}
+                                    />
+                                </div>
+
+                                {/* Evidence Photo Settings */}
+                                <div className="flex flex-row items-center justify-between p-4 bg-muted/20 rounded-xl border border-muted/40 gap-3">
+                                    <div className="space-y-1">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            <Label className="text-sm font-bold flex items-center gap-1.5">
+                                                Foto de Evidencia Obligatoria
+                                            </Label>
+                                            <PlatformBadge type="apk" />
+                                        </div>
+                                        <span className="text-xs text-muted-foreground font-medium block">
+                                            Obligar captura de foto de evidencia antes de completar entrega.
+                                        </span>
+                                    </div>
+                                    <Switch
+                                        checked={settings.apk_require_evidence_photo === 'mandatory'}
+                                        onCheckedChange={(val) => setSettings(prev => ({ ...prev, apk_require_evidence_photo: val ? 'mandatory' : 'disabled' }))}
+                                    />
+                                </div>
+
+                                {/* Invoice Photo Settings */}
+                                <div className="flex flex-row items-center justify-between p-4 bg-muted/20 rounded-xl border border-muted/40 gap-3">
+                                    <div className="space-y-1">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            <Label className="text-sm font-bold flex items-center gap-1.5">
+                                                Foto de Factura Firmada
+                                            </Label>
+                                            <PlatformBadge type="apk" />
+                                        </div>
+                                        <span className="text-xs text-muted-foreground font-medium block">
+                                            Obligar foto de factura física sellada antes de cerrar.
+                                        </span>
+                                    </div>
+                                    <Switch
+                                        checked={settings.apk_require_invoice_photo === 'mandatory'}
+                                        onCheckedChange={(val) => setSettings(prev => ({ ...prev, apk_require_invoice_photo: val ? 'mandatory' : 'disabled' }))}
+                                    />
+                                </div>
+
+                                {/* Print button */}
+                                <div className="flex flex-row items-center justify-between p-4 bg-muted/20 rounded-xl border border-muted/40 gap-3">
+                                    <div className="space-y-1">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            <Label className="text-sm font-bold flex items-center gap-1.5">
+                                                Botón Imprimir Recibo Térmico
+                                            </Label>
+                                            <PlatformBadge type="apk" />
+                                        </div>
+                                        <span className="text-xs text-muted-foreground font-medium block">
+                                            Habilita o deshabilita la opción de imprimir vía Bluetooth.
+                                        </span>
+                                    </div>
+                                    <Switch
+                                        checked={settings.driver_boleta_print_enabled !== 'false'}
+                                        onCheckedChange={(val) => setSettings(prev => ({ ...prev, driver_boleta_print_enabled: val ? 'true' : 'false' }))}
+                                    />
+                                </div>
+                                {/* Reversión de Entregas por Chofer */}
+                                <div className="flex flex-row items-center justify-between p-4 bg-muted/20 rounded-xl border border-muted/40 gap-3">
+                                    <div className="space-y-1">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            <Label className="text-sm font-bold flex items-center gap-1.5">
+                                                Permitir Reversión de Entregas en APK
+                                            </Label>
+                                            <PlatformBadge type="apk" />
+                                        </div>
+                                        <span className="text-xs text-muted-foreground font-medium block">
+                                            Permite a los choferes revertir entregas finalizadas a pendiente desde el celular.
+                                        </span>
+                                    </div>
+                                    <Switch
+                                        checked={settings.allow_driver_revert_delivery === '1' || settings.allow_driver_revert_delivery === 'true'}
+                                        onCheckedChange={(c) => setSettings(prev => ({ ...prev, allow_driver_revert_delivery: c ? '1' : '0' }))}
+                                    />
+                                </div>
+
+                                {/* Sync Interval Settings */}
+                                <div className="flex flex-row items-center justify-between p-4 bg-muted/20 rounded-xl border border-muted/40 gap-3">
+                                    <div className="space-y-1">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            <Label className="text-sm font-bold flex items-center gap-1.5">
+                                                Sincronización en Segundo Plano
+                                            </Label>
+                                            <PlatformBadge type="apk" />
+                                        </div>
+                                        <span className="text-xs text-muted-foreground font-medium block">
+                                            Frecuencia en minutos con la que la APK consulta y sube datos (Mín. 5 min).
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <Input
+                                            type="number"
+                                            min="5"
+                                            max="120"
+                                            value={settings.apk_background_sync_minutes || '5'}
+                                            onChange={(e) => setSettings(prev => ({ ...prev, apk_background_sync_minutes: e.target.value }))}
+                                            className="w-20 font-bold text-center rounded-lg"
+                                        />
+                                        <span className="text-xs font-bold text-muted-foreground">min</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Notificaciones: Chofer en Espera de Atención (⏱️ APK) */}
+                            <div className="p-4 bg-amber-500/5 dark:bg-amber-950/10 border border-amber-500/20 rounded-xl space-y-3">
+                                <div className="flex items-center gap-2">
+                                    <Clock className="w-4 h-4 text-amber-500" />
+                                    <Label className="text-sm font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider">
+                                        Notificaciones de Chofer en Espera de Atención (⏱️ Botón de Reloj)
+                                    </Label>
+                                    <PlatformBadge type="apk" />
+                                </div>
+                                <p className="text-[11px] text-muted-foreground">
+                                    Canales a notificar cuando el chofer pulsa el botón de reloj ⏱️ en la app indicando que está esperando ser atendido en el cliente.
+                                </p>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                                    {/* Email Vendedor */}
+                                    <div className="flex items-center justify-between p-3 bg-background/80 rounded-lg border">
+                                        <div className="space-y-0.5 pr-2">
+                                            <Label className="text-xs font-bold flex items-center gap-1.5">
+                                                <Mail className="w-3.5 h-3.5 text-blue-500" /> Email al Vendedor
+                                            </Label>
+                                            <span className="text-[10px] text-muted-foreground block">
+                                                Enviar correo al vendedor asignado al cliente.
+                                            </span>
+                                        </div>
+                                        <Switch
+                                            checked={settings.notif_waiting_email_salesperson === '1' || settings.notif_waiting_email_salesperson === 'true' || settings.notif_waiting_email_salesperson === undefined}
+                                            onCheckedChange={(c) => setSettings(prev => ({ ...prev, notif_waiting_email_salesperson: c ? '1' : '0' }))}
+                                        />
+                                    </div>
+
+                                    {/* Email Creador Pedido */}
+                                    <div className="flex items-center justify-between p-3 bg-background/80 rounded-lg border">
+                                        <div className="space-y-0.5 pr-2">
+                                            <Label className="text-xs font-bold flex items-center gap-1.5">
+                                                <Mail className="w-3.5 h-3.5 text-indigo-500" /> Email a Creador / Facturador
+                                            </Label>
+                                            <span className="text-[10px] text-muted-foreground block">
+                                                Enviar correo a quien creó/facturó el pedido en ERP.
+                                            </span>
+                                        </div>
+                                        <Switch
+                                            checked={settings.notif_waiting_email_creator === '1' || settings.notif_waiting_email_creator === 'true' || settings.notif_waiting_email_creator === undefined}
+                                            onCheckedChange={(c) => setSettings(prev => ({ ...prev, notif_waiting_email_creator: c ? '1' : '0' }))}
+                                        />
+                                    </div>
+
+                                    {/* Telegram Vendedor */}
+                                    <div className="flex items-center justify-between p-3 bg-background/80 rounded-lg border">
+                                        <div className="space-y-0.5 pr-2">
+                                            <Label className="text-xs font-bold flex items-center gap-1.5">
+                                                <Send className="w-3.5 h-3.5 text-sky-500" /> Telegram al Vendedor
+                                            </Label>
+                                            <span className="text-[10px] text-muted-foreground block">
+                                                Enviar al Telegram Chat ID del vendedor (/admin/users).
+                                            </span>
+                                        </div>
+                                        <Switch
+                                            checked={settings.notif_waiting_telegram_salesperson === '1' || settings.notif_waiting_telegram_salesperson === 'true'}
+                                            onCheckedChange={(c) => setSettings(prev => ({ ...prev, notif_waiting_telegram_salesperson: c ? '1' : '0' }))}
+                                        />
+                                    </div>
+
+                                    {/* Telegram Creador Pedido */}
+                                    <div className="flex items-center justify-between p-3 bg-background/80 rounded-lg border">
+                                        <div className="space-y-0.5 pr-2">
+                                            <Label className="text-xs font-bold flex items-center gap-1.5">
+                                                <Send className="w-3.5 h-3.5 text-sky-500" /> Telegram a Creador / Facturador
+                                            </Label>
+                                            <span className="text-[10px] text-muted-foreground block">
+                                                Enviar al Telegram Chat ID de quien creó el pedido.
+                                            </span>
+                                        </div>
+                                        <Switch
+                                            checked={settings.notif_waiting_telegram_creator === '1' || settings.notif_waiting_telegram_creator === 'true'}
+                                            onCheckedChange={(c) => setSettings(prev => ({ ...prev, notif_waiting_telegram_creator: c ? '1' : '0' }))}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            <Separator />
+
+                            <div className="space-y-4">
+                                <div>
+                                    <h3 className="text-lg font-bold text-emerald-900 dark:text-emerald-300">Plantilla de Boleta Térmica e Impresión</h3>
+                                    <p className="text-xs text-muted-foreground">
+                                        Configure el formato, métodos y diseño del recibo físico (impresión ESC/POS 58mm o 80mm).
+                                    </p>
+                                </div>
+
+                                <div className="p-4 bg-muted/20 rounded-xl border border-muted/40 space-y-2">
+                                    <Label className="text-xs font-bold flex items-center gap-1.5 text-muted-foreground uppercase tracking-wider">
+                                        Método de Impresión Térmica Visible para Choferes
+                                    </Label>
+                                    <select
+                                        value={settings.driver_boleta_print_method || 'all'}
+                                        onChange={(e) => setSettings(prev => ({ ...prev, driver_boleta_print_method: e.target.value }))}
+                                        className="w-full h-10 px-3 rounded-lg border border-input bg-background font-bold text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                                    >
+                                        <option value="all">🌟 Mostrar Todos los Métodos (Opción 1 + Opción 2 + Chrome + RawBT)</option>
+                                        <option value="option1">⚡ Opción 1: Clic Print Connector (App Nativa WebView + JS Bridge)</option>
+                                        <option value="option2">🚀 Opción 2: Clic Print Intent (Navegador Chrome + clicprint://)</option>
+                                        <option value="rawbt">📱 RawBT (App de Pago externa)</option>
+                                    </select>
+                                    <span className="text-[10px] text-muted-foreground block font-medium">
+                                        Permite definir centralizadamente si los choferes ven todas las opciones o únicamente el método preferido.
+                                    </span>
+                                </div>
+                                
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                    <div className="flex flex-row items-center justify-between p-4 bg-emerald-950/10 rounded-xl border border-emerald-500/20 gap-3">
+                                        <div className="space-y-1">
+                                            <Label className="text-sm font-bold">Imprimir Datos del Cliente</Label>
+                                            <span className="text-xs text-muted-foreground block">
+                                                Incluir Nombre y Código del Cliente en la boleta.
+                                            </span>
+                                        </div>
+                                        <Switch
+                                            checked={settings.apk_print_show_client !== 'false'}
+                                            onCheckedChange={(val) => setSettings(prev => ({ ...prev, apk_print_show_client: val ? 'true' : 'false' }))}
+                                        />
+                                    </div>
+                                    <div className="flex flex-row items-center justify-between p-4 bg-emerald-950/10 rounded-xl border border-emerald-500/20 gap-3">
+                                        <div className="space-y-1">
+                                            <Label className="text-sm font-bold">Imprimir Detalle de Artículos</Label>
+                                            <span className="text-xs text-muted-foreground block">
+                                                Tabla con Código, Pedido, Entregado y Faltante.
+                                            </span>
+                                        </div>
+                                        <Switch
+                                            checked={settings.apk_print_show_lines !== 'false'}
+                                            onCheckedChange={(val) => setSettings(prev => ({ ...prev, apk_print_show_lines: val ? 'true' : 'false' }))}
+                                        />
+                                    </div>
+                                    <div className="flex flex-row items-center justify-between p-4 bg-emerald-950/10 rounded-xl border border-emerald-500/20 gap-3">
+                                        <div className="space-y-1">
+                                            <Label className="text-sm font-bold">Texto en Negrita (Bold)</Label>
+                                            <span className="text-xs text-muted-foreground block">
+                                                {settings.apk_print_bold === 'true' ? 'Fuerza texto oscurecido / grueso.' : 'Texto normal claro y legible (Recomendado).'}
+                                            </span>
+                                        </div>
+                                        <Switch
+                                            checked={settings.apk_print_bold === 'true'}
+                                            onCheckedChange={(val) => setSettings(prev => ({ ...prev, apk_print_bold: val ? 'true' : 'false' }))}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2 p-4 bg-emerald-950/10 rounded-xl border border-emerald-500/20">
+                                    <Label className="text-sm font-bold">Mensaje Institucional (Pie de Boleta)</Label>
+                                    <Textarea
+                                        value={settings.apk_print_footer_text ?? ''}
+                                        onChange={(e) => setSettings(prev => ({ ...prev, apk_print_footer_text: e.target.value }))}
+                                        placeholder="Ej: ¡Gracias por preferirnos! No se aceptan devoluciones..."
+                                        className="h-20 bg-background resize-none text-sm font-mono"
+                                    />
+                                </div>
+                            </div>
+
+                            <Separator />
+
+                            {/* Break Timers & Anti-Fraud Section */}
+                            <div className="space-y-4">
+                                <div>
+                                    <h3 className="text-lg font-bold text-blue-600 dark:text-blue-400 flex items-center gap-2">
+                                        <span>☕</span> Control de Pausas, Marcas de Tiempo y Motor Anti-Fraude
+                                    </h3>
+                                    <p className="text-xs text-muted-foreground">
+                                        Parametrice las duraciones de almuerzo y meriendas, habilite el temporizador en la APK y configure el detector anti-fraude por GPS.
+                                    </p>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    {/* Enable Break Timer Toggle */}
+                                    <div className="flex flex-row items-center justify-between p-4 bg-blue-950/10 rounded-xl border border-blue-500/20 gap-3">
+                                        <div className="space-y-1">
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                                <Label className="text-sm font-bold flex items-center gap-1.5">
+                                                    Habilitar Módulo de Pausas en APK
+                                                </Label>
+                                                <PlatformBadge type="apk" />
+                                            </div>
+                                            <span className="text-xs text-muted-foreground font-medium block">
+                                                Mostrar la opción &quot;Pausas / Marcas de Tiempo&quot; en el menú lateral del celular.
+                                            </span>
+                                        </div>
+                                        <Switch
+                                            checked={settings.apk_enable_break_timer !== 'false'}
+                                            onCheckedChange={(val) => setSettings(prev => ({ ...prev, apk_enable_break_timer: val ? 'true' : 'false' }))}
+                                        />
+                                    </div>
+
+                                    {/* GPS Anti-Fraud Engine Toggle */}
+                                    <div className="flex flex-row items-center justify-between p-4 bg-blue-950/10 rounded-xl border border-blue-500/20 gap-3">
+                                        <div className="space-y-1">
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                                <Label className="text-sm font-bold flex items-center gap-1.5">
+                                                    Motor Anti-Fraude con GPS Camión
+                                                </Label>
+                                                <PlatformBadge type="web" />
+                                            </div>
+                                            <span className="text-xs text-muted-foreground font-medium block">
+                                                Cruzar telemetría (motor encendido/velocidad) para detectar falsas pausas y paradas no declaradas.
+                                            </span>
+                                        </div>
+                                        <Switch
+                                            checked={settings.ops_enable_gps_tamper_detection !== 'false'}
+                                            onCheckedChange={(val) => setSettings(prev => ({ ...prev, ops_enable_gps_tamper_detection: val ? 'true' : 'false' }))}
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-blue-950/10 rounded-xl border border-blue-500/20">
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs font-bold">🥐 Merienda Mañana (Min)</Label>
+                                        <Input
+                                            type="number"
+                                            value={settings.break_time_breakfast_min ?? '15'}
+                                            onChange={(e) => setSettings(prev => ({ ...prev, break_time_breakfast_min: e.target.value }))}
+                                            className="h-9 font-mono text-sm bg-background"
+                                        />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs font-bold">🍱 Almuerzo (Min)</Label>
+                                        <Input
+                                            type="number"
+                                            value={settings.break_time_lunch_min ?? '45'}
+                                            onChange={(e) => setSettings(prev => ({ ...prev, break_time_lunch_min: e.target.value }))}
+                                            className="h-9 font-mono text-sm bg-background"
+                                        />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <Label className="text-xs font-bold">☕ Merienda Tarde (Min)</Label>
+                                        <Input
+                                            type="number"
+                                            value={settings.break_time_snack_min ?? '15'}
+                                            onChange={(e) => setSettings(prev => ({ ...prev, break_time_snack_min: e.target.value }))}
+                                            className="h-9 font-mono text-sm bg-background"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                        </CardContent>
+                        
+                        <CardFooter className="bg-muted/10 p-4 border-t border-muted/30 flex justify-end">
+                            <Button 
+                                onClick={handleSaveSettings} 
+                                disabled={savingSettings}
+                                className="rounded-xl gap-2 font-bold shadow-md shadow-emerald-100 dark:shadow-none bg-emerald-600 hover:bg-emerald-700 text-white"
+                            >
+                                <Save className="w-4 h-4" />
+                                {savingSettings ? 'Guardando...' : 'Guardar Parámetros de APK'}
+                            </Button>
+                        </CardFooter>
+                    </Card>
+                </TabsContent>
+            </Tabs>
+
+            {/* AlertDialog para confirmación de eliminación de ruta */}
+            <AlertDialog open={!!routeToDelete} onOpenChange={(open) => { if (!open) setRouteToDelete(null); }}>
+                <AlertDialogContent className="rounded-2xl">
+                    <AlertDialogHeader>
+                        <AlertDialogTitle className="text-destructive flex items-center gap-2">
+                            <AlertTriangle className="w-5 h-5 text-destructive" />
+                            ¿Eliminar Ruta de Entrega?
+                        </AlertDialogTitle>
+                        <AlertDialogDescription className="text-sm">
+                            ¿Está seguro de eliminar la ruta <strong className="text-foreground">{routeToDelete?.name}</strong>? 
+                            Esta acción no se puede deshacer y desvinculará las asignaciones asociadas.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel className="rounded-xl">Cancelar</AlertDialogCancel>
+                        <AlertDialogAction 
+                            onClick={executeDeleteRoute}
+                            className="bg-destructive hover:bg-destructive/90 text-destructive-foreground font-bold rounded-xl"
+                        >
+                            Sí, Eliminar Ruta
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
+
+            {/* AlertDialog para confirmación de restauración de catálogo geográfico */}
+            <AlertDialog open={showRestoreGeoDialog} onOpenChange={setShowRestoreGeoDialog}>
+                <AlertDialogContent className="rounded-2xl">
+                    <AlertDialogHeader>
+                        <AlertDialogTitle className="flex items-center gap-2">
+                            <RefreshCw className="w-5 h-5 text-amber-500" />
+                            ¿Restaurar Catálogo Geográfico por Defecto?
+                        </AlertDialogTitle>
+                        <AlertDialogDescription className="text-sm">
+                            ¿Está seguro de restaurar el catálogo geográfico por defecto de Costa Rica? 
+                            Esta acción sobrescribirá cualquier personalización manual que haya realizado en provincias, cantones y distritos.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel className="rounded-xl">Cancelar</AlertDialogCancel>
+                        <AlertDialogAction 
+                            onClick={executeRestoreGeography}
+                            className="bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl"
+                        >
+                            Sí, Restaurar Catálogo
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </div>
     );
 }

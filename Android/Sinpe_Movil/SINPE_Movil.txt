@@ -1,0 +1,142 @@
+# 📱 Plan de Arquitectura y Especificación Técnica: Sistema de Conciliación Automática SINPE Móvil
+
+## 1. Visión General del Proyecto
+El objetivo del sistema es erradicar el fraude por comprobantes falsos de SINPE Móvil en comercios y acelerar el proceso de cobro en cajas y plataformas de entregas en Costa Rica. 
+
+El sistema consta de:
+1. **APK Android (SINPE SMS Gateway Listener)**: Aplicación ligera que corre en el smartphone receptor de las transferencias SINPE Móvil de la empresa. Escucha de forma pasiva los SMS entrantes de los bancos, extrae los datos clave y los transmite vía API cifrada al servidor web en milisegundos.
+2. **Backend API (Next.js)**: Endpoint receptor que autentica el origen, parsea o valida la transacción, normaliza los datos y emite eventos en tiempo real. 
+   - **Infraestructura de Red Compartida (Idéntica a Clic Driver)**:
+     - **Servidor Primario LAN/WAN**: `http://192.168.1.14:9001` (o dominio de producción).
+     - **Servidor Fallback**: Mismo mecanismo de conmutación automática en 5s.
+     - **APIs de IP Pública**: `https://api.ipify.org` (Primaria) y `https://icanhazip.com` (Fallback).
+     - **Canales de Alerta de Emergencia TI**: Mismo chat/grupo de Telegram e integración de SMS directos del Departamento de TI.
+3. **Dashboard Web de Caja y Conciliación (Punto de Venta)**: Pantalla interactiva en tiempo real donde los cajeros y dependientes ven entrar los pagos acreditados, filtran por referencia/monto/teléfono y vinculan el pago a la orden de venta o factura.
+
+---
+
+## 2. Arquitectura del Sistema
+
+```
+┌─────────────────────────────────────────────────────────┐
+│              BANCOS COSTA RICA (SMS)                    │
+│   (BAC, BNCR, BCR, Davivienda, Scotiabank, etc.)        │
+└───────────────────────────┬─────────────────────────────┘
+                            │ (Envío SMS Nativo)
+                            ▼
+┌─────────────────────────────────────────────────────────┐
+│        APK ANDROID: SINPE SMS GATEWAY LISTENER          │
+│ - BroadcastReceiver (SMS_RECEIVED_ACTION)               │
+│ - Parser de expresiones regulares (RegEx Multibanco)    │
+│ - SQLite Local Cache (Resiliencia Offline)              │
+│ - Sync Manager (HTTPS POST con API Key & HMAC)          │
+└───────────────────────────┬─────────────────────────────┘
+                            │ (HTTPS REST API / JSON)
+                            ▼
+┌─────────────────────────────────────────────────────────┐
+│             BACKEND WEB (NEXT.JS + PRISMA/SQL)           │
+│ - API Route: /api/sinpe/webhook                         │
+│ - Validador de firma & duplicados (Anti-Replay)        │
+│ - WebSocket / Server-Sent Events (SSE) Dispatcher       │
+└───────────────────────────┬─────────────────────────────┘
+                            │ (WebSockets / SSE)
+                            ▼
+┌─────────────────────────────────────────────────────────┐
+│           DASHBOARD WEB (PUNTO DE VENTA / CAJA)         │
+│ - Panel de Validación de Pagos en Vivo                  │
+│ - Buscador por Referencia, Teléfono o Monto             │
+│ - Vinculación con Orden de Venta / Factura              │
+│ - Métricas de Ingresos por Cierre de Caja               │
+└───────────────────────────┬─────────────────────────────┘
+```
+
+---
+
+## 3. Especificación Técnica por Componente
+
+### 3.1. APK Android Listener (Flutter / Kotlin Native)
+- **Permisos requeridos**:
+  - `android.permission.RECEIVE_SMS`
+  - `android.permission.READ_SMS`
+  - `android.permission.INTERNET`
+  - `android.permission.RECEIVE_BOOT_COMPLETED` (Autostart al encender el teléfono)
+  - `android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` (Para evitar que Android destruya el proceso)
+
+- **Patrones de Parseo RegEx por Banco (Costa Rica)**:
+  - **BAC Credomatic**:
+    - *Patrón SMS*: `Sinpe Movil: Ha recibido (₡|\$|\d).*? de (.*?). Ref: (\d+)`
+    - *Remitentes*: `1222`, `BAC`, `2295`
+  - **Banco Nacional (BNCR)**:
+    - *Patrón SMS*: `BN SINPE Móvil acreditó (₡|\$|\d).*? de (.*?). Transacción (\d+)`
+    - *Remitentes*: `2627`, `BNCR`
+  - **Banco de Costa Rica (BCR)**:
+    - *Patrón SMS*: `BCR SINPE Movil Acredito (₡|\$|\d).*? De (.*?). Nro Ref: (\d+)`
+    - *Remitentes*: `227`, `BCR`
+  - **Davivienda / Promerica / Scotiabank**: RegEx extensible por configuración remota.
+
+- **Mecanismo de Resiliencia Offline**:
+  - Si el celular pierde cobertura Wi-Fi/4G, el SMS se guarda en **SQLite local** con estado `PENDING_SYNC`.
+  - Un `WorkManager` reintenta la sincronización con exponencial backoff apenas recupera red.
+
+---
+
+### 3.2. Backend & API Web (Next.js)
+
+- **Modelo de Datos SQL (Prisma / PostgreSQL / SQLite)**:
+  ```prisma
+  model SinpeTransaction {
+    id              String   @id @default(uuid())
+    deviceHardwareId String  // ID del teléfono que recibió el SMS
+    bancoEmisor     String   // BAC, BNCR, BCR, etc.
+    monto           Float
+    moneda          String   @default("CRC") // CRC o USD
+    referencia      String   @unique // Número de comprobante/referencia del banco
+    nombrePagador   String
+    telefonoEmisor  String?
+    textoSmsOriginal String
+    fechaBanco      DateTime
+    fechaRecepcion  DateTime @default(now())
+    estado          String   @default("PENDIENTE") // PENDIENTE, CONCILIADO, ANULADO
+    ordenVentaId    String?  // Relación opcional con factura o pedido
+    cajeroId        String?  // Usuario que confirmó la recepción
+    createdAt       DateTime @default(now())
+  }
+  ```
+
+- **Seguridad en la API (`/api/sinpe/webhook`)**:
+  - Autenticación mediante Header `X-SINPE-API-KEY`.
+  - Validación anti-duplicados por el número de comprobantes del banco (`referencia` única).
+
+---
+
+### 3.3. Dashboard Web de Caja (Punto de Venta / POS)
+
+- **Características de UI/UX**:
+  - **Banner de Alertas Sonoras y Visuales**: Al recibir un pago, la pantalla emite un sonido distintivo y parpadea verde con los datos del pago (Monto y Referencia).
+  - **Filtro Express**: Campo de texto rápido para que el cajero digite 4 dígitos y filtre al instante.
+  - **Botón de Conciliación Rápida**: `[Asociar a Orden #1024]`.
+  - **Exportación para Contabilidad**: Descarga en Excel/PDF de las transacciones conciliadas del día.
+
+---
+
+## 4. Fases de Implementación Sugeridas
+
+| Fase | Título | Entregables |
+| :--- | :--- | :--- |
+| **Fase 1** | **Estructura Base & Backend API** | Esquema de Base de Datos, API Endpoint `/api/sinpe/webhook`, módulo de autenticación con API Key. |
+| **Fase 2** | **Desarrollo del APK SMS Listener** | `BroadcastReceiver` nativo, motor RegEx multibanco (BAC, BN, BCR), guardado local en SQLite y envío HTTPS. |
+| **Fase 3** | **Dashboard Web de Caja en Tiempo Real** | Interfaz Next.js para cajeros, integración de Server-Sent Events (SSE) para notificaciones instantáneas sin recargar la página. |
+| **Fase 4** | **Pruebas de Campo & Seguridad** | Pruebas de estrés offline, simulación de SMS de distintos bancos, validación de anti-duplicados y guía de configuración. |
+
+---
+
+## 5. Medidas Anti-Fraude & Consideraciones de Seguridad
+1. **Verificación de Origen Estricta**: El backend rechaza referencias duplicadas para evitar ataques de replay.
+2. **Firmado de Mensajes (HMAC-SHA256)**: Cada petición enviada por el APK incluye una firma generada con el timestamp y un secreto compartido para evitar manipulaciones en tránsito.
+3. **Cero Dependencia de Capturas del Cliente**: El proceso de cobro se valida exclusivamente con la información ingresada en el dashboard de la tienda.
+4. **Filtrado Estricto de Shortcodes de Origen (Anti-Spoofing & Lista Administrable)**: El APK inspecciona el objeto nativo `SmsMessage.getOriginatingAddress()`. Solo se procesan los SMS provenientes de una lista de **Remitentes Bancarios Seguros** (ej: `1222`, `2627`, `227`, `BAC`, `BNCR`, `BCR`, etc.). Esta lista se almacena localmente en la app y **puede ser editada/personalizada libremente por el usuario** desde la pantalla de Ajustes del APK o sincronizada dinámicamente desde el backend web para agregar nuevos números oficiales de bancos según sea necesario. Cualquier SMS cuyo origen no esté en la lista permitida es descartado automáticamente.
+5. **Suite de Diagnóstico, Visor de Logs y Protección PIN**: Heredados de Clic Driver para garantizar mantenibilidad técnica:
+   - **PIN Administrador** de protección para ingresar a Ajustes.
+   - **Auto-Diagnóstico de Salud Nativa** (Internet, Latencia HTTP a Servidor Primario/Fallback, Permiso `RECEIVE_SMS`, Proceso de Fondo y prueba de Telegram).
+   - **Consola Visual de Logs de Auditoría** en vivo (`AppLogger`).
+   - **Reset de Emergencia de Base de Datos Local** en SQLite.

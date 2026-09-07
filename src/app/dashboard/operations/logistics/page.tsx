@@ -3,13 +3,25 @@
 import React from 'react';
 import { usePageTitle } from '@/modules/core/hooks/usePageTitle';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
-import { Truck, Package, ArrowRight, ClipboardList, ShieldAlert, Users, RefreshCw, FileText } from 'lucide-react';
+import { Truck, Package, ArrowRight, ClipboardList, ShieldAlert, Users, RefreshCw, FileText, Navigation, BarChart3, ShieldCheck } from 'lucide-react';
 import Link from 'next/link';
 import { useAuthorization } from '@/modules/core/hooks/useAuthorization';
 
 export default function LogisticsParentPage() {
     const { setTitle } = usePageTitle();
-    const { hasPermission, isLoading } = useAuthorization(['deliveries:read', 'deliveries:collect', 'deliveries:customers', 'deliveries:route-sheets']);
+    const { hasPermission, isLoading } = useAuthorization([
+        'deliveries:read', 
+        'deliveries:collect', 
+        'deliveries:customers', 
+        'deliveries:route-sheets',
+        'deliveries:gps:read',
+        'deliveries:analytics:read',
+        'deliveries:analytics:read:all',
+        'deliveries:audit:read',
+        'operaciones_chofer_web',
+        'deliveries:write',
+        'deliveries:admin'
+    ]);
 
     React.useEffect(() => {
         setTitle("Logística y Distribución");
@@ -31,11 +43,15 @@ export default function LogisticsParentPage() {
     const canReadDeliveries = hasPermission('deliveries:read') || hasPermission('deliveries:write') || hasPermission('deliveries:admin');
     const canCollect = hasPermission('deliveries:collect') || hasPermission('deliveries:write') || hasPermission('deliveries:admin');
     const canManageCustomers = hasPermission('deliveries:customers') || hasPermission('deliveries:admin');
-    const canReadRouteSheets = hasPermission('deliveries:route-sheets') || hasPermission('deliveries:admin') || hasPermission('deliveries:read') || hasPermission('deliveries:write');
+    const canReadRouteSheets = hasPermission('deliveries:route-sheets') || hasPermission('deliveries:admin');
+    const canReadGps = hasPermission('deliveries:gps:read') || hasPermission('deliveries:admin');
+    const canReadAnalytics = hasPermission('deliveries:analytics:read') || hasPermission('deliveries:analytics:read:all') || hasPermission('deliveries:admin');
+    const canReadAudit = hasPermission('deliveries:audit:read') || hasPermission('deliveries:admin');
+    const canDriverWeb = hasPermission('operaciones_chofer_web') || hasPermission('deliveries:write') || hasPermission('deliveries:admin');
 
-    if (!canReadDeliveries && !canCollect && !canManageCustomers && !canReadRouteSheets) {
+    if (!canReadDeliveries && !canCollect && !canManageCustomers && !canReadRouteSheets && !canReadGps && !canReadAnalytics && !canReadAudit && !canDriverWeb) {
         return (
-            <main className="flex-1 p-4 md:p-6 lg:p-8 animate-in fade-in duration-500">
+            <main className="flex-1 p-4 md:p-6 lg:p-8 animate-in fade-in duration-150">
                 <div className="mx-auto max-w-md bg-card border border-rose-200 rounded-2xl p-6 text-center space-y-4 shadow-lg">
                     <div className="p-3 bg-rose-100 text-rose-600 rounded-full w-fit mx-auto">
                         <ShieldAlert className="w-8 h-8" />
@@ -57,7 +73,7 @@ export default function LogisticsParentPage() {
     }
 
     return (
-        <main className="flex-1 p-4 md:p-6 lg:p-8 animate-in fade-in duration-500">
+        <main className="flex-1 p-4 md:p-6 lg:p-8 animate-in fade-in duration-150">
             <div className="mx-auto max-w-5xl space-y-8">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-muted pb-6">
                     <div className="flex items-center gap-4">
@@ -72,6 +88,51 @@ export default function LogisticsParentPage() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {/* Card 0: Portal Entregas Móvil */}
+                    {canDriverWeb ? (
+                        <Link href="/dashboard/operations/logistics/driver" prefetch={false}>
+                            <Card className="group hover:shadow-xl transition-all border border-indigo-200 hover:border-indigo-400 bg-gradient-to-br from-indigo-50/50 via-white to-white shadow-sm overflow-hidden relative h-full flex flex-col justify-between">
+                                <div className="absolute top-0 right-0 w-32 h-32 -mr-8 -mt-8 rounded-full bg-indigo-600 opacity-10 group-hover:scale-110 transition-transform" />
+                                <CardHeader className="pb-2 flex flex-row items-center gap-4">
+                                    <div className="p-3 bg-indigo-600 text-white rounded-xl shadow-md">
+                                        <Truck className="w-6 h-6" />
+                                    </div>
+                                    <div>
+                                        <CardTitle className="text-xl text-indigo-950 font-extrabold flex items-center gap-2">
+                                            Portal Entregas <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold">Móvil / VPN</span>
+                                        </CardTitle>
+                                        <CardDescription>Rutas, Entregas y Firma Táctil</CardDescription>
+                                    </div>
+                                </CardHeader>
+                                <CardContent className="flex-1 flex flex-col justify-between pt-2">
+                                    <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+                                        Portal optimizado para choferes en calle. Gestión de salidas, auto-carga de facturas, firma digital del cliente, foto evidencia y averías.
+                                    </p>
+                                    <div className="flex items-center gap-1 text-sm font-bold text-indigo-600">
+                                        Abrir Portal Entregas Móvil <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        </Link>
+                    ) : (
+                        <Card className="opacity-60 border border-dashed border-muted bg-muted/20 h-full flex flex-col justify-between">
+                            <CardHeader className="pb-2 flex flex-row items-center gap-4">
+                                <div className="p-3 bg-muted text-muted-foreground rounded-xl">
+                                    <Truck className="w-6 h-6" />
+                                </div>
+                                <div>
+                                    <CardTitle className="text-xl text-muted-foreground">Portal Entregas Móvil</CardTitle>
+                                    <CardDescription>Acceso no autorizado</CardDescription>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="pt-2">
+                                <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+                                    Requiere permiso `operaciones_chofer_web` o `deliveries:write` para operar la ruta móvil de choferes.
+                                </p>
+                            </CardContent>
+                        </Card>
+                    )}
+
                     {/* Card 1: Deliveries & Dispatch */}
                     {canReadDeliveries ? (
                         <Link href="/dashboard/operations/logistics/deliveries" prefetch={false}>
@@ -238,6 +299,135 @@ export default function LogisticsParentPage() {
                             <CardContent className="pt-2">
                                 <p className="text-muted-foreground text-sm leading-relaxed mb-6">
                                     Requiere permiso `deliveries:route-sheets` para ver el historial y archivos de hojas de ruta de distribución.
+                                </p>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {/* Card 5: Monitor de Estados GPS */}
+                    {canReadGps ? (
+                        <Link href="/dashboard/operations/logistics/gps-monitor" prefetch={false}>
+                            <Card className="group hover:shadow-xl transition-all border border-muted hover:border-indigo-200 shadow-sm overflow-hidden relative h-full flex flex-col justify-between">
+                                <div className="absolute top-0 right-0 w-32 h-32 -mr-8 -mt-8 rounded-full bg-indigo-600 opacity-10 group-hover:scale-110 transition-transform" />
+                                <CardHeader className="pb-2 flex flex-row items-center gap-4">
+                                    <div className="p-3 bg-indigo-100 text-indigo-600 rounded-xl">
+                                        <Navigation className="w-6 h-6" />
+                                    </div>
+                                    <div>
+                                        <CardTitle className="text-xl">Monitor de Estados GPS 📡</CardTitle>
+                                        <CardDescription>Flota Vehicular Navixy</CardDescription>
+                                    </div>
+                                </CardHeader>
+                                <CardContent className="flex-1 flex flex-col justify-between pt-2">
+                                    <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+                                        Monitoreo integral de la flota vehicular en tiempo real mediante telemetría GPS, geocodificación, parqueo y Modo Tour animado.
+                                    </p>
+                                    <div className="flex items-center gap-1 text-sm font-bold text-indigo-600">
+                                        Ver Monitor GPS <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        </Link>
+                    ) : (
+                        <Card className="opacity-60 border border-dashed border-muted bg-muted/20 h-full flex flex-col justify-between">
+                            <CardHeader className="pb-2 flex flex-row items-center gap-4">
+                                <div className="p-3 bg-muted text-muted-foreground rounded-xl">
+                                    <Navigation className="w-6 h-6" />
+                                </div>
+                                <div>
+                                    <CardTitle className="text-xl text-muted-foreground">Monitor de Estados GPS</CardTitle>
+                                    <CardDescription>Acceso no autorizado</CardDescription>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="pt-2">
+                                <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+                                    Requiere permiso `deliveries:gps:read` para acceder a la telemetría GPS en tiempo real de la flota.
+                                </p>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {/* Card 6: Analítica Logística & KPIs Gerenciales */}
+                    {canReadAnalytics ? (
+                        <Link href="/dashboard/operations/logistics/analytics" prefetch={false}>
+                            <Card className="group hover:shadow-xl transition-all border border-muted hover:border-emerald-200 shadow-sm overflow-hidden relative h-full flex flex-col justify-between">
+                                <div className="absolute top-0 right-0 w-32 h-32 -mr-8 -mt-8 rounded-full bg-emerald-600 opacity-10 group-hover:scale-110 transition-transform" />
+                                <CardHeader className="pb-2 flex flex-row items-center gap-4">
+                                    <div className="p-3 bg-emerald-100 text-emerald-600 rounded-xl">
+                                        <BarChart3 className="w-6 h-6" />
+                                    </div>
+                                    <div>
+                                        <CardTitle className="text-xl">Analítica Logística & KPIs 📊</CardTitle>
+                                        <CardDescription>OTIF y Tiempos en Cliente</CardDescription>
+                                    </div>
+                                </CardHeader>
+                                <CardContent className="flex-1 flex flex-col justify-between pt-2">
+                                    <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+                                        Indicadores de rendimiento OTIF, auditoría de permanencia y descarga en clientes, y análisis de cuellos de botella.
+                                    </p>
+                                    <div className="flex items-center gap-1 text-sm font-bold text-emerald-600">
+                                        Ver Analítica & KPIs <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        </Link>
+                    ) : (
+                        <Card className="opacity-60 border border-dashed border-muted bg-muted/20 h-full flex flex-col justify-between">
+                            <CardHeader className="pb-2 flex flex-row items-center gap-4">
+                                <div className="p-3 bg-muted text-muted-foreground rounded-xl">
+                                    <BarChart3 className="w-6 h-6" />
+                                </div>
+                                <div>
+                                    <CardTitle className="text-xl text-muted-foreground">Analítica Logística & KPIs</CardTitle>
+                                    <CardDescription>Acceso no autorizado</CardDescription>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="pt-2">
+                                <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+                                    Requiere permiso `deliveries:analytics:read` para acceder a la analítica gerencial de logística.
+                                </p>
+                            </CardContent>
+                        </Card>
+                    )}
+
+                    {/* Card 7: Centro de Auditoría, Evidencias 360° y Exportación a Excel */}
+                    {canReadAudit ? (
+                        <Link href="/dashboard/operations/logistics/audit" prefetch={false}>
+                            <Card className="group hover:shadow-xl transition-all border border-muted hover:border-indigo-200 shadow-sm overflow-hidden relative h-full flex flex-col justify-between">
+                                <div className="absolute top-0 right-0 w-32 h-32 -mr-8 -mt-8 rounded-full bg-indigo-600 opacity-10 group-hover:scale-110 transition-transform" />
+                                <CardHeader className="pb-2 flex flex-row items-center gap-4">
+                                    <div className="p-3 bg-indigo-100 text-indigo-600 rounded-xl">
+                                        <ShieldCheck className="w-6 h-6" />
+                                    </div>
+                                    <div>
+                                        <CardTitle className="text-xl">Auditoría & Evidencias 🛡️</CardTitle>
+                                        <CardDescription>Búsqueda 360° y Exportar Excel</CardDescription>
+                                    </div>
+                                </CardHeader>
+                                <CardContent className="flex-1 flex flex-col justify-between pt-2">
+                                    <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+                                        Búsqueda multicriterio avanzada por factura/cliente/chofer, expediente 360° de fotos/GPS y exportador completo a Excel.
+                                    </p>
+                                    <div className="flex items-center gap-1 text-sm font-bold text-indigo-600">
+                                        Abrir Centro de Auditoría <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        </Link>
+                    ) : (
+                        <Card className="opacity-60 border border-dashed border-muted bg-muted/20 h-full flex flex-col justify-between">
+                            <CardHeader className="pb-2 flex flex-row items-center gap-4">
+                                <div className="p-3 bg-muted text-muted-foreground rounded-xl">
+                                    <ShieldCheck className="w-6 h-6" />
+                                </div>
+                                <div>
+                                    <CardTitle className="text-xl text-muted-foreground">Auditoría & Evidencias</CardTitle>
+                                    <CardDescription>Acceso no autorizado</CardDescription>
+                                </div>
+                            </CardHeader>
+                            <CardContent className="pt-2">
+                                <p className="text-muted-foreground text-sm leading-relaxed mb-6">
+                                    Requiere permiso `deliveries:audit:read` para acceder a la auditoría de entregas y expedientes.
                                 </p>
                             </CardContent>
                         </Card>

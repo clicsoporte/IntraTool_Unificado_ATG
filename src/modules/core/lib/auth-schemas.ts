@@ -39,6 +39,7 @@ export const UserSchema = z.object({
   forcePasswordChange: z.union([z.boolean(), z.number()]).optional(),
   employeeId: z.string().optional().nullable(),
   salespersonId: z.string().optional().nullable(),
+  telegramChatId: z.string().optional().nullable(),
   is_active: preprocessIsActive,
 });
 
@@ -56,6 +57,7 @@ export const NewUserSchema = z.object({
     forcePasswordChange: z.boolean(),
     employeeId: z.string().optional().nullable(),
     salespersonId: z.string().optional().nullable(),
+    telegramChatId: z.string().optional().nullable(),
     is_active: preprocessIsActive,
 });
 

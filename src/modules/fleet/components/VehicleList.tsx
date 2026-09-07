@@ -52,10 +52,17 @@ export default function VehicleList({ vehicles, deletedVehicles = [] }: { vehicl
         }
     }
 
+    const checkVehicleOilAlert = (v: any) => {
+        const cur = v.currentMileage ?? 0;
+        const last = v.lastOilChangeMileage ?? 0;
+        const interval = v.oilChangeInterval && v.oilChangeInterval > 0 ? v.oilChangeInterval : 5000;
+        return cur >= (last + interval);
+    };
+
     // Summary stats calculated reactively from vehicles
     const totalVehicles = vehicles.length;
     const inTaller = vehicles.filter((v: any) => v.status !== 'active').length;
-    const needsOilChange = vehicles.filter((v: any) => v.currentMileage >= v.lastOilChangeMileage + v.oilChangeInterval).length;
+    const needsOilChange = vehicles.filter((v: any) => checkVehicleOilAlert(v)).length;
     
     const expiringLegal = vehicles.filter((v: any) => {
         const rtvDate = v.rtvExpiration ? new Date(v.rtvExpiration) : null;
@@ -75,7 +82,7 @@ export default function VehicleList({ vehicles, deletedVehicles = [] }: { vehicl
             return v.status !== 'active';
         }
         if (filter === 'mechanical') {
-            return v.currentMileage >= v.lastOilChangeMileage + v.oilChangeInterval;
+            return checkVehicleOilAlert(v);
         }
         if (filter === 'legal') {
             const rtvDate = v.rtvExpiration ? new Date(v.rtvExpiration) : null;

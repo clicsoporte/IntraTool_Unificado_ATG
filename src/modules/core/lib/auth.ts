@@ -10,6 +10,7 @@ import { getDb, getAllRoles, getCompanySettings, getAllCustomers, getAllProducts
 import { sendEmail, getEmailSettings as getEmailSettingsFromDb } from './email-service';
 import type { User, ExchangeRateApiResponse, EmailSettings, Role } from '@/modules/core/types';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { logInfo, logWarn, logError } from './logger';
 import { headers, cookies } from 'next/headers';
 import { getExchangeRate, getEmailSettings } from './api-actions';
@@ -21,6 +22,43 @@ import { checkPermissionInTree } from './permissions';
 const SALT_ROUNDS = 10;
 const SESSION_COOKIE_NAME = 'clic-tools-session';
 const SESSION_DURATION = 12 * 60 * 60 * 1000; // 12 hours in milliseconds
+
+function getSessionCookieSecret(): string {
+    return process.env.NEXTAUTH_SECRET || process.env.FLEET_JWT_SECRET || 'clic-tools-core-auth-secret-fallback-2026';
+}
+
+function signSessionCookie(userId: number): string {
+    const secret = getSessionCookieSecret();
+    const signature = crypto.createHmac('sha256', secret).update(String(userId)).digest('hex');
+    return `${userId}.${signature}`;
+}
+
+function parseSignedSessionCookie(cookieValue: string): number | null {
+    if (!cookieValue || typeof cookieValue !== 'string') return null;
+    const parts = cookieValue.split('.');
+    
+    // Soporte para firma HMAC: userId.signature
+    if (parts.length === 2) {
+        const [rawId, signature] = parts;
+        const parsedId = Number(rawId);
+        if (isNaN(parsedId) || parsedId <= 0) return null;
+        
+        const secret = getSessionCookieSecret();
+        const expectedSignature = crypto.createHmac('sha256', secret).update(String(parsedId)).digest('hex');
+        
+        if (crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+            return parsedId;
+        }
+        return null;
+    }
+
+    // Fallback de transición para sesiones previas no firmadas durante rollout
+    const fallbackId = Number(cookieValue);
+    if (!isNaN(fallbackId) && fallbackId > 0) {
+        return fallbackId;
+    }
+    return null;
+}
 
 /**
  * Checks if a user has a specific permission.
@@ -52,6 +90,8 @@ export async function hasPermission(userId: number, permission: string): Promise
 }
 
 
+import { checkRateLimit, recordRateLimitFailure, resetRateLimit } from '@/modules/core/lib/rate-limiter';
+
 /**
  * Attempts to log in a user with the given credentials.
  * It securely compares the provided password with the stored hash.
@@ -61,8 +101,23 @@ export async function hasPermission(userId: number, permission: string): Promise
  */
 export async function login(email: string, passwordProvided: string): Promise<{ user: User | null, forcePasswordChange: boolean }> {
   const headerList = headers();
+  const clientIp = headerList.get("x-forwarded-for")?.split(',')[0].trim() || headerList.get("host") || "local";
+  const cleanEmail = email.toLowerCase().trim();
+
+  const ipRateLimitKey = `web_login_ip:${clientIp}`;
+  const accountRateLimitKey = `web_login_account:${cleanEmail}`;
+
+  const ipLimitCheck = checkRateLimit(ipRateLimitKey, 10, 15 * 60 * 1000);
+  const accountLimitCheck = checkRateLimit(accountRateLimitKey, 10, 15 * 60 * 1000);
+
+  if (!ipLimitCheck.allowed || !accountLimitCheck.allowed) {
+    const retrySec = Math.max(ipLimitCheck.retryAfterSec, accountLimitCheck.retryAfterSec);
+    await logWarn(`Rate limit exceeded for web login. IP: ${clientIp}, Email: ${email}`, { retrySec });
+    throw new Error(`Demasiados intentos fallidos. Por seguridad, la cuenta o IP ha sido bloqueada temporalmente. Intente de nuevo en ${Math.ceil(retrySec / 60)} minutos.`);
+  }
+
   const clientInfo = {
-    ip: headerList.get("x-forwarded-for") || "N/A",
+    ip: clientIp,
     host: headerList.get("host") || "N/A",
   };
   const db = await getDb();
@@ -73,6 +128,8 @@ export async function login(email: string, passwordProvided: string): Promise<{ 
 
     if (user && user.password) {
       if (user.is_active === 0) {
+        recordRateLimitFailure(ipRateLimitKey);
+        recordRateLimitFailure(accountRateLimitKey);
         await logWarn(`Failed login attempt for email: ${email} - User account is manually deactivated.`, logMeta);
         return { user: null, forcePasswordChange: false };
       }
@@ -80,6 +137,8 @@ export async function login(email: string, passwordProvided: string): Promise<{ 
       if (user.employeeId) {
         const emp = db.prepare('SELECT ACTIVO FROM core_employees WHERE EMPLEADO = ?').get(user.employeeId) as { ACTIVO: string } | undefined;
         if (emp && emp.ACTIVO === 'N') {
+          recordRateLimitFailure(ipRateLimitKey);
+          recordRateLimitFailure(accountRateLimitKey);
           await logWarn(`Failed login attempt for email: ${email} - Linked employee is inactive.`, logMeta);
           return { user: null, forcePasswordChange: false };
         }
@@ -87,10 +146,12 @@ export async function login(email: string, passwordProvided: string): Promise<{ 
 
       const isMatch = await bcrypt.compare(passwordProvided, user.password);
       if (isMatch) {
+        resetRateLimit(ipRateLimitKey);
+        resetRateLimit(accountRateLimitKey);
         const { password: _, ...userWithoutPassword } = user;
         const useSecureCookie = process.env.CLIC_TOOLS_COOKIE_SECURE === 'true';
 
-        cookies().set(SESSION_COOKIE_NAME, String(user.id), {
+        cookies().set(SESSION_COOKIE_NAME, signSessionCookie(user.id), {
             httpOnly: true,
             secure: useSecureCookie,
             maxAge: SESSION_DURATION / 1000,
@@ -102,9 +163,14 @@ export async function login(email: string, passwordProvided: string): Promise<{ 
         return { user: userWithoutPassword as User, forcePasswordChange: !!user.forcePasswordChange };
       }
     }
+    recordRateLimitFailure(ipRateLimitKey);
+    recordRateLimitFailure(accountRateLimitKey);
     await logWarn(`Failed login attempt for email: ${email}`, logMeta);
     return { user: null, forcePasswordChange: false };
   } catch (error: any) {
+    if (error.message && error.message.includes('Demasiados intentos')) {
+      throw error;
+    }
     console.error("Login error:", error);
     await logError(`Login process failed for email: ${email}`, { error: error.message, ...logMeta});
     return { user: null, forcePasswordChange: false };
@@ -218,12 +284,13 @@ export async function addUser(userData: Omit<User, 'id' | 'avatar' | 'recentActi
     forcePasswordChange: validationResult.data.forcePasswordChange,
     employeeId: validationResult.data.employeeId || null,
     salespersonId: validationResult.data.salespersonId || null,
+    telegramChatId: validationResult.data.telegramChatId || null,
     is_active: validationResult.data.is_active !== undefined ? validationResult.data.is_active : 1,
   };
   
   const stmt = db.prepare(
-    `INSERT INTO core_users (id, name, email, password, phone, whatsapp, erpAlias, avatar, role, recentActivity, securityQuestion, securityAnswer, forcePasswordChange, employeeId, salespersonId, is_active) 
-     VALUES (@id, @name, @email, @password, @phone, @whatsapp, @erpAlias, @avatar, @role, @recentActivity, @securityQuestion, @securityAnswer, @forcePasswordChange, @employeeId, @salespersonId, @is_active)`
+    `INSERT INTO core_users (id, name, email, password, phone, whatsapp, erpAlias, avatar, role, recentActivity, securityQuestion, securityAnswer, forcePasswordChange, employeeId, salespersonId, telegramChatId, is_active) 
+     VALUES (@id, @name, @email, @password, @phone, @whatsapp, @erpAlias, @avatar, @role, @recentActivity, @securityQuestion, @securityAnswer, @forcePasswordChange, @employeeId, @salespersonId, @telegramChatId, @is_active)`
   );
   
   stmt.run({
@@ -236,6 +303,7 @@ export async function addUser(userData: Omit<User, 'id' | 'avatar' | 'recentActi
     forcePasswordChange: userToCreate.forcePasswordChange ? 1 : 0,
     employeeId: userToCreate.employeeId || null,
     salespersonId: userToCreate.salespersonId || null,
+    telegramChatId: userToCreate.telegramChatId || null,
     is_active: userToCreate.is_active,
   });
 
@@ -284,6 +352,7 @@ export async function updateUser(user: User): Promise<User> {
         forcePasswordChange: validatedUser.forcePasswordChange ? 1 : 0,
         employeeId: validatedUser.employeeId || null,
         salespersonId: validatedUser.salespersonId || null,
+        telegramChatId: validatedUser.telegramChatId || null,
         is_active: validatedUser.is_active !== undefined ? validatedUser.is_active : 1,
     };
     
@@ -294,7 +363,7 @@ export async function updateUser(user: User): Promise<User> {
             avatar = @avatar, role = @role, recentActivity = @recentActivity,
             securityQuestion = @securityQuestion, securityAnswer = @securityAnswer,
             forcePasswordChange = @forcePasswordChange, employeeId = @employeeId,
-            salespersonId = @salespersonId, is_active = @is_active
+            salespersonId = @salespersonId, telegramChatId = @telegramChatId, is_active = @is_active
         WHERE id = @id
     `).run(userToUpdate);
     
@@ -426,8 +495,8 @@ export async function getCurrentUser(): Promise<User | null> {
         return null;
     }
 
-    const userId = Number(sessionCookie.value);
-    if (isNaN(userId)) {
+    const userId = parseSignedSessionCookie(sessionCookie.value);
+    if (!userId || isNaN(userId)) {
         return null;
     }
 
@@ -460,7 +529,7 @@ export async function getCurrentUser(): Promise<User | null> {
         }
 
         const { password: _, ...userWithoutPassword } = user;
-        return userWithoutPassword as User;
+        return JSON.parse(JSON.stringify(userWithoutPassword)) as User;
 
     } catch (error) {
         console.error("Error getting current user:", error);
@@ -585,7 +654,18 @@ export async function updateOwnProfile(userData: Partial<User>): Promise<{ succe
     const email = userData.email || currentUser.email;
     const phone = userData.phone !== undefined ? userData.phone : currentUser.phone;
     const whatsapp = userData.whatsapp !== undefined ? userData.whatsapp : currentUser.whatsapp;
-    const erpAlias = userData.erpAlias !== undefined ? userData.erpAlias : currentUser.erpAlias;
+    
+    // Proteger erpAlias: Solo modificable si el usuario tiene el permiso 'users:edit:erp-alias' o es rol 'admin'
+    let erpAlias = currentUser.erpAlias;
+    if (userData.erpAlias !== undefined && userData.erpAlias !== currentUser.erpAlias) {
+        const canEditAlias = await hasPermission(currentUser.id, 'users:edit:erp-alias');
+        if (canEditAlias || currentUser.role === 'admin') {
+            erpAlias = userData.erpAlias;
+        } else {
+            console.warn(`[AUTH] User ${currentUser.id} attempted to change erpAlias without 'users:edit:erp-alias' permission.`);
+        }
+    }
+
     const avatar = userData.avatar !== undefined ? userData.avatar : currentUser.avatar;
     const securityQuestion = userData.securityQuestion !== undefined ? userData.securityQuestion : currentUser.securityQuestion;
     const securityAnswer = userData.securityAnswer !== undefined ? userData.securityAnswer : currentUser.securityAnswer;

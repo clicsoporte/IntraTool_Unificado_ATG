@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Calendar, Search, RefreshCw, MapPin } from 'lucide-react';
 import { getTelegramDeliveryBotLogsAction } from '@/modules/operations/lib/actions';
-import { formatFechaEntrega } from '@/modules/operations/lib/utils';
+import { formatFechaEntrega, getLocalDateStr } from '@/modules/operations/lib/utils';
 
 interface TelegramLogsTabProps {
     tvMode?: boolean;
@@ -15,12 +15,6 @@ interface TelegramLogsTabProps {
 const ITEMS_PER_PAGE = 10;
 
 export function TelegramLogsTab({ tvMode = false }: TelegramLogsTabProps) {
-    // Utility for local calendar date without UTC offset issues
-    const getLocalDateStr = () => {
-        const d = new Date();
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    };
-
     const [telegramDate, setTelegramDate] = useState<string>(getLocalDateStr());
     const [botLogs, setBotLogs] = useState<any[]>([]);
     const [botLogsLoading, setBotLogsLoading] = useState(false);

@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import { getDb, importAllData } from '@/modules/core/lib/db';
 import { getDbSync } from '@/modules/core/lib/db-conn';
 import { getNotificationConfig } from '@/modules/notifications/lib/db';
@@ -133,24 +134,14 @@ function getActiveModules(linkage: any) {
 
 function getShowRtv() {
   let showRtv = true;
-  let tempDb: any = null;
   try {
-    const Database = require('better-sqlite3');
-    const path = require('path');
-    const dbPath = path.join(process.cwd(), 'dbs', 'clic_tools.db');
-    tempDb = new Database(dbPath, { readonly: true });
-    const row = tempDb.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'bot_ask_rtv'").get() as { value: string } | undefined;
+    const db = getDbSync();
+    const row = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'bot_ask_rtv'").get() as { value: string } | undefined;
     if (row && row.value === 'false') {
       showRtv = false;
     }
   } catch (err) {
     console.error("Error reading bot_ask_rtv synchronously:", err);
-  } finally {
-    if (tempDb) {
-      try {
-        tempDb.close();
-      } catch (e) {}
-    }
   }
   return showRtv;
 }
@@ -659,6 +650,39 @@ async function sendFlowFallbackMessage(db: any, botToken: string, chatId: number
   }
 
   if (userMessage && userMessage.trim()) {
+    const cleanMsg = userMessage.trim();
+    const commaDigitsPattern = /^\d+([\s,]+\d*)*$/;
+
+    if (commaDigitsPattern.test(cleanMsg) && cleanMsg.includes(',')) {
+      const enteredDigits = cleanMsg.split(',').map(s => s.trim()).filter(s => s.length > 0);
+      if (enteredDigits.length > 1) {
+        try {
+          const alreadyAssigned: string[] = [];
+          for (const digits of enteredDigits) {
+            const match = db.prepare(`
+              SELECT documento_numero FROM ops_delivery_queue 
+              WHERE (documento_numero LIKE ? OR documento_numero = ?) AND asignacion_id = ? AND entregado = 0
+            `).get(`%${digits}`, digits, state?.tempData?.assignmentId) as { documento_numero: string } | undefined;
+            if (match) {
+              alreadyAssigned.push(match.documento_numero);
+            }
+          }
+
+          if (alreadyAssigned.length > 0) {
+            await sendTelegramMessage(
+              botToken,
+              chatId,
+              `💡 <b>¡Facturas ya Cargadas!</b>\n\nDetectamos que estás ingresando un bloque de facturas, pero ya se encuentran asignadas a tu camión:\n👉 <b>${alreadyAssigned.map(f => `#${f}`).join(', ')}</b>\n\nNo necesitas volver a cargarlas. Ahora solo presiona el botón inferior <b>📝 Registrar Entrega</b> para reportarlas.`,
+              keyboard
+            );
+            return;
+          }
+        } catch (err) {
+          console.error("Error checking pre-assigned docs in fallback:", err);
+        }
+      }
+    }
+
     try {
       const { getAiHelp } = await import('@/modules/core/lib/ai-assistant-service');
       
@@ -697,7 +721,23 @@ async function sendFlowFallbackMessage(db: any, botToken: string, chatId: number
         flowContext = `El bot está en el flujo: "${flowDesc}". El paso actual es: "${stepDesc}". El bot espera que el usuario responda a la instrucción o elija una opción válida de la pantalla actual. Explícale amigablemente cómo continuar e indícale qué comandos o botones usar.`;
       }
 
-      const aiResponse = await getAiHelp(flowContext, userMessage);
+      // Extraer permisos del rol del usuario vinculado para la IA (RBAC)
+      let userPermissions: string[] = [];
+      try {
+        if (linkage && linkage.employeeId) {
+          const userRow = db.prepare(`SELECT role FROM core_users WHERE id = ? OR email = ? OR erpAlias = ?`).get(linkage.employeeId, linkage.employeeId, linkage.employeeId) as { role: string } | undefined;
+          if (userRow && userRow.role) {
+            const roleRow = db.prepare(`SELECT permissions FROM core_roles WHERE name = ? OR id = ?`).get(userRow.role, userRow.role) as { permissions: string } | undefined;
+            if (roleRow && roleRow.permissions) {
+              userPermissions = JSON.parse(roleRow.permissions);
+            }
+          }
+        }
+      } catch (e) {
+        // En caso de fallar la lectura de permisos, mantén arreglo vacío
+      }
+
+      const aiResponse = await getAiHelp(flowContext, userMessage, userPermissions);
       if (aiResponse) {
         await sendTelegramMessage(botToken, chatId, `🤖 <b>Asistente de Ayuda:</b>\n\n${aiResponse}`, keyboard);
         return;
@@ -1442,25 +1482,6 @@ async function executeFinalizeDelivery(db: any, chatIdStr: string, chatId: any, 
 
     // Clear Telegram lock for this document
     db.prepare('UPDATE ops_delivery_queue SET telegram_lock_at = NULL, telegram_lock_by = NULL WHERE id = ?').run(docId);
-
-    // Re-inject clone if incomplete and advanced
-    if (finalStateData.estado === 'incompleto' && finalStateData.flowType === 'advanced') {
-      try {
-        db.prepare(`
-            INSERT INTO ops_delivery_queue (documento_numero, tipo_documento, cliente_id, cliente_nombre, creado_por, fecha_registro, entregado, estado)
-            VALUES (?, ?, ?, ?, ?, ?, 0, 'pendiente')
-        `).run(
-            docNum + '-PARTIAL',
-            tempData.searchType || 'factura',
-            (db.prepare('SELECT cliente_id FROM ops_delivery_queue WHERE id = ?').get(docId) as any)?.cliente_id || 'CLIENTE_ERP',
-            tempData.cliente || 'Cliente ERP',
-            tempData.creadoPor || 'ERP_SYNC',
-            await getBusinessDateStr()
-          );
-      } catch (e: any) {
-        console.error("Error re-injecting partial advanced delivery in executeFinalizeDelivery:", e.message);
-      }
-    }
   }
 
   // Clear next client from assignment since it's now completed
@@ -2175,12 +2196,38 @@ async function handleMiCamionAveria(db: any, botToken: string, chatId: any, chat
     parentSubmenu: parentSubmenu
   };
 
+  let breakdownRows: { value: string }[] = [];
+  try {
+    breakdownRows = db.prepare("SELECT value FROM fleet_settings WHERE category = 'breakdown_type' ORDER BY value ASC").all() as { value: string }[];
+  } catch (_) {}
+
+  let breakdownTypes = breakdownRows.map(b => b.value);
+  if (breakdownTypes.length === 0) {
+    breakdownTypes = ['Mecánica', 'Eléctrica', 'Llantas / Neumáticos', 'Frenos', 'Transmisión', 'Motor', 'Fuga de Aceite', 'Accidente / Colisión', 'Climatización / AC', 'Otro'];
+  }
+
+  const breakdownButtons: string[][] = [];
+  for (let i = 0; i < breakdownTypes.length; i += 2) {
+    const row = [`🔧 ${breakdownTypes[i]}`];
+    if (i + 1 < breakdownTypes.length) {
+      row.push(`🔧 ${breakdownTypes[i + 1]}`);
+    }
+    breakdownButtons.push(row);
+  }
+  breakdownButtons.push(['❌ Cancelar Operación']);
+
+  const breakdownKeyboard = {
+    keyboard: breakdownButtons,
+    resize_keyboard: true,
+    one_time_keyboard: true
+  };
+
   await saveTelegramState(chatIdStr, 'driver_report_fault', 'driver_maint_subject', tempData);
   await sendTelegramMessage(
     botToken,
     chatId,
-    `🔧 <b>${tempData.brand} ${tempData.model} (${tempData.plate}) - Auto-detectado</b>\n\n¿Cuál es el <b>asunto o título breve</b> de la avería/mantenimiento que deseas reportar?\n(Ejemplo: <i>Fuga de aceite en motor</i>):`,
-    cancelOnlyKeyboard
+    `🔧 <b>${tempData.brand} ${tempData.model} (${tempData.plate}) - Auto-detectado</b>\n\nSelecciona el <b>tipo de avería</b> en los botones o escribe el asunto/descripción de la falla:`,
+    breakdownKeyboard
   );
 }
 
@@ -2397,6 +2444,26 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
+    // [S2] Validar X-Telegram-Bot-Api-Secret-Token (Fail-Closed)
+    const secretTokenHeader = req.headers.get('x-telegram-bot-api-secret-token') || '';
+    const configuredSecret = ((config as any)?.webhookSecretToken || process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
+
+    if (configuredSecret.length > 0) {
+      const headerBuf = Buffer.from(secretTokenHeader.trim());
+      const secretBuf = Buffer.from(configuredSecret);
+      if (headerBuf.length !== secretBuf.length || !crypto.timingSafeEqual(headerBuf, secretBuf)) {
+        logError("Telegram Webhook rechazado: Secret Token no coincide o no provisto.");
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      }
+    } else {
+      // Si el bot está activo pero no tiene secret token configurado, rechazar peticiones no autorizadas
+      const authHeader = req.headers.get('authorization') || '';
+      if (!authHeader.includes(botToken)) {
+        logError("Telegram Webhook rechazado: Se requiere configurar Webhook Secret Token en producción.");
+        return NextResponse.json({ error: 'Unauthorized webhook - Missing secret token' }, { status: 401 });
+      }
+    }
+
     const payload = await req.json();
     try {
       await logInfo(`Telegram Bot: Webhook recibido`, { 
@@ -2470,8 +2537,126 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    // 2. UNLINKED USER FLOW
+    // 2. UNLINKED USER OR USER NOTIFICATION LINKAGE FLOW
     if (!linkage) {
+      const state = await getTelegramState(chatIdStr);
+
+      // Estado 1: Esperando Correo Electrónico
+      if (state && state.currentFlow === 'user_notification_link' && state.step === 'awaiting_email') {
+        const inputEmail = text.trim().toLowerCase();
+        if (!inputEmail.includes('@') || !inputEmail.includes('.')) {
+          await sendTelegramMessage(
+            botToken,
+            chatId,
+            "⚠️ Por favor ingresa un correo electrónico válido (ejemplo: <code>juan.perez@garend.com</code>) o escribe Cancelar ❌:",
+            cancelOnlyKeyboard
+          );
+          return NextResponse.json({ ok: true });
+        }
+
+        const db = await getDb();
+        const userExists = db.prepare('SELECT id, name, email FROM core_users WHERE LOWER(email) = ?').get(inputEmail) as any;
+        if (!userExists) {
+          await sendTelegramMessage(
+            botToken,
+            chatId,
+            `❌ <b>Usuario no encontrado</b>\nNo existe ningún usuario registrado con el correo <code>${inputEmail}</code> en el sistema.\n\nPor favor verifica tu correo e inténtalo de nuevo o escribe Cancelar ❌:`,
+            cancelOnlyKeyboard
+          );
+          return NextResponse.json({ ok: true });
+        }
+
+        await saveTelegramState(chatIdStr, 'user_notification_link', 'awaiting_password', { email: inputEmail, name: userExists.name, userId: userExists.id });
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          `🔑 <b>Paso 2 de 2: Contraseña de Acceso</b>\nHola <b>${userExists.name}</b>, por favor escribe tu contraseña de acceso al sistema Clic-Tools para confirmar tu identidad:`,
+          cancelOnlyKeyboard
+        );
+        return NextResponse.json({ ok: true });
+      }
+
+      // Estado 2: Esperando Contraseña del Sistema
+      if (state && state.currentFlow === 'user_notification_link' && state.step === 'awaiting_password') {
+        const inputPassword = text.trim();
+        let parsedTempData: any = {};
+        try {
+          parsedTempData = typeof state.tempData === 'string' ? JSON.parse(state.tempData) : (state.tempData || {});
+        } catch (_) {
+          parsedTempData = state.tempData || {};
+        }
+        const email = parsedTempData.email;
+
+        const db = await getDb();
+        const user = db.prepare('SELECT id, name, email, password, role, salespersonId, erpAlias FROM core_users WHERE LOWER(email) = ?').get(email) as any;
+
+        if (!user || !user.password) {
+          await deleteTelegramState(chatIdStr);
+          await sendTelegramMessage(botToken, chatId, "❌ Error al verificar usuario. Por favor inicia nuevamente con /start.");
+          return NextResponse.json({ ok: true });
+        }
+
+        const isMatch = await bcrypt.compare(inputPassword, user.password);
+        if (!isMatch) {
+          await sendTelegramMessage(
+            botToken,
+            chatId,
+            "❌ <b>Contraseña incorrecta.</b>\nPor favor ingresa nuevamente tu contraseña del sistema Clic-Tools o escribe Cancelar ❌:",
+            cancelOnlyKeyboard
+          );
+          return NextResponse.json({ ok: true });
+        }
+
+        // Guardar automáticamente el chat_id en el registro del usuario
+        db.prepare('UPDATE core_users SET telegramChatId = ? WHERE id = ?').run(chatIdStr, user.id);
+        await deleteTelegramState(chatIdStr);
+
+        let extraInfo = '';
+        if (user.salespersonId) extraInfo += `\n💼 Código de Vendedor: <b>${user.salespersonId}</b>`;
+        if (user.erpAlias) extraInfo += `\n👤 Alias ERP: <b>${user.erpAlias}</b>`;
+
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          `✅ <b>¡Cuenta de Usuario Vinculada con Éxito!</b>\n\n` +
+          `👤 Usuario: <b>${user.name}</b>\n` +
+          `📧 Correo: <b>${user.email}</b>\n` +
+          `🛡️ Rol: <b>${user.role || 'Usuario'}</b>` +
+          extraInfo +
+          `\n🆔 Telegram Chat ID: <code>${chatIdStr}</code>\n\n` +
+          `🔔 <i>A partir de este momento recibirás en este chat las notificaciones de entregas, avisos de choferes en espera ⏱️ y alertas del sistema.</i>`
+        );
+        return NextResponse.json({ ok: true });
+      }
+
+      // Opción de Menú: Vincular Usuario (Notificaciones / Chat ID)
+      if (text.includes('Vincular mi Usuario') || text.includes('Chat ID') || text.toLowerCase() === '/vincular_usuario') {
+        await saveTelegramState(chatIdStr, 'user_notification_link', 'awaiting_email', {});
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          `🔔 <b>Vinculación de Notificaciones (Vendedores / Facturación / Administración)</b>\n\n` +
+          `✉️ <b>Paso 1 de 2: Correo Electrónico</b>\n` +
+          `Por favor, escribe tu correo institucional registrado en Clic-Tools:`,
+          cancelOnlyKeyboard
+        );
+        return NextResponse.json({ ok: true });
+      }
+
+      // Opción de Menú: Registrarme como Chofer
+      if (text.includes('Registrarme como Chofer') || text.toLowerCase() === '/chofer') {
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          `🚛 <b>Registro de Chofer / Operaciones</b>\n\n` +
+          `Por favor, ingresa tu código de activación de 6 caracteres generado por administración:\n` +
+          `Ejemplo: <code>/vincular TX8925</code>`,
+          cancelOnlyKeyboard
+        );
+        return NextResponse.json({ ok: true });
+      }
+
+      // Verificación de código de activación de chofer (/vincular CODIGO o CODIGO de 6 caracteres)
       const isStartWithParam = text.startsWith('/start ') && text.trim().split(/\s+/).length === 2;
       if (text.toLowerCase().startsWith('/vincular') || /^[A-Z0-9]{6}$/i.test(text) || isStartWithParam) {
         let code = text;
@@ -2506,10 +2691,32 @@ export async function POST(req: NextRequest) {
           );
         }
       } else {
+        // Menú de bienvenida inicial
+        const initialRegistrationKeyboard = {
+          keyboard: [
+            [{ text: "🚛 Registrarme como Chofer" }],
+            [{ text: "🔔 Vincular mi Usuario (Alertas y Notificaciones)" }],
+            [{ text: "Cancelar ❌" }]
+          ],
+          resize_keyboard: true,
+          one_time_keyboard: true
+        };
+
+        const db = await getDb();
+        const existingLinkedUser = db.prepare('SELECT name, email, role, salespersonId FROM core_users WHERE telegramChatId = ?').get(chatIdStr) as any;
+
+        let welcomeHeader = `🤖 <b>Bienvenido al Asistente Central Garend / Clic-Tools</b>\n\n`;
+        if (existingLinkedUser) {
+          welcomeHeader += `ℹ️ Tu Telegram ya está vinculado a: <b>${existingLinkedUser.name}</b> (${existingLinkedUser.email}).\n\n¿Deseas registrar otra función o re-vincular tu cuenta? Selecciona una opción abajo:`;
+        } else {
+          welcomeHeader += `Selecciona el tipo de registro que deseas realizar:`;
+        }
+
         await sendTelegramMessage(
           botToken, 
           chatId, 
-          "❌ <b>Acceso no autorizado</b>\nTu cuenta de Telegram no está vinculada al Bot General Garend.\n\nPor favor, ingresa tu código de activación generado por administración:\n<code>/vincular CÓDIGO</code>"
+          welcomeHeader,
+          initialRegistrationKeyboard
         );
       }
       return NextResponse.json({ ok: true });
@@ -3483,7 +3690,7 @@ export async function POST(req: NextRequest) {
               const notes = tempData.photoFilename ? `[Foto: ${tempData.photoFilename}]` : '';
               await saveTelegramFuelLog({
                 vehicleId: tempData.vehicleId,
-                date: new Date().toISOString().substring(0, 10),
+                date: await getBusinessDateStr(),
                 mileageBefore: tempData.mileageBefore,
                 liters: tempData.liters,
                 cost: tempData.cost,
@@ -3700,7 +3907,7 @@ export async function POST(req: NextRequest) {
 
               await saveTelegramMaintenanceLog({
                 vehicleId: tempData.vehicleId,
-                date: new Date().toISOString().substring(0, 10),
+                date: await getBusinessDateStr(),
                 mileage: tempData.mileage,
                 type: tempData.type,
                 description: fullDescription,
@@ -5510,7 +5717,10 @@ export async function POST(req: NextRequest) {
         }
 
         case 'collect_confirm_document': {
-          if (text.includes('Sí') || text.includes('registrar') || text.includes('confirmar')) {
+          const cleanText = text.trim();
+          const isDocSuffix = /^\d+$/.test(cleanText) && tempData.docNum && tempData.docNum.endsWith(cleanText);
+
+          if (text.includes('Sí') || text.includes('registrar') || text.includes('confirmar') || isDocSuffix) {
             tempData.deliveryMode = 'sencillo';
             await saveTelegramState(chatIdStr, 'collects_menu', 'collect_report_simple', tempData);
             const simpleReportKeyboard = {
@@ -5643,6 +5853,78 @@ export async function POST(req: NextRequest) {
           await runNextFinalizeStep(db, chatIdStr, chatId, botToken, linkage, tempData);
           break;
         }
+
+        case 'delivery_await_invoice_photo': {
+          if (text === 'Volver al Menú Principal 🔙' || text === '/cancelar' || text.toLowerCase() === 'cancelar') {
+            const db = await getDb();
+            if (tempData.docId) {
+              db.prepare('UPDATE ops_delivery_queue SET telegram_lock_at = NULL, telegram_lock_by = NULL WHERE id = ?').run(tempData.docId);
+            }
+            await saveTelegramState(chatIdStr, 'collects_menu', 'collects_menu_home', tempData);
+            await sendTelegramMessage(botToken, chatId, "🔙 Cancelado. Volviendo al menú de recolectas.", getCollectsMenuKeyboard(db, tempData.assignmentId));
+            return NextResponse.json({ ok: true });
+          }
+
+          let hasPhoto = false;
+          let photoFilename = null;
+
+          if (message.photo && message.photo.length > 0) {
+            try {
+              const photo = message.photo[message.photo.length - 1];
+              await sendTelegramMessage(botToken, chatId, "⏳ Descargando foto de documento / factura...");
+              photoFilename = await downloadTelegramFile(botToken, photo.file_id);
+              hasPhoto = true;
+            } catch (err: any) {
+              console.error("Error downloading telegram photo in collects_menu", err);
+              await sendTelegramMessage(botToken, chatId, "⚠️ Error al descargar la foto. Intenta enviarla de nuevo:");
+              return NextResponse.json({ ok: true });
+            }
+          }
+
+          const db = await getDb();
+          const reqInvoicePhotoRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'bot_require_invoice_photo'").get() as { value: string } | undefined;
+          const reqInvoicePhoto = reqInvoicePhotoRow?.value || 'disabled';
+          const isMandatory = reqInvoicePhoto === 'mandatory';
+
+          if (!hasPhoto && text === 'Omitir foto de factura firmada ⏭️') {
+            if (isMandatory) {
+              await sendTelegramMessage(botToken, chatId, "⚠️ La foto de la factura / documento es obligatoria. Por favor envía la foto:", cancelOnlyKeyboard);
+              return NextResponse.json({ ok: true });
+            }
+            tempData.fotoFactura = null;
+          } else if (!hasPhoto) {
+            const optionalKeyboard = {
+              keyboard: [
+                [{ text: "Omitir foto de factura firmada ⏭️" }],
+                [{ text: "Volver al Menú Principal 🔙" }]
+              ],
+              resize_keyboard: true,
+              one_time_keyboard: true
+            };
+            const mandatoryKeyboard = {
+              keyboard: [
+                [{ text: "Volver al Menú Principal 🔙" }]
+              ],
+              resize_keyboard: true,
+              one_time_keyboard: true
+            };
+
+            await sendTelegramMessage(
+              botToken,
+              chatId,
+              isMandatory
+                ? "⚠️ Entrada inválida. Por favor, toma y envía una foto de la factura / comprobante firmado:"
+                : "⚠️ Entrada inválida. Envía una foto o presiona 'Omitir foto de factura firmada ⏭️':",
+              isMandatory ? mandatoryKeyboard : optionalKeyboard
+            );
+            return NextResponse.json({ ok: true });
+          } else {
+            tempData.fotoFactura = photoFilename;
+          }
+
+          await runNextFinalizeStep(db, chatIdStr, chatId, botToken, linkage, tempData);
+          break;
+        }
       }
       return NextResponse.json({ ok: true });
     }
@@ -5745,6 +6027,14 @@ export async function POST(req: NextRequest) {
                   suggestedKeyboard
                 );
                 return NextResponse.json({ ok: true });
+              } else {
+                // Si el próximo cliente guardado ya no tiene documentos activos pendientes de entregar,
+                // limpiamos de forma silenciosa el siguiente_cliente para evitar bucles de validación.
+                try {
+                  db.prepare("UPDATE ops_delivery_assignments SET siguiente_cliente = NULL, siguiente_cliente_fecha = NULL WHERE id = ?").run(tempData.assignmentId);
+                } catch (e) {
+                  console.error("Error clearing stale next client:", e);
+                }
               }
             }
 
@@ -6265,8 +6555,22 @@ export async function POST(req: NextRequest) {
               const successLoaded: { id: number; documento_numero: string; cliente_id: string; cliente_nombre: string }[] = [];
               const notFoundList: string[] = [];
               const alreadyAssignedList: string[] = [];
+              const alreadyDeliveredList: string[] = [];
 
               for (const digits of queryDigitsList) {
+                // Verificar si ya fue entregado previamente
+                const deliveredMatch = db.prepare(`
+                  SELECT documento_numero, fecha_entrega 
+                  FROM ops_delivery_queue 
+                  WHERE (documento_numero LIKE ? OR documento_numero = ?) AND (entregado = 1 OR estado = 'completo')
+                  ORDER BY id DESC LIMIT 1
+                `).get(`%${digits}`, digits) as any;
+
+                if (deliveredMatch) {
+                  alreadyDeliveredList.push(`${deliveredMatch.documento_numero} (Entregado ${deliveredMatch.fecha_entrega || 'Completado'})`);
+                  continue;
+                }
+
                 const matches = db.prepare(`
                   SELECT id, documento_numero, asignacion_id, cliente_id, cliente_nombre 
                   FROM ops_delivery_queue 
@@ -6299,6 +6603,7 @@ export async function POST(req: NextRequest) {
               tempData.autoloadFoundIds = successLoaded.map(f => f.id);
               tempData.autoloadFoundDocs = successLoaded;
               tempData.autoloadAlreadyAssigned = alreadyAssignedList;
+              tempData.autoloadAlreadyDelivered = alreadyDeliveredList;
               tempData.autoloadNotFound = notFoundList;
               tempData.autoloadQueryText = text;
 
@@ -6309,6 +6614,13 @@ export async function POST(req: NextRequest) {
                 responseMsg += `<b>Se van a cargar estas facturas (${successLoaded.length}):</b>\n`;
                 successLoaded.forEach(f => {
                   responseMsg += `• <code>${f.documento_numero}</code> (${f.cliente_nombre})\n`;
+                });
+                responseMsg += "\n";
+              }
+              if (alreadyDeliveredList.length > 0) {
+                responseMsg += `⛔ <b>Ya entregadas previamente (${alreadyDeliveredList.length}):</b>\n`;
+                alreadyDeliveredList.forEach(f => {
+                  responseMsg += `• <code>${f}</code> (no se pueden re-cargar)\n`;
                 });
                 responseMsg += "\n";
               }
@@ -6427,19 +6739,11 @@ export async function POST(req: NextRequest) {
           if (text.toLowerCase().includes('sí') || text.toLowerCase().includes('si') || text.includes('finalizar')) {
             try {
               const db = await getDb();
-              
-              // Close assignment and clear next destination fields
-              db.prepare('UPDATE ops_delivery_assignments SET activa = 0, fecha_completada = ?, siguiente_cliente = NULL, siguiente_cliente_fecha = NULL WHERE id = ?').run(new Date().toISOString(), tempData.assignmentId);
-
-              // Return remaining en_ruta docs back to general queue and trace the release
-              db.prepare(`
-                  UPDATE ops_delivery_queue 
-                  SET devolucion_asignacion_id = asignacion_id, asignacion_id = NULL, estado = 'pendiente', canal_registro = 'telegram', gestionado_por = 'Chofer (Fin jornada)'
-                  WHERE asignacion_id = ? AND entregado = 0
-              `).run(tempData.assignmentId);
+              const finalRes = await finalizeRouteAssignmentInternal(tempData.assignmentId, 'Chofer Telegram (Fin jornada)', db);
+              const consecText = finalRes.success && finalRes.consecutivo ? `\n\n📄 Consecutivo Generado: <b>${finalRes.consecutivo}</b>` : '';
 
               await deleteTelegramState(chatIdStr);
-              await sendTelegramMessage(botToken, chatId, "🏁 <b>Ruta cerrada con éxito.</b>\nGracias por reportar tus entregas hoy. ¡Ten un excelente viaje de regreso!", getDynamicMenuKeyboard(linkage));
+              await sendTelegramMessage(botToken, chatId, `🏁 <b>Ruta cerrada con éxito.</b>${consecText}\nGracias por reportar tus entregas hoy. ¡Ten un excelente viaje de regreso!`, getDynamicMenuKeyboard(linkage));
             } catch (err: any) {
               console.error("Error closing route:", err);
               await sendTelegramMessage(botToken, chatId, "❌ Error al finalizar la ruta en la base de datos.", deliveryMenuKeyboard);
@@ -6746,7 +7050,10 @@ export async function POST(req: NextRequest) {
         }
 
         case 'delivery_confirm_document': {
-          if (text.includes('Sí') || text.includes('registrar') || text.includes('confirmar')) {
+          const cleanText = text.trim();
+          const isDocSuffix = /^\d+$/.test(cleanText) && tempData.docNum && tempData.docNum.endsWith(cleanText);
+
+          if (text.includes('Sí') || text.includes('registrar') || text.includes('confirmar') || isDocSuffix) {
             try {
               const db = await getDb();
               

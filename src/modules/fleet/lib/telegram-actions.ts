@@ -151,7 +151,18 @@ export async function setupTelegramWebhookAction(): Promise<{ success: boolean; 
       webhookUrl = `${webhookUrl}/api/telegram/webhook`;
     }
 
-    const telegramUrl = `https://api.telegram.org/bot${config.botToken}/setWebhook?url=${encodeURIComponent(webhookUrl)}`;
+    // Ensure secret token is configured
+    let secretToken = ((config as any)?.webhookSecretToken || process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
+    if (!secretToken) {
+      const crypto = await import('crypto');
+      secretToken = crypto.randomBytes(24).toString('hex');
+      await saveNotificationConfig('telegram', {
+        ...config,
+        webhookSecretToken: secretToken
+      });
+    }
+
+    let telegramUrl = `https://api.telegram.org/bot${config.botToken}/setWebhook?url=${encodeURIComponent(webhookUrl)}&secret_token=${encodeURIComponent(secretToken)}`;
 
     const response = await fetch(telegramUrl, { method: 'POST', cache: 'no-store' });
     if (!response.ok) {

@@ -3,6 +3,7 @@ import { getBusinessDateStr } from '@/modules/core/lib/timezone';
 import { revalidatePath } from 'next/cache';
 import { logInfo, logWarn, logError } from '@/modules/core/lib/logger';
 import { sendEmail } from '@/modules/core/lib/email-service';
+import { fetchNavixyLiveTelemetry } from '@/modules/fleet/lib/gps-service';
 
 export async function getDocumentLinesInternal(docNum: string, tipo: 'factura' | 'pedido'): Promise<any[]> {
     const db = await getDb();
@@ -39,6 +40,7 @@ export async function updateDeliveryStatusInternal(
     id: number,
     data: {
         estado: 'completo' | 'incompleto' | 'rechazado';
+        boletaNumero?: string | null;
         comentario?: string;
         canal: 'telegram' | 'web';
         gestionadoPor: string;
@@ -46,26 +48,185 @@ export async function updateDeliveryStatusInternal(
         releaseCodeId?: number;
         fotoEvidencia?: string | null;
         fotoFactura?: string | null;
+        firmaCliente?: string | null;
+        nombreRecibe?: string | null;
+        lat?: number | null;
+        lng?: number | null;
     }
 ): Promise<{ success: boolean; error?: string }> {
     const db = await getDb();
+    const savedFileNames: string[] = [];
     try {
+        const { saveBase64ToFleetFile, deleteFleetFile } = await import('@/modules/fleet/lib/files');
+        
+        let processedFirma = data.firmaCliente;
+        if (processedFirma && processedFirma.startsWith('data:image/')) {
+            const fileName = await saveBase64ToFleetFile(processedFirma, 'sign');
+            if (fileName) {
+                processedFirma = fileName;
+                savedFileNames.push(fileName);
+            }
+        }
+
+        // Helper para procesar una foto individual o múltiples fotos (JSON array o array nativo)
+        const processPhotoField = async (input: any, prefix: string): Promise<string | null> => {
+            if (!input) return null;
+
+            // Si es un array de fotos en Base64 o nombres
+            if (Array.isArray(input)) {
+                const savedList: string[] = [];
+                for (const item of input) {
+                    if (typeof item === 'string' && item.startsWith('data:image/')) {
+                        const fName = await saveBase64ToFleetFile(item, prefix);
+                        if (fName) {
+                            savedList.push(fName);
+                            savedFileNames.push(fName);
+                        }
+                    } else if (typeof item === 'string' && item.trim()) {
+                        savedList.push(item.trim());
+                    }
+                }
+                return savedList.length > 0 ? JSON.stringify(savedList) : null;
+            }
+
+            // Si es un string que ya viene como JSON array: '["data:image...", ...]' o '["img1.jpg", ...]'
+            if (typeof input === 'string' && input.trim().startsWith('[') && input.trim().endsWith(']')) {
+                try {
+                    const parsed = JSON.parse(input);
+                    if (Array.isArray(parsed)) {
+                        const savedList: string[] = [];
+                        for (const item of parsed) {
+                            if (typeof item === 'string' && item.startsWith('data:image/')) {
+                                const fName = await saveBase64ToFleetFile(item, prefix);
+                                if (fName) {
+                                    savedList.push(fName);
+                                    savedFileNames.push(fName);
+                                }
+                            } else if (typeof item === 'string' && item.trim()) {
+                                savedList.push(item.trim());
+                            }
+                        }
+                        return savedList.length > 0 ? JSON.stringify(savedList) : null;
+                    }
+                } catch (_) {}
+            }
+
+            // Si es una sola foto en Base64
+            if (typeof input === 'string' && input.startsWith('data:image/')) {
+                const fileName = await saveBase64ToFleetFile(input, prefix);
+                if (fileName) {
+                    savedFileNames.push(fileName);
+                    return fileName;
+                }
+                return null;
+            }
+
+            return typeof input === 'string' && input.trim() ? input.trim() : null;
+        };
+
+        const processedEvidencia = await processPhotoField(data.fotoEvidencia, 'evi');
+        const processedFactura = await processPhotoField(data.fotoFactura, 'fac');
+
         const localTodayStr = await getBusinessDateStr();
+
+        // Fallback GPS Navixy resolution (async call outside db.transaction)
+        let resolvedLat = data.lat;
+        let resolvedLng = data.lng;
+
+        if ((!resolvedLat || !resolvedLng)) {
+            try {
+                const docRow = db.prepare('SELECT asignacion_id FROM ops_delivery_queue WHERE id = ?').get(id) as { asignacion_id: number | null } | undefined;
+                if (docRow?.asignacion_id) {
+                    const vehicleRow = db.prepare(`
+                        SELECT v.plate FROM ops_delivery_assignments a
+                        JOIN fleet_vehicles v ON a.vehiculo_id = v.id
+                        WHERE a.id = ?
+                    `).get(docRow.asignacion_id) as { plate: string } | undefined;
+
+                    if (vehicleRow?.plate) {
+                        const telemetryList = await fetchNavixyLiveTelemetry();
+                        const cleanPlate = vehicleRow.plate.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                        const truckFix = telemetryList.find(t => String(t.plate).toUpperCase().replace(/[^A-Z0-9]/g, '') === cleanPlate);
+                        if (truckFix && truckFix.lat && truckFix.lng) {
+                            resolvedLat = truckFix.lat;
+                            resolvedLng = truckFix.lng;
+                            console.log(`📡 [Navixy Fallback GPS] Coordenadas obtenidas del GPS del camión ${vehicleRow.plate}: Lat ${resolvedLat}, Lng ${resolvedLng}`);
+                        }
+                    }
+                }
+            } catch (e: any) {
+                console.error('Error al resolver fallback GPS Navixy:', e.message);
+            }
+        }
+
         const transaction = db.transaction(() => {
             const todayStr = new Date().toISOString();
-            const entregadoFlag = data.estado === 'completo' ? 1 : 0; // If complete, it is delivered and archived (1)
+            const entregadoFlag = 1; // Un documento procesado (completo, incompleto o rechazado) queda procesado (1) en la ruta del día
 
             // 1. Get current document details
             const currentDoc = db.prepare('SELECT * FROM ops_delivery_queue WHERE id = ?').get(id) as any;
             if (!currentDoc) throw new Error('Documento no encontrado en la cola.');
 
+            // Prevenir doble confirmación concurrente
+            if (['completo', 'incompleto', 'rechazado'].includes(currentDoc.estado)) {
+                throw new Error(`El documento #${currentDoc.documento_numero} ya fue procesado previamente con estado '${currentDoc.estado}'.`);
+            }
+
+            // Validar titularidad de lock si está activo (< 15 min)
+            if (currentDoc.telegram_lock_by && currentDoc.telegram_lock_at) {
+                const lockAgeMs = Date.now() - new Date(currentDoc.telegram_lock_at).getTime();
+                const isLockActive = lockAgeMs < 15 * 60 * 1000;
+                if (isLockActive && currentDoc.telegram_lock_by !== data.gestionadoPor && data.canal === 'telegram') {
+                    throw new Error(`El documento #${currentDoc.documento_numero} está bloqueado por '${currentDoc.telegram_lock_by}'.`);
+                }
+            }
+
+            let tiempoDescargaMin: number | null = currentDoc.tiempo_descarga_min || null;
+            if (currentDoc.hora_ingreso_geocerca && !tiempoDescargaMin) {
+                try {
+                    const ingresoDt = new Date(currentDoc.hora_ingreso_geocerca);
+                    const entregaDt = new Date(todayStr);
+                    tiempoDescargaMin = Math.max(1, Math.round((entregaDt.getTime() - ingresoDt.getTime()) / 60000));
+                } catch {
+                    tiempoDescargaMin = null;
+                }
+            }
+
+            // Ensure firma_cliente, nombre_recibe and boleta_numero columns exist
+            try {
+                const tableInfo = db.prepare("PRAGMA table_info('ops_delivery_queue')").all();
+                const cols = tableInfo.map((c: any) => c.name);
+                if (!cols.includes('firma_cliente')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN firma_cliente TEXT;`);
+                if (!cols.includes('nombre_recibe')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN nombre_recibe TEXT;`);
+                if (!cols.includes('boleta_numero')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN boleta_numero TEXT;`);
+            } catch (e) {}
+
+            // Assign Boleta Consecutive (prioritizing boletaNumero from driver APK)
+            let assignedBoletaNumero = data.boletaNumero || currentDoc.boleta_numero || null;
+            if (!assignedBoletaNumero) {
+                try {
+                    const prefixRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boleta_consecutive_prefix'").get() as { value: string } | undefined;
+                    const nextRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boleta_consecutive_next'").get() as { value: string } | undefined;
+
+                    const prefix = prefixRow?.value ?? 'BOL-';
+                    const nextNum = parseInt(nextRow?.value || '1', 10);
+                    assignedBoletaNumero = `${prefix}${String(nextNum).padStart(6, '0')}`;
+
+                    db.prepare("INSERT INTO ops_delivery_settings (key, value) VALUES ('boleta_consecutive_next', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(nextNum + 1));
+                } catch (e) {
+                    assignedBoletaNumero = `BOL-${Date.now().toString().slice(-6)}`;
+                }
+            }
+
             // 2. Update the queue record
             db.prepare(`
                 UPDATE ops_delivery_queue
-                SET estado = ?, comentario = ?, canal_registro = ?, gestionado_por = ?, entregado = ?, fecha_entrega = ?
+                SET estado = ?, comentario = ?, canal_registro = ?, gestionado_por = ?, entregado = ?, fecha_entrega = ?, hora_entrega_efectiva = ?, tiempo_descarga_min = ?, boleta_numero = ?
                     ${data.releaseCodeId !== undefined ? ', release_code_id = ?' : ''}
                     ${data.fotoEvidencia !== undefined ? ', foto_evidencia = ?' : ''}
                     ${data.fotoFactura !== undefined ? ', foto_factura = ?' : ''}
+                    ${data.firmaCliente !== undefined ? ', firma_cliente = ?' : ''}
+                    ${data.nombreRecibe !== undefined ? ', nombre_recibe = ?' : ''}
                 WHERE id = ?
             `).run(
                 data.estado, 
@@ -74,14 +235,73 @@ export async function updateDeliveryStatusInternal(
                 data.gestionadoPor, 
                 entregadoFlag, 
                 todayStr, 
+                todayStr,
+                tiempoDescargaMin,
+                assignedBoletaNumero,
                 ...(data.releaseCodeId !== undefined ? [data.releaseCodeId] : []),
-                ...(data.fotoEvidencia !== undefined ? [data.fotoEvidencia] : []),
-                ...(data.fotoFactura !== undefined ? [data.fotoFactura] : []),
+                ...(data.fotoEvidencia !== undefined ? [processedEvidencia] : []),
+                ...(data.fotoFactura !== undefined ? [processedFactura] : []),
+                ...(data.firmaCliente !== undefined ? [processedFirma] : []),
+                ...(data.nombreRecibe !== undefined ? [data.nombreRecibe] : []),
                 id
             );
 
             // 3. Clear existing lock
             db.prepare('UPDATE ops_delivery_queue SET telegram_lock_at = NULL, telegram_lock_by = NULL WHERE id = ?').run(id);
+
+            // 3.1. Save GPS Telemetry & Customer Geocoding (with Navixy GPS Fallback)
+            if (resolvedLat && resolvedLng) {
+                try {
+                    db.prepare('UPDATE ops_delivery_queue SET latitud = ?, longitud = ? WHERE id = ?').run(resolvedLat, resolvedLng, id);
+                    
+                    if (currentDoc.cliente_id && currentDoc.documento_numero) {
+                        const invoiceHeader = db.prepare('SELECT DIREC_EMBARQUE FROM core_erp_invoice_headers WHERE FACTURA = ?').get(currentDoc.documento_numero) as { DIREC_EMBARQUE: string | null } | undefined;
+                        const direccionId = (invoiceHeader?.DIREC_EMBARQUE || 'ND').trim();
+
+                        const existingAddr = db.prepare(`
+                            SELECT id FROM core_customer_shipment_addresses 
+                            WHERE cliente_id = ? AND direccion_id = ?
+                            ORDER BY id ASC LIMIT 1
+                        `).get(currentDoc.cliente_id, direccionId) as { id: number } | undefined;
+
+                        if (existingAddr) {
+                            db.prepare(`
+                                UPDATE core_customer_shipment_addresses 
+                                SET latitude = ?, longitude = ? 
+                                WHERE id = ?
+                            `).run(resolvedLat, resolvedLng, existingAddr.id);
+                        } else {
+                            db.prepare(`
+                                INSERT INTO core_customer_shipment_addresses (cliente_id, direccion_id, detalle_direccion, descripcion, latitude, longitude)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                            `).run(currentDoc.cliente_id, direccionId, currentDoc.cliente_nombre || 'Entrega Principal', currentDoc.cliente_nombre || 'Entrega Principal', resolvedLat, resolvedLng);
+                        }
+                    }
+
+                    // Auto-update supplier GPS location in core_suppliers if collection request
+                    if (currentDoc.tipo_documento === 'recoger' && (currentDoc.cliente_id || currentDoc.cliente_nombre)) {
+                        try {
+                            const suppRow = db.prepare('SELECT id, latitude FROM core_suppliers WHERE id = ? OR LOWER(name) = LOWER(?)').get(currentDoc.cliente_id, currentDoc.cliente_nombre) as { id: string; latitude: number | null } | undefined;
+                            if (suppRow) {
+                                db.prepare('UPDATE core_suppliers SET latitude = ?, longitude = ? WHERE id = ?').run(resolvedLat, resolvedLng, suppRow.id);
+                                console.log(`📍 [Geolocalización Proveedor Actualizada] Proveedor: ${suppRow.id} | Lat: ${resolvedLat}, Lng: ${resolvedLng}`);
+                            }
+                        } catch (e: any) {
+                            console.error('Error al actualizar geolocalización de proveedor:', e.message);
+                        }
+                    }
+
+                    if (currentDoc.asignacion_id) {
+                        db.prepare(`
+                            INSERT INTO ops_delivery_gps_logs (asignacion_id, latitud, longitud, timestamp, evento)
+                            VALUES (?, ?, ?, ?, 'entrega_completada')
+                        `).run(currentDoc.asignacion_id, resolvedLat, resolvedLng, todayStr);
+                    }
+                    console.log(`📍 [Geolocalización Cliente Actualizada] Cliente ID: ${currentDoc.cliente_id} | Lat: ${resolvedLat}, Lng: ${resolvedLng}`);
+                } catch (e: any) {
+                    console.error('Error al actualizar geolocalización de cliente:', e.message);
+                }
+            }
 
             // 4. Save delivery lines in Modo Avanzado
             if (data.lines && data.lines.length > 0) {
@@ -95,19 +315,42 @@ export async function updateDeliveryStatusInternal(
                 }
             }
 
-            // 5. Reinyección: If incomplete or rejected, automatically clone and re-inject back to general queue (delivered = 0, state = 'pendiente', assignment = null)
+            // 5. Reinyección: If incomplete or rejected, automatically clone and re-inject back to general queue (delivered = 0, state = 'pendiente', assignment = null, devolucion_asignacion_id = currentDoc.asignacion_id)
             if (currentDoc.tipo_documento !== 'recoger' && (data.estado === 'incompleto' || data.estado === 'rechazado')) {
-                db.prepare(`
-                    INSERT INTO ops_delivery_queue (documento_numero, tipo_documento, cliente_id, cliente_nombre, creado_por, fecha_registro, entregado, estado)
-                    VALUES (?, ?, ?, ?, ?, ?, 0, 'pendiente')
-                `).run(
-                    currentDoc.documento_numero + (data.estado === 'incompleto' ? '-PARTIAL' : '-RETRY'),
-                    currentDoc.tipo_documento,
-                    currentDoc.cliente_id,
-                    currentDoc.cliente_nombre,
-                    currentDoc.creado_por,
-                    localTodayStr
-                );
+                const newDocNumber = currentDoc.documento_numero + (data.estado === 'incompleto' ? '-PARTIAL' : '-RETRY');
+                
+                // Prevent duplicate reinjections if already re-injected
+                const existingReinjection = db.prepare('SELECT id FROM ops_delivery_queue WHERE documento_numero = ? AND estado = \'pendiente\' AND entregado = 0').get(newDocNumber);
+                
+                if (!existingReinjection) {
+                    const reinjectedResult = db.prepare(`
+                        INSERT INTO ops_delivery_queue (documento_numero, tipo_documento, cliente_id, cliente_nombre, creado_por, fecha_registro, entregado, estado, devolucion_asignacion_id, comentario, boleta_numero)
+                        VALUES (?, ?, ?, ?, ?, ?, 0, 'pendiente', ?, ?, NULL)
+                    `).run(
+                        newDocNumber,
+                        currentDoc.tipo_documento,
+                        currentDoc.cliente_id,
+                        currentDoc.cliente_nombre,
+                        currentDoc.creado_por,
+                        localTodayStr,
+                        currentDoc.asignacion_id || null,
+                        data.comentario || null
+                    );
+
+                    const newDocId = Number(reinjectedResult.lastInsertRowid);
+                    if (data.lines && data.lines.length > 0 && newDocId) {
+                        const insertLine = db.prepare(`
+                            INSERT INTO ops_delivery_lines (delivery_order_id, producto_codigo, producto_descripcion, cantidad_pedida, cantidad_entregada, cantidad_faltante)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        `);
+                        for (const line of data.lines) {
+                            if (line.faltante > 0) {
+                                // Para el clon, la cantidad pedida es el remanente real que falta entregar
+                                insertLine.run(newDocId, line.codigo, line.desc || '', line.faltante, 0, line.faltante);
+                            }
+                        }
+                    }
+                }
             }
         });
 
@@ -174,6 +417,14 @@ export async function updateDeliveryStatusInternal(
                 <div style="background-color: #fdf2f8; border-left: 4px solid #db2777; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
                     <p style="margin: 0 0 4px 0; font-size: 12px; font-weight: 600; color: #db2777; text-transform: uppercase; letter-spacing: 0.05em;">Notas de la calle / Observación:</p>
                     <p style="margin: 0; font-size: 14px; color: #374151; font-style: italic;">"${data.comentario}"</p>
+                </div>
+                ` : '';
+
+                // Compile customer signature HTML box if signature exists
+                const firmaHtml = data.firmaCliente ? `
+                <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; padding: 12px; border-radius: 8px; margin-bottom: 20px; text-align: center;">
+                    <p style="margin: 0 0 6px 0; font-size: 12px; font-weight: 600; color: #475569; text-transform: uppercase; letter-spacing: 0.05em;">Firma Digital de Recibido:</p>
+                    <img src="${data.firmaCliente}" alt="Firma del Cliente" style="max-height: 110px; width: auto; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 4px; padding: 4px; display: inline-block;" />
                 </div>
                 ` : '';
 
@@ -282,7 +533,8 @@ export async function updateDeliveryStatusInternal(
                         .replace(/{{clienteNombre}}/g, doc.cliente_nombre)
                         .replace(/{{canal}}/g, data.canal)
                         .replace(/{{gestionadoPor}}/g, data.gestionadoPor)
-                        .replace(/{{comentario}}/g, comentarioHtml)
+                        .replace(/{{comentario}}/g, comentarioHtml + firmaHtml)
+                        .replace(/{{firmaHtml}}/g, firmaHtml)
                         .replace(/{{infoEnvio}}/g, infoEnvio)
                         .replace(/{{linesHtml}}/g, linesHtml)
                         .replace(/{{productosHtml}}/g, productosHtml);
@@ -309,6 +561,49 @@ export async function updateDeliveryStatusInternal(
                 // Recipient set to prevent sending duplicate emails to the same address
                 const sentEmails = new Set<string>();
 
+                // Helper para evaluar preferencias granulares del usuario antes de despachar
+                const shouldSendNotification = (userId: number, channel: 'email' | 'telegram', estado: string): boolean => {
+                    try {
+                        const prefs = db.prepare("SELECT key, value FROM core_user_preferences WHERE userId = ?").all(userId) as { key: string, value: string }[];
+                        const map = new Map(prefs.map(p => [p.key, p.value]));
+
+                        // 1. Master switch check
+                        const master = map.get('notif_master');
+                        if (master === 'false' || master === '0') return false;
+
+                        // 2. Channel check
+                        if (channel === 'email') {
+                            const chEmail = map.get('notif_channel_email');
+                            if (chEmail === 'false' || chEmail === '0') return false;
+                        } else if (channel === 'telegram') {
+                            const chTg = map.get('notif_channel_telegram');
+                            if (chTg === 'false' || chTg === '0') return false;
+                        }
+
+                        // 3. Status event check
+                        const normEstado = estado.toLowerCase().trim();
+                        if (normEstado === 'completo' || normEstado === 'entregado') {
+                            const comp = map.get('ops_notif_delivery_completed');
+                            if (comp === 'false' || comp === '0') return false;
+                            const legacy = map.get('ops_delivery_notifications_enabled');
+                            if (comp === undefined && (legacy === 'false' || legacy === '0')) return false;
+                        } else if (normEstado === 'incompleto') {
+                            const incomp = map.get('ops_notif_delivery_incomplete');
+                            if (incomp === 'false' || incomp === '0') return false;
+                        } else if (normEstado === 'rechazado' || normEstado === 'no_entregado') {
+                            const rej = map.get('ops_notif_delivery_rejected');
+                            if (rej === 'false' || rej === '0') return false;
+                        }
+
+                        return true;
+                    } catch (e) {
+                        return true;
+                    }
+                };
+
+                let spUserId: number | null = null;
+                let creatorUserId: number | null = null;
+
                 // --- 1. VENDEDOR (Salesperson) Channel ---
                 let salespersonCode: string | null = null;
                 
@@ -329,17 +624,12 @@ export async function updateDeliveryStatusInternal(
                 }
 
                 if (salespersonCode) {
-                    // Check active state of salesperson in ERP
-                    const spData = db.prepare('SELECT ACTIVO, NOMBRE FROM core_salespersons WHERE VENDEDOR = ?').get(salespersonCode) as { ACTIVO: string, NOMBRE: string } | undefined;
-                    
-                    if (!spData || spData.ACTIVO !== 'N') {
-                        // Resolve system profile
-                        const spUser = db.prepare('SELECT id, email, employeeId FROM core_users WHERE salespersonId = ?').get(salespersonCode) as { id: string, email: string, employeeId: string | null } | undefined;
-                        
+                    const spData = db.prepare('SELECT ACTIVO FROM core_salespersons WHERE VENDEDOR = ?').get(salespersonCode) as { ACTIVO: string } | undefined;
+                    if (spData && spData.ACTIVO === 'S') {
+                        const spUser = db.prepare('SELECT id, email, employeeId FROM core_users WHERE salespersonId = ?').get(salespersonCode) as { id: number, email: string, employeeId: string | null } | undefined;
                         if (spUser && spUser.email) {
+                            spUserId = spUser.id;
                             let spActive = true;
-                            
-                            // Check if employee is inactive
                             if (spUser.employeeId) {
                                 const empData = db.prepare('SELECT ACTIVO FROM core_employees WHERE EMPLEADO = ?').get(spUser.employeeId) as { ACTIVO: string } | undefined;
                                 if (empData && empData.ACTIVO === 'N') {
@@ -349,12 +639,8 @@ export async function updateDeliveryStatusInternal(
                             }
 
                             if (spActive) {
-                                // Check salesperson preferences
-                                const spPref = db.prepare("SELECT value FROM core_user_preferences WHERE userId = ? AND key = 'ops_delivery_notifications_enabled'").get(spUser.id) as { value: string } | undefined;
-                                
-                                const isEnabled = spPref ? (spPref.value === 'true' || spPref.value === '1') : true;
-                                
-                                if (isEnabled) {
+                                const isAllowedEmail = shouldSendNotification(spUser.id, 'email', data.estado);
+                                if (isAllowedEmail) {
                                     logInfo(`Sending salesperson notification to ${spUser.email} for code ${salespersonCode}`);
                                     await sendEmail({
                                         to: spUser.email,
@@ -363,7 +649,7 @@ export async function updateDeliveryStatusInternal(
                                     });
                                     sentEmails.add(spUser.email.toLowerCase().trim());
                                 } else {
-                                    logInfo(`Salesperson ${salespersonCode} (${spUser.email}) has delivery notifications disabled.`);
+                                    logInfo(`Salesperson ${salespersonCode} (${spUser.email}) silenced notification for status '${data.estado}' or email channel.`);
                                 }
                             }
                         }
@@ -375,9 +661,10 @@ export async function updateDeliveryStatusInternal(
                 // --- 2. ERP CREATOR Channel ---
                 const erpAlias = doc.creado_por;
                 if (erpAlias) {
-                    const creatorUser = db.prepare('SELECT id, email, employeeId, salespersonId FROM core_users WHERE erpAlias = ?').get(erpAlias) as { id: string, email: string, employeeId: string | null, salespersonId: string | null } | undefined;
+                    const creatorUser = db.prepare('SELECT id, email, employeeId, salespersonId FROM core_users WHERE erpAlias = ?').get(erpAlias) as { id: number, email: string, employeeId: string | null, salespersonId: string | null } | undefined;
                     
                     if (creatorUser && creatorUser.email) {
+                        creatorUserId = creatorUser.id;
                         const emailClean = creatorUser.email.toLowerCase().trim();
                         // Only proceed if we haven't already sent an email to this address
                         if (!sentEmails.has(emailClean)) {
@@ -402,15 +689,72 @@ export async function updateDeliveryStatusInternal(
                             }
 
                             if (creatorActive) {
-                                logInfo(`Sending ERP Creator notification to ${creatorUser.email} for alias ${erpAlias}`);
-                                await sendEmail({
-                                    to: creatorUser.email,
-                                    subject: emailSubject,
-                                    html: emailHtml
-                                });
+                                const isAllowedEmail = shouldSendNotification(creatorUser.id, 'email', data.estado);
+                                if (isAllowedEmail) {
+                                    logInfo(`Sending ERP Creator notification to ${creatorUser.email} for alias ${erpAlias}`);
+                                    await sendEmail({
+                                        to: creatorUser.email,
+                                        subject: emailSubject,
+                                        html: emailHtml
+                                    });
+                                } else {
+                                    logInfo(`ERP Creator ${erpAlias} (${creatorUser.email}) silenced notification for status '${data.estado}' or email channel.`);
+                                }
                             }
                         }
                     }
+                }
+
+                // --- 3. TELEGRAM CHANNEL (Vendedor & Creador con Preferencias) ---
+                try {
+                    const telegramRecipients = new Set<string>();
+
+                    // Resolver Telegram Chat ID del Vendedor (Validando granularidad de Telegram y Estado)
+                    if (salespersonCode && spUserId) {
+                        if (shouldSendNotification(spUserId, 'telegram', data.estado)) {
+                            const { getTelegramChatIdForUser } = await import('@/modules/notifications/lib/telegram-lookup');
+                            const spTelegramId = await getTelegramChatIdForUser({ salespersonId: salespersonCode });
+                            if (spTelegramId) telegramRecipients.add(spTelegramId);
+                        }
+                    }
+
+                    // Resolver Telegram Chat ID del Creador (Validando granularidad de Telegram y Estado)
+                    if (erpAlias && creatorUserId) {
+                        if (shouldSendNotification(creatorUserId, 'telegram', data.estado)) {
+                            const { getTelegramChatIdForUser } = await import('@/modules/notifications/lib/telegram-lookup');
+                            const creatorTelegramId = await getTelegramChatIdForUser({ userId: creatorUserId });
+                            if (creatorTelegramId) telegramRecipients.add(creatorTelegramId);
+                        }
+                    }
+
+                    if (telegramRecipients.size > 0) {
+                        const { sendTelegramMessage } = await import('@/modules/notifications/lib/telegram-service');
+                        
+                        const isCollectDoc = doc.tipo_documento === 'recoger';
+                        const docTypeHeader = isCollectDoc ? 'RECOLECTA' : doc.tipo_documento.toUpperCase();
+                        const entityLabel = isCollectDoc ? 'Proveedor' : 'Cliente';
+
+                        // Clean text message for Telegram (HTML formatted)
+                        const telegramMsg = `
+<b>${icon} Actualización de ${docTypeHeader} #${doc.documento_numero}</b>
+
+<b>Estado:</b> ${estadoLabel}
+<b>${entityLabel}:</b> ${doc.cliente_nombre}
+<b>Tipo:</b> ${docTypeHeader}
+${data.comentario ? `<b>Notas:</b> <i>"${data.comentario}"</i>\n` : ''}<b>Gestionado por:</b> ${data.gestionadoPor} (${data.canal})
+`.trim();
+
+                        for (const chatId of telegramRecipients) {
+                            try {
+                                await sendTelegramMessage(telegramMsg, chatId);
+                                logInfo(`Telegram notification sent for delivery ${doc.documento_numero} to Chat ID: ${chatId}`);
+                            } catch (tgErr: any) {
+                                logError(`Error sending Telegram notification to Chat ID: ${chatId}`, { error: tgErr.message });
+                            }
+                        }
+                    }
+                } catch (tgChannelErr: any) {
+                    logError('Error in Telegram notification dispatch:', tgChannelErr.message);
                 }
             }
         } catch (mailErr: any) {
@@ -419,6 +763,15 @@ export async function updateDeliveryStatusInternal(
 
         return { success: true };
     } catch (e: any) {
+        // Limpieza de archivos guardados si la transacción falló
+        if (savedFileNames.length > 0) {
+            try {
+                const { deleteFleetFile } = await import('@/modules/fleet/lib/files');
+                for (const fName of savedFileNames) {
+                    await deleteFleetFile(fName);
+                }
+            } catch (_) {}
+        }
         logError('Error updating delivery status:', e.message);
         return { success: false, error: e.message };
     }

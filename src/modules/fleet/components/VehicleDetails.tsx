@@ -26,6 +26,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
+import { getLocalDateStr } from '@/modules/core/lib/time-utils';
 import { useRef, useMemo, useCallback } from 'react';
 import { 
   Dialog, 
@@ -319,9 +320,14 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
     const efficiencyUnit = (vehicle.odometerUnit === 'hr' ? 'Hr/L' : (vehicle.odometerUnit === 'mi' ? 'Mi/L' : 'Km/L'));
 
     // Maintenance progress
-    const mileageSinceLastChange = vehicle.currentMileage - vehicle.lastOilChangeMileage;
-    const oilChangeProgress = Math.min(100, (mileageSinceLastChange / vehicle.oilChangeInterval) * 100);
-    const isOilChangeUrgent = oilChangeProgress >= 90;
+    const currentM = Number(vehicle.currentMileage || 0);
+    const lastOilM = Number(vehicle.lastOilChangeMileage || 0);
+    const oilInterval = Number(vehicle.oilChangeInterval || 5000);
+
+    const mileageSinceLastChange = Math.max(0, currentM - lastOilM);
+    const rawOilChangeProgress = oilInterval > 0 ? (mileageSinceLastChange / oilInterval) * 100 : 0;
+    const oilChangeProgress = Math.min(100, Math.max(0, rawOilChangeProgress));
+    const isOilChangeUrgent = rawOilChangeProgress >= 90;
 
     async function handleFuelSubmit(formData: FormData) {
         if (isFuelSubmitting.current) return;
@@ -1396,9 +1402,9 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                 <Card className={`border-none shadow-sm ${isOilChangeUrgent ? 'bg-amber-50' : 'bg-green-50/50'}`}>
                     <CardContent className="p-4 space-y-2">
                         <div className="flex items-center justify-between">
-                            <p className="text-xs text-muted-foreground uppercase font-bold">Mantenimiento</p>
+                            <p className="text-xs text-muted-foreground uppercase font-bold">Cambio Aceite</p>
                             <Badge variant={isOilChangeUrgent ? 'destructive' : 'secondary'} className="text-[10px]">
-                                {oilChangeProgress.toFixed(0)}%
+                                {oilChangeProgress.toFixed(2)}%
                             </Badge>
                         </div>
                         <div className="w-full bg-muted rounded-full h-1.5">
@@ -1979,7 +1985,7 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                             <form ref={fuelFormRef} action={handleFuelSubmit} encType="multipart/form-data" className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div className="space-y-2">
                                     <Label>Fecha</Label>
-                                    <Input type="date" name="date" defaultValue={new Date().toISOString().split('T')[0]} required />
+                                    <Input type="date" name="date" defaultValue={getLocalDateStr()} required />
                                 </div>
                                 <div className="space-y-2">
                                     <Label>Odómetro Actual</Label>
@@ -2069,7 +2075,7 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                             <form ref={maintenanceFormRef} action={handleMaintenanceSubmit} encType="multipart/form-data" className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 <div className="space-y-2">
                                     <Label>Fecha</Label>
-                                    <Input type="date" name="date" defaultValue={new Date().toISOString().split('T')[0]} required />
+                                    <Input type="date" name="date" defaultValue={getLocalDateStr()} required />
                                 </div>
                                 <div className="space-y-2">
                                     <Label>Odómetro al momento</Label>
@@ -2563,12 +2569,13 @@ export default function VehicleDetails({ vehicle, fuelLogs, maintenanceLogs, per
                                         </div>
                                     </DialogHeader>
                                     {selectedPhoto && (
-                                        <div className="relative w-full max-h-[80vh] flex items-center justify-center p-2 bg-slate-950">
-                                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                                            <img 
+                                        <div className="relative w-full h-[60vh] flex items-center justify-center p-2 bg-slate-950">
+                                            <Image 
                                                 src={`/api/fleet/files/${selectedPhoto}`} 
                                                 alt="Comprobante" 
-                                                className="max-w-full max-h-[70vh] object-contain rounded-lg shadow-md border border-white/5 transition-all duration-300"
+                                                fill
+                                                className="object-contain rounded-lg shadow-md border border-white/5 transition-all duration-300"
+                                                unoptimized
                                             />
                                         </div>
                                     )}

@@ -71,6 +71,7 @@ const emptyUser: Omit<User, 'id' | 'password'> = {
   forcePasswordChange: true,
   employeeId: null,
   salespersonId: null,
+  telegramChatId: null,
   is_active: 1,
 };
 
@@ -283,6 +284,14 @@ export default function UsersClient() {
                                 </span>
                               </div>
                             )}
+                            {user.telegramChatId && (
+                              <div className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5 flex-wrap">
+                                <span className="bg-sky-100 text-sky-800 dark:bg-sky-950/40 dark:text-sky-300 px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1">
+                                  <span className="h-1.5 w-1.5 rounded-full bg-sky-500"></span>
+                                  Telegram Directo ID: {user.telegramChatId}
+                                </span>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -466,6 +475,10 @@ export default function UsersClient() {
                     <div className="space-y-2">
                         <Label htmlFor="erpAlias">Alias de Usuario (ERP)</Label>
                         <Input id="erpAlias" value={currentUser.erpAlias || ''} onChange={(e) => handleFieldChange('erpAlias', e.target.value)} />
+                    </div>
+                    <div className="space-y-2">
+                        <Label htmlFor="telegramChatId">Telegram Chat ID (Opcional)</Label>
+                        <Input id="telegramChatId" placeholder="Ej: 123456789" value={currentUser.telegramChatId || ''} onChange={(e) => handleFieldChange('telegramChatId', e.target.value)} />
                     </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

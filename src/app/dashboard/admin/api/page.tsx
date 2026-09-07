@@ -48,6 +48,10 @@ const initialApiSettings: ApiSettings = {
     haciendaExemptionApi: "https://api.hacienda.go.cr/fe/ex?autorizacion=",
     haciendaTributariaApi: "https://api.hacienda.go.cr/fe/ae?identificacion=",
     recopeApi: "",
+    navixyBaseUrl: "https://fleets.geotracking.co.cr/api-v2",
+    navixyApiKey: "",
+    cartoApiKey: "",
+    googleMapsApiKey: ""
 }
 
 const emptyLaw: ExemptionLaw = {
@@ -100,8 +104,8 @@ export default function ApiSettingsPage() {
         await saveApiSettings(apiSettings);
         await saveExemptionLaws(exemptionLaws);
         toast({
-        title: "Configuración Guardada",
-        description: "Los cambios en las APIs y leyes han sido guardados.",
+          title: " Configuración de API Guardada",
+          description: "Las credenciales han sido actualizadas. Si tenías un mensaje 'API key required' en el mapa, presiona Ctrl+F5 para forzar la recarga de los mosaicos cacheados.",
         });
         await logInfo("Configuración de API y Leyes guardada", { settings: apiSettings, laws: exemptionLaws });
     } catch(error: any) {
@@ -209,6 +213,44 @@ export default function ApiSettingsPage() {
                         value={apiSettings.recopeApi || ''}
                         onChange={handleApiChange}
                       />
+                    </div>
+                    <div className="border-t pt-4 mt-4 space-y-4">
+                      <div className="space-y-1">
+                        <Label htmlFor="navixyBaseUrl" className="font-bold text-sm text-indigo-700">Navixy GPS - URL Servidor API</Label>
+                        <Input 
+                          id="navixyBaseUrl" 
+                          placeholder="https://fleets.geotracking.co.cr/api-v2"
+                          value={apiSettings.navixyBaseUrl || ''}
+                          onChange={handleApiChange}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor="navixyApiKey" className="font-bold text-sm text-indigo-700">Navixy GPS - API Key / Token Hash</Label>
+                        <Input 
+                          id="navixyApiKey" 
+                          placeholder="Hash de API Navixy (ej: ebfeaf0741b58537be31be2880a09927)"
+                          value={apiSettings.navixyApiKey || ''}
+                          onChange={handleApiChange}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor="cartoApiKey" className="font-bold text-sm text-indigo-700">CARTO Maps - API Key (Basemaps Oscuro)</Label>
+                        <Input 
+                          id="cartoApiKey" 
+                          placeholder="API Key de CARTO (ej: default_public_...)"
+                          value={apiSettings.cartoApiKey || ''}
+                          onChange={handleApiChange}
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor="googleMapsApiKey" className="font-bold text-sm text-indigo-700">Google Maps - API Key (Trazado y Mosaicos Satelitales)</Label>
+                        <Input 
+                          id="googleMapsApiKey" 
+                          placeholder="API Key de Google Maps (ej: AIzaSy...)"
+                          value={apiSettings.googleMapsApiKey || ''}
+                          onChange={handleApiChange}
+                        />
+                      </div>
                     </div>
                   </CardContent>
                 </Card>

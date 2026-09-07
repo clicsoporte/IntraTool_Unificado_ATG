@@ -5,7 +5,7 @@
  */
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { UserNav } from "./user-nav";
 import { NotificationBell } from "./notification-bell";
@@ -16,12 +16,14 @@ import { logError, logInfo } from "@/modules/core/lib/logger";
 import { syncAllData } from "@/modules/core/lib/actions";
 import { addSuggestion } from "@/modules/core/lib/suggestions-actions";
 import { format, parseISO } from 'date-fns';
-import { cn } from "@/lib/utils";
+import { cn, isTestEnvironment } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, RefreshCw, Clock, DollarSign, Send, MessageSquare, PanelLeft, Calculator } from "lucide-react";
+import Link from 'next/link';
+import { Loader2, RefreshCw, Clock, DollarSign, Send, MessageSquare, PanelLeft, Calculator, Truck } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { QuickCalculator } from "@/components/dashboard/quick-calculator";
 
@@ -29,16 +31,7 @@ interface HeaderProps {
   title: string;
 }
 
-function HeaderActions() {
-    const { user, companyData, setCompanyData, exchangeRateData, refreshExchangeRate, updateUnreadSuggestionsCount } = useAuth();
-    const { hasPermission } = useAuthorization(['admin:import:run']);
-    const { toast } = useToast();
-
-    const [isSyncing, setIsSyncing] = useState(false);
-    const [isRateRefreshing, setIsRateRefreshing] = useState(false);
-    const [suggestion, setSuggestion] = useState("");
-    const [isSubmittingSuggestion, setIsSubmittingSuggestion] = useState(false);
-    const [isSuggestionDialogOpen, setSuggestionDialogOpen] = useState(false);
+const LiveClock = React.memo(function LiveClock() {
     const [currentTime, setCurrentTime] = useState<Date | null>(null);
 
     useEffect(() => {
@@ -56,6 +49,30 @@ function HeaderActions() {
         const minutes = Math.abs(offset) % 60;
         return `GMT${sign}${hours}${minutes > 0 ? `:${String(minutes).padStart(2, '0')}` : ''}`;
     };
+
+    if (!currentTime) return null;
+
+    return (
+        <div className="hidden lg:flex items-center gap-1.5 text-xs text-muted-foreground font-medium bg-muted/30 px-2.5 py-1 rounded-md border border-muted/50">
+            <Clock className="h-4 w-4 text-blue-500 animate-pulse" />
+            <span className="font-mono text-xs font-semibold">
+                {format(currentTime, 'dd/MM/yy HH:mm:ss')}
+                <span className="text-[10px] text-slate-400 ml-1.5 font-sans font-bold">({getTimezoneOffsetString(currentTime)})</span>
+            </span>
+        </div>
+    );
+});
+
+function HeaderActions() {
+    const { user, companyData, setCompanyData, exchangeRateData, refreshExchangeRate, updateUnreadSuggestionsCount } = useAuth();
+    const { hasPermission } = useAuthorization(['admin:import:run']);
+    const { toast } = useToast();
+
+    const [isSyncing, setIsSyncing] = useState(false);
+    const [isRateRefreshing, setIsRateRefreshing] = useState(false);
+    const [suggestion, setSuggestion] = useState("");
+    const [isSubmittingSuggestion, setIsSubmittingSuggestion] = useState(false);
+    const [isSuggestionDialogOpen, setSuggestionDialogOpen] = useState(false);
 
     const isSyncOld = companyData?.lastSyncTimestamp && companyData?.syncWarningHours 
       ? (new Date().getTime() - parseISO(companyData.lastSyncTimestamp).getTime()) > (companyData.syncWarningHours * 60 * 60 * 1000) 
@@ -111,15 +128,14 @@ function HeaderActions() {
 
     return (
         <>
-            {currentTime && (
-                <div className="hidden items-center gap-2 text-sm text-muted-foreground p-2 border rounded-lg md:flex bg-slate-50/50 dark:bg-slate-900/10">
-                    <Clock className="h-4 w-4 text-blue-500 animate-pulse" />
-                    <span className="font-mono text-xs font-semibold">
-                        {format(currentTime, 'dd/MM/yy HH:mm:ss')}
-                        <span className="text-[10px] text-slate-400 ml-1.5 font-sans font-bold">({getTimezoneOffsetString(currentTime)})</span>
-                    </span>
+            {isTestEnvironment(companyData?.systemName) && (
+                <div className="flex items-center gap-1.5 bg-rose-500/10 border border-rose-500/30 text-rose-700 dark:text-rose-300 px-2.5 py-1 rounded-full text-xs font-black tracking-wide shadow-sm animate-pulse">
+                    <span>🧪</span>
+                    <span className="hidden md:inline">AMBIENTE DE PRUEBAS</span>
+                    <span className="md:hidden">PRUEBAS</span>
                 </div>
             )}
+            <LiveClock />
             {exchangeRateData.rate && (
                 <div className="hidden items-center gap-2 text-sm text-muted-foreground p-2 border rounded-lg sm:flex">
                     <DollarSign className="h-4 w-4"/>
@@ -143,6 +159,7 @@ function HeaderActions() {
                     <span className="hidden sm:inline ml-2">Sincronizar ERP</span>
                 </Button>
             )}
+
             <Dialog open={isSuggestionDialogOpen} onOpenChange={setSuggestionDialogOpen}>
                 <DialogTrigger asChild>
                     <Button size="sm" variant="default" className="bg-green-600 hover:bg-green-700 h-9 w-9 p-0 sm:w-auto sm:px-3">

@@ -1,3 +1,5 @@
+export { getLocalDateStr, getLocalDateTimeStr, formatDateToLocal } from '@/modules/core/lib/time-utils';
+
 export function getTvGridCols(count: number): string {
     if (count === 0) return 'grid-cols-1';
     if (count === 1) return 'grid-cols-1 max-w-3xl mx-auto';
@@ -30,18 +32,16 @@ export function formatFechaEntrega(fechaStr?: string): string {
     const date = new Date(fechaStr);
     if (isNaN(date.getTime())) return '';
     
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
-    
-    let hours = date.getHours();
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const ampm = hours >= 12 ? 'pm' : 'am';
-    hours = hours % 12;
-    hours = hours ? hours : 12; // 0 hour should be 12
-    const formattedHours = String(hours).padStart(2, '0');
-    
-    return `${day}/${month}/${year} ${formattedHours}:${minutes}${ampm}`;
+    // Formato con soporte de zona horaria local consistente
+    return new Intl.DateTimeFormat('es-CR', {
+        timeZone: 'America/Costa_Rica',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+    }).format(date);
 }
 
 export function calculateAssignmentDurations(ass: any, docsForAss: any[]) {
@@ -58,25 +58,25 @@ export function calculateAssignmentDurations(ass: any, docsForAss: any[]) {
     let returnMins = 0;
     let totalMins = 0;
 
-    if (start) {
-        const endDelivery = returnStart || completed || now;
-        activeDeliveryMins = Math.round((endDelivery - start) / (1000 * 60));
+    if (start && !isNaN(start)) {
+        const endDelivery = (returnStart && !isNaN(returnStart)) ? returnStart : ((completed && !isNaN(completed)) ? completed : now);
+        activeDeliveryMins = Math.max(0, Math.round((endDelivery - start) / (1000 * 60)));
         const hrs = Math.floor(activeDeliveryMins / 60);
         const mins = activeDeliveryMins % 60;
         activeDeliveryTime = `${hrs}h ${mins}m`;
     }
 
-    if (returnStart) {
-        const endReturn = completed || now;
-        returnMins = Math.round((endReturn - returnStart) / (1000 * 60));
+    if (returnStart && !isNaN(returnStart)) {
+        const endReturn = (completed && !isNaN(completed)) ? completed : now;
+        returnMins = Math.max(0, Math.round((endReturn - returnStart) / (1000 * 60)));
         const hrs = Math.floor(returnMins / 60);
         const mins = returnMins % 60;
         returnTime = `${hrs}h ${mins}m`;
     }
 
-    if (start) {
-        const endTotal = completed || now;
-        totalMins = Math.round((endTotal - start) / (1000 * 60));
+    if (start && !isNaN(start)) {
+        const endTotal = (completed && !isNaN(completed)) ? completed : now;
+        totalMins = Math.max(0, Math.round((endTotal - start) / (1000 * 60)));
         const hrs = Math.floor(totalMins / 60);
         const mins = totalMins % 60;
         totalTime = `${hrs}h ${mins}m`;
@@ -88,6 +88,7 @@ export function calculateAssignmentDurations(ass: any, docsForAss: any[]) {
     const clientStopsMap: Record<string, any> = {};
     for (const doc of completedDocs) {
         const time = new Date(doc.fecha_entrega).getTime();
+        if (isNaN(time)) continue;
         if (!clientStopsMap[doc.cliente_nombre]) {
             clientStopsMap[doc.cliente_nombre] = {
                 cliente_nombre: doc.cliente_nombre,
@@ -119,8 +120,8 @@ export function calculateAssignmentDurations(ass: any, docsForAss: any[]) {
     for (let i = 0; i < stops.length; i++) {
         const stop: any = stops[i];
         let transitStr = "N/A";
-        if (prevTime) {
-            const transitMins = Math.round((stop.time - prevTime) / (1000 * 60));
+        if (prevTime && !isNaN(prevTime)) {
+            const transitMins = Math.max(0, Math.round((stop.time - prevTime) / (1000 * 60)));
             transitStr = `${transitMins} min`;
         }
         stopsWithTransit.push({
@@ -131,8 +132,8 @@ export function calculateAssignmentDurations(ass: any, docsForAss: any[]) {
     }
 
     let returnTransit = "N/A";
-    if (prevTime && returnStart) {
-        const returnStartMins = Math.round((returnStart - prevTime) / (1000 * 60));
+    if (prevTime && returnStart && !isNaN(prevTime) && !isNaN(returnStart)) {
+        const returnStartMins = Math.max(0, Math.round((returnStart - prevTime) / (1000 * 60)));
         returnTransit = `${returnStartMins} min`;
     }
 
@@ -148,3 +149,37 @@ export function calculateAssignmentDurations(ass: any, docsForAss: any[]) {
         totalMins
     };
 }
+
+/**
+ * Normaliza una cadena de fotos (sea un nombre simple, URL completa, Base64 o array JSON '["foto1.jpg", "foto2.jpg"]')
+ * devolviendo siempre un array de URLs válidas para el visor.
+ */
+export function parsePhotoUrls(raw?: string | null): string[] {
+    if (!raw || !raw.trim()) return [];
+    const trimmed = raw.trim();
+
+    if (trimmed.startsWith('[') && trimmed.endsWith(']')) {
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                return parsed.map((item: string) => {
+                    const cleanItem = String(item).trim();
+                    if (cleanItem.startsWith('http://') || cleanItem.startsWith('https://') || cleanItem.startsWith('data:')) {
+                        return cleanItem;
+                    }
+                    return `/api/fleet/files/${cleanItem}`;
+                });
+            }
+            return [];
+        } catch (_) {
+            return [];
+        }
+    }
+
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:')) {
+        return [trimmed];
+    }
+
+    return [`/api/fleet/files/${trimmed}`];
+}
+

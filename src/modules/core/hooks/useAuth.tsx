@@ -5,7 +5,7 @@
  */
 'use client';
 
-import React, { createContext, useState, useContext, ReactNode, FC, useEffect, useCallback } from "react";
+import React, { createContext, useState, useContext, ReactNode, FC, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import type { User, Role, Company, Product, StockInfo, Customer, Exemption, ExemptionLaw, Notification, WarehouseLocation, WarehouseInventoryItem, ItemLocation, Warehouse } from "../types";
 import { getCurrentUser as getCurrentUserClient, getInitialAuthData, logout as clientLogout } from '../lib/auth-client';
@@ -193,7 +193,7 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
   }
   }, []);
   
-  const redirectAfterLogin = (path?: string) => {
+  const redirectAfterLogin = useCallback((path?: string) => {
     const stored = safeInternalPath(sessionStorage.getItem(REDIRECT_URL_KEY));
     sessionStorage.removeItem(REDIRECT_URL_KEY);
     const destination = stored ?? path ?? "/dashboard";
@@ -201,15 +201,15 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
     // Use window.location.href for a full page reload to ensure session is picked up.
     // This avoids issues with client-side router cache and iframe contexts.
     window.location.href = destination;
-  };
+  }, []);
 
-  const handleLogout = async () => {
+  const handleLogout = useCallback(async () => {
     await clientLogout();
     setUser(null);
     setUserRole(null);
     // Force a full page reload to the login page
     window.location.href = '/';
-  };
+  }, []);
 
   useEffect(() => {
     loadAuthData().catch(err => {
@@ -232,7 +232,7 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
     }
   }, [user, isAuthReady, updateUnreadSuggestionsCount, fetchUnreadNotifications]);
 
-  const contextValue: AuthContextType = {
+  const contextValue = useMemo<AuthContextType>(() => ({
     user, userRole, companyData, customers, products, stockLevels,
     allExemptions, exemptionLaws, allLocations, allInventory, allItemLocations,
     stockSettings, isAuthReady, exchangeRateData, unreadSuggestionsCount,
@@ -240,7 +240,14 @@ export const AuthProvider: FC<{ children: ReactNode }> = ({ children }) => {
     refreshAuth: loadAuthData, redirectAfterLogin, logout: handleLogout,
     refreshExchangeRate: fetchExchangeRate, setCompanyData,
     updateUnreadSuggestionsCount, hasPermission,
-  };
+  }), [
+    user, userRole, companyData, customers, products, stockLevels,
+    allExemptions, exemptionLaws, allLocations, allInventory, allItemLocations,
+    stockSettings, isAuthReady, exchangeRateData, unreadSuggestionsCount,
+    notifications, unreadNotificationsCount, fetchUnreadNotifications,
+    loadAuthData, redirectAfterLogin, handleLogout, fetchExchangeRate, setCompanyData,
+    updateUnreadSuggestionsCount, hasPermission,
+  ]);
 
   return (
     <AuthContext.Provider value={contextValue}>

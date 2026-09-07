@@ -21,7 +21,10 @@ import {
     getMaintenanceTypesByDept,
     addMaintenanceType,
     deleteMaintenanceType,
-    updateMaintenanceTypeAssignee
+    updateMaintenanceTypeAssignee,
+    getPartBrandsAction,
+    addPartBrandAction,
+    deletePartBrandAction
 } from '@/modules/inventory/lib/actions';
 import { Wrench, Settings, Users, Save, Check, Plus, Trash2 } from 'lucide-react';
 
@@ -65,9 +68,60 @@ export default function AdminInventorySettingsPage() {
     const [deptMaintTypes, setDeptMaintTypes] = useState<{ id: number; name: string; default_assignee_id?: number | null }[]>([]);
     const [newMaintTypeName, setNewMaintTypeName] = useState('');
     const [addingMaintType, setAddingMaintType] = useState(false);
+
+    // Part Brands State
+    const [partBrands, setPartBrands] = useState<{ id: number; name: string; description: string | null }[]>([]);
+    const [newBrandName, setNewBrandName] = useState('');
+    const [addingBrand, setAddingBrand] = useState(false);
+
+    const loadPartBrands = React.useCallback(async () => {
+        try {
+            const brands = await getPartBrandsAction();
+            setPartBrands(brands);
+        } catch (e) {
+            console.error("Error loading part brands:", e);
+        }
+    }, []);
+
+    const handleAddPartBrand = async () => {
+        if (!newBrandName.trim()) return;
+        setAddingBrand(true);
+        try {
+            const res = await addPartBrandAction(newBrandName.trim());
+            if (res.success) {
+                toast({ title: 'Éxito', description: 'Marca agregada al catálogo.' });
+                setNewBrandName('');
+                await loadPartBrands();
+            } else {
+                toast({ variant: 'destructive', title: 'Error', description: res.error || 'No se pudo agregar la marca.' });
+            }
+        } catch (e: any) {
+            toast({ variant: 'destructive', title: 'Error', description: e.message });
+        } finally {
+            setAddingBrand(false);
+        }
+    };
+
+    const handleDeletePartBrand = async (id: number) => {
+        try {
+            const res = await deletePartBrandAction(id);
+            if (res.success) {
+                toast({ title: 'Éxito', description: 'Marca eliminada del catálogo.' });
+                await loadPartBrands();
+            } else {
+                toast({ variant: 'destructive', title: 'Error', description: res.error || 'No se pudo eliminar la marca.' });
+            }
+        } catch (e: any) {
+            toast({ variant: 'destructive', title: 'Error', description: e.message });
+        }
+    };
+
     useEffect(() => {
         setTitle("Configuración de Inventarios y Tickets");
-    }, [setTitle]);
+        if (isAuthorized) {
+            loadPartBrands();
+        }
+    }, [setTitle, isAuthorized, loadPartBrands]);
 
     // Load static departments
     const loadDepartmentsData = React.useCallback(async () => {
@@ -261,7 +315,7 @@ export default function AdminInventorySettingsPage() {
     }
 
     return (
-        <main className="flex-1 p-4 md:p-6 lg:p-8 space-y-8 animate-in fade-in duration-500">
+        <main className="flex-1 p-4 md:p-6 lg:p-8 space-y-8 animate-in fade-in duration-150">
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
                 <div className="flex items-center gap-4">
                     <div className="p-3 bg-gradient-to-tr from-purple-600 to-indigo-500 rounded-2xl text-white shadow-lg">
@@ -527,6 +581,71 @@ export default function AdminInventorySettingsPage() {
                                     className="bg-purple-600 hover:bg-purple-700 text-white shadow-md text-xs font-semibold px-3 h-10"
                                 >
                                     <Plus className="w-4 h-4" />
+                                </Button>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* NUEVA TARJETA: MARCAS DE REPUESTOS / REFACCIONES */}
+                    <Card className="shadow-md border-indigo-200 dark:border-indigo-900 bg-indigo-50/10 col-span-1 md:col-span-2">
+                        <CardHeader className="pb-3">
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <CardTitle className="text-base font-bold flex items-center gap-2 text-indigo-900 dark:text-indigo-300">
+                                        🏷️ Catálogo de Marcas de Repuestos / Refacciones
+                                    </CardTitle>
+                                    <CardDescription className="text-xs">
+                                        Administre las marcas de piezas, filtros y consumibles (ej. Donaldson, Fleetguard, Mobil, Shell, Bosch) para su asignación en inventario y compatibilidad de vehículos.
+                                    </CardDescription>
+                                </div>
+                                <span className="text-xs font-mono font-bold bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300 px-2.5 py-1 rounded-full">
+                                    {partBrands.length} marcas
+                                </span>
+                            </div>
+                        </CardHeader>
+                        <CardContent className="space-y-4">
+                            <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-3 bg-background rounded-xl border">
+                                {partBrands.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground italic p-2">No hay marcas de repuestos registradas. Agregue la primera abajo.</p>
+                                ) : (
+                                    partBrands.map((b) => (
+                                        <div key={b.id} className="flex items-center gap-1.5 bg-muted/60 hover:bg-muted font-bold text-xs px-3 py-1.5 rounded-lg border shadow-sm transition-all">
+                                            <span>{b.name}</span>
+                                            <Button
+                                                type="button"
+                                                size="icon"
+                                                variant="ghost"
+                                                onClick={() => handleDeletePartBrand(b.id)}
+                                                className="h-5 w-5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-full"
+                                            >
+                                                <Trash2 className="w-3 h-3" />
+                                            </Button>
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+
+                            <div className="flex gap-2">
+                                <Input
+                                    placeholder="Ej: Donaldson, Fleetguard, Mobil, Shell, Bosch..."
+                                    value={newBrandName}
+                                    onChange={(e) => setNewBrandName(e.target.value)}
+                                    className="bg-white dark:bg-slate-950 text-xs font-bold"
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            e.preventDefault();
+                                            handleAddPartBrand();
+                                        }
+                                    }}
+                                />
+                                <Button
+                                    type="button"
+                                    onClick={handleAddPartBrand}
+                                    disabled={addingBrand || !newBrandName.trim()}
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-md text-xs font-bold px-4 h-10 gap-1.5 shrink-0"
+                                >
+                                    {addingBrand ? <Plus className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                                    Agregar Marca
                                 </Button>
                             </div>
                         </CardContent>

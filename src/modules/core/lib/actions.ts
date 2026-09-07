@@ -5,7 +5,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { importAllData, getPaginatedCustomers, getCustomerShipmentAddresses, updateShipmentAddressCoordinates } from './db';
+import { getDb, importAllData, getPaginatedCustomers, getCustomerShipmentAddresses, updateShipmentAddressCoordinates, getPaginatedSuppliers, updateSupplierCoordinates } from './db';
 import { logWarn } from './logger';
 import { Customer } from '@/modules/core/types';
 import { authorizeAction } from './auth-guard';
@@ -63,7 +63,55 @@ export async function getCustomerShipmentAddressesAction(clienteId: string): Pro
     return await getCustomerShipmentAddresses(clienteId);
 }
 
-export async function updateShipmentAddressCoordinatesAction(clienteId: string, direccionId: string, latitude: number | null, longitude: number | null): Promise<void> {
+export async function updateShipmentAddressCoordinatesAction(
+    clienteId: string, 
+    direccionId: string, 
+    latitude: number | null, 
+    longitude: number | null,
+    emailNotificacion?: string | null
+): Promise<void> {
     await authorizeAction('deliveries:customers');
-    return await updateShipmentAddressCoordinates(clienteId, direccionId, latitude, longitude);
+    return await updateShipmentAddressCoordinates(clienteId, direccionId, latitude, longitude, emailNotificacion);
+}
+
+export async function getPaginatedSuppliersAction(search?: string, page?: number, pageSize?: number, hasLocationOnly?: boolean): Promise<{ suppliers: any[]; totalCount: number; totalPages: number }> {
+    await authorizeAction('deliveries:customers');
+    return await getPaginatedSuppliers(search, page, pageSize, hasLocationOnly);
+}
+
+export async function updateSupplierCoordinatesAction(
+    supplierId: string,
+    latitude: number | null,
+    longitude: number | null
+): Promise<void> {
+    await authorizeAction('deliveries:customers');
+    return await updateSupplierCoordinates(supplierId, latitude, longitude);
+}
+
+export async function searchProductsAction(query: string): Promise<{ id: string; description: string; unit?: string }[]> {
+    await authorizeAction('deliveries:collect');
+    const db = await getDb();
+    try {
+        if (!query || query.trim().length < 2) return [];
+        const s = `%${query.trim()}%`;
+        const rows = db.prepare(`
+            SELECT id, description, unit 
+            FROM core_products 
+            WHERE id LIKE ? OR description LIKE ? 
+            ORDER BY description ASC 
+            LIMIT 15
+        `).all(s, s) as any[];
+        return rows;
+    } catch (e: any) {
+        console.error("Error searching products:", e);
+        return [];
+    }
+}
+
+/**
+ * Retorna la configuración general y datos de la empresa cliente (Nombre, Cédula, Dirección, Teléfono, etc.)
+ */
+export async function getCompanySettingsAction() {
+    const { getCompanySettings } = await import('./db');
+    return await getCompanySettings();
 }

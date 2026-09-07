@@ -82,6 +82,7 @@ import { generateDocument } from '@/modules/core/lib/pdf-generator';
 import jsPDF from 'jspdf';
 import { useAuth } from '@/modules/core/hooks/useAuth';
 import { syncAllData } from '@/modules/core/lib/actions';
+import { getLocalDateStr } from '@/modules/operations/lib/utils';
 
 
 export default function OperationDispatchPage() {
@@ -111,7 +112,6 @@ export default function OperationDispatchPage() {
     const [searchQuery, setSearchQuery] = useState('');
     const [destinationAssignment, setDestinationAssignment] = useState<string>('');
     const [refreshIntervalSec, setRefreshIntervalSec] = useState<number>(30); // Default 30s
-    const [secondsToNextRefresh, setSecondsToNextRefresh] = useState<number>(30);
 
     // Sync Date Slicing States (v2.3)
     const [syncFilterType, setSyncFilterType] = useState<'none' | 'days' | 'range'>('days');
@@ -120,19 +120,20 @@ export default function OperationDispatchPage() {
     const [syncEndDate, setSyncEndDate] = useState<string>('');
     const [omitCreditNotes, setOmitCreditNotes] = useState<boolean>(true);
     const [showOnlyCollect, setShowOnlyCollect] = useState<boolean>(false);
+    const [showOnlyIncompleteWithBoleta, setShowOnlyIncompleteWithBoleta] = useState<boolean>(false);
 
     const [visibleCount, setVisibleCount] = useState<number>(100);
 
     useEffect(() => {
         setVisibleCount(100);
-    }, [searchQuery, omitCreditNotes, showOnlyCollect]);
+    }, [searchQuery, omitCreditNotes, showOnlyCollect, showOnlyIncompleteWithBoleta]);
 
     // Purging and bulk delivering states (v4.0)
     const [purgingDialogOpen, setPurgingDialogOpen] = useState<boolean>(false);
     const [purgeCutoffDate, setPurgeCutoffDate] = useState<string>(() => {
         const yesterday = new Date();
         yesterday.setDate(yesterday.getDate() - 1);
-        return yesterday.toISOString().split('T')[0];
+        return getLocalDateStr(yesterday);
     });
     const [processingPurge, setProcessingPurge] = useState<boolean>(false);
     const [processingBatchDeliver, setProcessingBatchDeliver] = useState<boolean>(false);
@@ -176,7 +177,12 @@ export default function OperationDispatchPage() {
                 getVehicles(),
                 getDeliveryRoutes()
             ]);
-            setQueue(q || []);
+            const newQueue = q || [];
+            setQueue(newQueue);
+            setSelectedDocIds(prev => {
+                const validIds = new Set(newQueue.map((item: any) => item.id));
+                return prev.filter(id => validIds.has(id));
+            });
             setAssignedDocs(ad || []);
             setAssignments(a || []);
             setDrivers(d || []);
@@ -207,23 +213,16 @@ export default function OperationDispatchPage() {
         }
     }, [toast, backgroundRefresh, authLoading, isAuthorized]);
 
-    // Timer effect for Auto-Refresh countdown
+    // Timer effect for Auto-Refresh (Optimizado: refresca cada X segundos sin forzar re-render de 1s en toda la página)
     useEffect(() => {
         if (refreshIntervalSec === 0 || !isAuthorized) return;
 
-        setSecondsToNextRefresh(refreshIntervalSec);
+        const timer = setInterval(() => {
+            if (typeof document !== 'undefined' && document.hidden) return;
+            backgroundRefresh();
+        }, refreshIntervalSec * 1000);
 
-        const countdownTimer = setInterval(() => {
-            setSecondsToNextRefresh((prev) => {
-                if (prev <= 1) {
-                    backgroundRefresh();
-                    return refreshIntervalSec;
-                }
-                return prev - 1;
-            });
-        }, 1000);
-
-        return () => clearInterval(countdownTimer);
+        return () => clearInterval(timer);
     }, [refreshIntervalSec, backgroundRefresh, isAuthorized]);
 
     // Load Boleta Preview and Client Emails on selection
@@ -269,16 +268,20 @@ export default function OperationDispatchPage() {
     const handleDownloadPdf = () => {
         if (!selectedBoletaDoc) return;
 
-        const assignment = assignments.find(a => a.id === selectedBoletaDoc.asignacion_id);
+        const targetAssignmentId = selectedBoletaDoc.asignacion_id || selectedBoletaDoc.devolucion_asignacion_id;
+        const assignment = assignments.find(a => a.id === targetAssignmentId);
         const routeName = assignment?.ruta_nombre || assignment?.name || 'Sin Asignar';
         const driverName = assignment?.chofer_nombre || assignment?.driver_name || 'Sin Asignar';
 
         const dateStr = new Date(selectedBoletaDoc.created_at || Date.now()).toLocaleDateString('es-CR', { timeZone: 'America/Costa_Rica' });
         
         let parsedDetails: any = {};
-        if (selectedBoletaDoc.tipo_documento === 'recoger') {
+        if (selectedBoletaDoc.comentario) {
             try {
-                parsedDetails = JSON.parse(selectedBoletaDoc.comentario);
+                const parsed = JSON.parse(selectedBoletaDoc.comentario);
+                if (parsed && typeof parsed === 'object') {
+                    parsedDetails = parsed;
+                }
             } catch (e) {}
         }
 
@@ -291,12 +294,12 @@ export default function OperationDispatchPage() {
             ? "Este documento autoriza al transportista asignado a retirar la mercancía del proveedor detallado para su posterior entrega en el punto de destino indicado."
             : "Este documento registra el retorno físico de la mercancía correspondiente al pedido a nuestras bodegas de origen. Se procederá con la anulación del despacho y/o la generación de la nota de crédito respectiva según políticas vigentes.";
 
-        const companyDataToUse = companyData || {
-            name: 'Industrias Garend S.A.',
-            taxId: '3101133082',
-            address: 'Alajuela, Poás, Carrillos bajo, del EBAIS 700 oeste.',
-            phone: '+506 2458-4343',
-            email: 'ventas@industriasgarend.com'
+        const companyDataToUse = {
+            name: companyData?.name || 'Compañía Emisora',
+            taxId: companyData?.taxId || 'N/D',
+            address: companyData?.address || '',
+            phone: companyData?.phone || '',
+            email: companyData?.email || ''
         };
 
         const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
@@ -938,6 +941,11 @@ export default function OperationDispatchPage() {
         const docNum = doc?.documento_numero || '';
         const isRetry = docNum.endsWith('-RETRY');
         const isPartial = docNum.endsWith('-PARTIAL');
+        const hasBoletaOrReinjection = isRetry || isPartial || !!doc?.devolucion_asignacion_id || !!doc?.boleta_numero;
+
+        if (showOnlyIncompleteWithBoleta && !hasBoletaOrReinjection) {
+            return false;
+        }
         
         const matchesQuery = searchQuery.toLowerCase();
         let matchesStatus = false;
@@ -954,6 +962,16 @@ export default function OperationDispatchPage() {
             (doc?.cliente_id || '').toLowerCase().includes(matchesQuery) ||
             matchesStatus
         );
+    }).sort((a, b) => {
+        // Los pedidos incompletos / reintentos con boleta se muestran de primero siempre en la lista
+        const aDocNum = a?.documento_numero || '';
+        const bDocNum = b?.documento_numero || '';
+        const aIsPriority = aDocNum.endsWith('-PARTIAL') || aDocNum.endsWith('-RETRY') || !!a?.devolucion_asignacion_id;
+        const bIsPriority = bDocNum.endsWith('-PARTIAL') || bDocNum.endsWith('-RETRY') || !!b?.devolucion_asignacion_id;
+
+        if (aIsPriority && !bIsPriority) return -1;
+        if (!aIsPriority && bIsPriority) return 1;
+        return 0;
     });
 
     const displayedQueue = filteredQueue.slice(0, visibleCount);
@@ -1009,7 +1027,7 @@ export default function OperationDispatchPage() {
                             <span className="flex items-center gap-1.5 text-muted-foreground">
                                 <RefreshCw className={`w-3 h-3 ${refreshIntervalSec > 0 ? 'animate-spin text-emerald-500' : 'text-muted-foreground'}`} style={{ animationDuration: refreshIntervalSec > 0 ? '3s' : undefined }} />
                                 {refreshIntervalSec > 0 ? (
-                                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-extrabold animate-pulse">🔴 EN VIVO ({secondsToNextRefresh}s)</span>
+                                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-extrabold animate-pulse">🔴 EN VIVO ({refreshIntervalSec}s)</span>
                                 ) : (
                                     <span className="text-[10px] text-muted-foreground font-extrabold">Refresco</span>
                                 )}
@@ -1269,7 +1287,10 @@ export default function OperationDispatchPage() {
                                 <Checkbox
                                     id="show-only-collect"
                                     checked={showOnlyCollect}
-                                    onCheckedChange={(checked) => setShowOnlyCollect(!!checked)}
+                                    onCheckedChange={(checked) => {
+                                        setShowOnlyCollect(!!checked);
+                                        if (checked) setShowOnlyIncompleteWithBoleta(false);
+                                    }}
                                     className="data-[state=checked]:bg-purple-600 data-[state=checked]:border-purple-600"
                                 />
                                 <Label 
@@ -1277,6 +1298,24 @@ export default function OperationDispatchPage() {
                                     className="text-[11px] font-extrabold text-purple-700 dark:text-purple-400 cursor-pointer select-none leading-none"
                                 >
                                     Mostrar Solo Recolectas de Proveedor
+                                </Label>
+                            </div>
+
+                            <div className="flex items-center gap-2 pt-1.5 px-1">
+                                <Checkbox
+                                    id="show-only-incomplete-boleta"
+                                    checked={showOnlyIncompleteWithBoleta}
+                                    onCheckedChange={(checked) => {
+                                        setShowOnlyIncompleteWithBoleta(!!checked);
+                                        if (checked) setShowOnlyCollect(false);
+                                    }}
+                                    className="data-[state=checked]:bg-amber-600 data-[state=checked]:border-amber-600"
+                                />
+                                <Label 
+                                    htmlFor="show-only-incomplete-boleta" 
+                                    className="text-[11px] font-extrabold text-amber-700 dark:text-amber-400 cursor-pointer select-none leading-none"
+                                >
+                                    Mostrar solo incompletos con boleta (Reentregas)
                                 </Label>
                             </div>
 

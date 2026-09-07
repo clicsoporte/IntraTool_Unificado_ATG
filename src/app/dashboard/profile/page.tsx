@@ -18,6 +18,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/modules/core/hooks/use-toast";
 import type { User } from "@/modules/core/types";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -29,8 +31,9 @@ import { getMyAssignedAssets } from "@/modules/it-tools/lib/actions";
 import { usePageTitle } from "@/modules/core/hooks/usePageTitle";
 import { useDropzone } from "react-dropzone";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
-import { Camera, Laptop, Smartphone, Calendar as CalendarIcon } from "lucide-react";
+import { Camera, Laptop, Smartphone, Calendar as CalendarIcon, Lock, Bell, Mail, Send, Truck, Wrench, TicketCheck, ShieldCheck, CheckCircle2, AlertTriangle, XCircle, FileSpreadsheet } from "lucide-react";
 import { useAuth } from "@/modules/core/hooks/useAuth";
+import { useAuthorization } from "@/modules/core/hooks/useAuthorization";
 import { getInitials } from "@/lib/utils";
 
 /**
@@ -41,6 +44,7 @@ import { getInitials } from "@/lib/utils";
 export default function ProfilePage() {
   const { toast } = useToast();
   const { user, isAuthReady, refreshAuth } = useAuth();
+  const { hasPermission } = useAuthorization(['users:edit:erp-alias']);
   const { setTitle } = usePageTitle();
   
   const [formData, setFormData] = useState({
@@ -52,7 +56,28 @@ export default function ProfilePage() {
       avatar: ""
   });
   
-  const [deliveryNotifications, setDeliveryNotifications] = useState(false);
+  // Notification Preferences State (Multi-Module Granular)
+  const [notifPrefs, setNotifPrefs] = useState({
+      master: true,
+      // Channels
+      channelEmail: true,
+      channelTelegram: true,
+      channelSms: true,
+      // Logistics / Deliveries
+      deliveryCompleted: true,
+      deliveryIncomplete: true,
+      deliveryRejected: true,
+      routeFinalized: false,
+      // Fleet
+      fleetMaintenance: true,
+      fleetPermits: true,
+      fleetFuelAnomalies: true,
+      // Tickets & IT
+      ticketsAssigned: true,
+      ticketsStatusChange: true,
+      ticketsUrgent: true,
+  });
+  
   const [employeeDetails, setEmployeeDetails] = useState<any>(null);
   const [loadingEmployee, setLoadingEmployee] = useState(false);
   const [myAssets, setMyAssets] = useState<any[]>([]);
@@ -76,12 +101,57 @@ export default function ProfilePage() {
             erpAlias: user.erpAlias || "",
             avatar: user.avatar || ""
         });
-        // Fetch contact governance preference
-        getUserPreference(user.id, 'ops_delivery_notifications_enabled').then(pref => {
-            setDeliveryNotifications(pref === true || pref === 'true');
-        }).catch(err => {
-            console.error('Failed to load user preference:', err);
-        });
+        
+        // Fetch Granular Notification Preferences
+        const keys = [
+            'notif_master',
+            'notif_channel_email',
+            'notif_channel_telegram',
+            'notif_channel_sms',
+            'ops_notif_delivery_completed',
+            'ops_notif_delivery_incomplete',
+            'ops_notif_delivery_rejected',
+            'ops_notif_route_finalized',
+            'fleet_notif_maintenance',
+            'fleet_notif_permits',
+            'fleet_notif_fuel_anomalies',
+            'tickets_notif_assigned',
+            'tickets_notif_status_change',
+            'tickets_notif_urgent',
+            // legacy fallback
+            'ops_delivery_notifications_enabled'
+        ];
+
+        Promise.all(keys.map(k => getUserPreference(user.id, k)))
+            .then(([
+                master, chEmail, chTelegram, chSms,
+                delComp, delIncomp, delRej, rtFin,
+                fltMaint, fltPermits, fltFuel,
+                tktAssigned, tktStatus, tktUrgent,
+                legacyOps
+            ]) => {
+                const legacyVal = legacyOps !== null ? (legacyOps === true || legacyOps === 'true') : true;
+
+                setNotifPrefs({
+                    master: master !== null ? (master === true || master === 'true') : legacyVal,
+                    channelEmail: chEmail !== null ? (chEmail === true || chEmail === 'true') : true,
+                    channelTelegram: chTelegram !== null ? (chTelegram === true || chTelegram === 'true') : true,
+                    channelSms: chSms !== null ? (chSms === true || chSms === 'true') : true,
+                    deliveryCompleted: delComp !== null ? (delComp === true || delComp === 'true') : legacyVal,
+                    deliveryIncomplete: delIncomp !== null ? (delIncomp === true || delIncomp === 'true') : true,
+                    deliveryRejected: delRej !== null ? (delRej === true || delRej === 'true') : true,
+                    routeFinalized: rtFin !== null ? (rtFin === true || rtFin === 'true') : false,
+                    fleetMaintenance: fltMaint !== null ? (fltMaint === true || fltMaint === 'true') : true,
+                    fleetPermits: fltPermits !== null ? (fltPermits === true || fltPermits === 'true') : true,
+                    fleetFuelAnomalies: fltFuel !== null ? (fltFuel === true || fltFuel === 'true') : true,
+                    ticketsAssigned: tktAssigned !== null ? (tktAssigned === true || tktAssigned === 'true') : true,
+                    ticketsStatusChange: tktStatus !== null ? (tktStatus === true || tktStatus === 'true') : true,
+                    ticketsUrgent: tktUrgent !== null ? (tktUrgent === true || tktUrgent === 'true') : true,
+                });
+            })
+            .catch(err => {
+                console.error('Failed to load user notification preferences:', err);
+            });
 
         // Load assigned IT assets
         setLoadingAssets(true);
@@ -158,32 +228,17 @@ export default function ProfilePage() {
           toast({ title: "Error", description: "Por favor, complete todos los campos de contraseña para cambiarla.", variant: "destructive" });
           return;
       }
-
-      const isMatch = await comparePasswords(user.id, passwords.current);
-      if (!isMatch) {
-        toast({
-          title: "Error de Contraseña",
-          description: "La contraseña actual no es correcta.",
-          variant: "destructive",
-        });
-        return;
-      }
-      if (passwords.new.length < 6) {
-        toast({
-          title: "Contraseña Débil",
-          description: "La nueva contraseña debe tener al menos 6 caracteres.",
-          variant: "destructive",
-        });
-        return;
-      }
       if (passwords.new !== passwords.confirm) {
-          toast({
-              title: "Error de Contraseña",
-              description: "Las nuevas contraseñas no coinciden.",
-              variant: "destructive",
-          });
+          toast({ title: "Error", description: "La nueva contraseña y la confirmación no coinciden.", variant: "destructive" });
           return;
       }
+      
+      const isCurrentPasswordCorrect = await comparePasswords(user.id, passwords.current);
+      if (!isCurrentPasswordCorrect) {
+          toast({ title: "Error de Autenticación", description: "La contraseña actual es incorrecta.", variant: "destructive" });
+          return;
+      }
+
       updateData.password = passwords.new;
       toast({
         title: "Contraseña Actualizada",
@@ -199,12 +254,28 @@ export default function ProfilePage() {
             throw new Error(res.error);
         }
         
-        // Save preference
-        await saveUserPreference(user.id, 'ops_delivery_notifications_enabled', deliveryNotifications);
+        // Save Granular Notification Preferences
+        await Promise.all([
+            saveUserPreference(user.id, 'notif_master', notifPrefs.master),
+            saveUserPreference(user.id, 'notif_channel_email', notifPrefs.channelEmail),
+            saveUserPreference(user.id, 'notif_channel_telegram', notifPrefs.channelTelegram),
+            saveUserPreference(user.id, 'ops_notif_delivery_completed', notifPrefs.deliveryCompleted),
+            saveUserPreference(user.id, 'ops_notif_delivery_incomplete', notifPrefs.deliveryIncomplete),
+            saveUserPreference(user.id, 'ops_notif_delivery_rejected', notifPrefs.deliveryRejected),
+            saveUserPreference(user.id, 'ops_notif_route_finalized', notifPrefs.routeFinalized),
+            saveUserPreference(user.id, 'fleet_notif_maintenance', notifPrefs.fleetMaintenance),
+            saveUserPreference(user.id, 'fleet_notif_permits', notifPrefs.fleetPermits),
+            saveUserPreference(user.id, 'fleet_notif_fuel_anomalies', notifPrefs.fleetFuelAnomalies),
+            saveUserPreference(user.id, 'tickets_notif_assigned', notifPrefs.ticketsAssigned),
+            saveUserPreference(user.id, 'tickets_notif_status_change', notifPrefs.ticketsStatusChange),
+            saveUserPreference(user.id, 'tickets_notif_urgent', notifPrefs.ticketsUrgent),
+            // Maintain legacy compatibility key
+            saveUserPreference(user.id, 'ops_delivery_notifications_enabled', notifPrefs.master && notifPrefs.deliveryCompleted)
+        ]);
         
         toast({
           title: "Perfil Actualizado",
-          description: "Tu información ha sido guardada exitosamente.",
+          description: "Tu información y preferencias de notificación han sido guardadas exitosamente.",
         });
         await refreshAuth();
     } catch (error: any) {
@@ -231,48 +302,60 @@ export default function ProfilePage() {
                         <Skeleton className="h-10 w-full" />
                     </CardContent>
                     <CardFooter className="border-t px-6 py-4">
-                        <Button disabled>Guardar Cambios</Button>
+                        <Skeleton className="h-10 w-24" />
                     </CardFooter>
                 </Card>
             </div>
         </main>
-    )
+    );
   }
 
-
   return (
-      <main className="flex-1 p-4 md:p-6 lg:p-8">
-        <div className="mx-auto max-w-2xl">
-          <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
-            <Card>
-              <CardHeader>
-                <div className="flex flex-col sm:flex-row items-center gap-6">
-                  <div {...getRootProps()} className="relative group cursor-pointer">
-                    <input {...getInputProps()} />
-                    <Avatar className="h-24 w-24 text-4xl">
-                        <AvatarImage src={formData.avatar} alt={formData.name} />
-                        <AvatarFallback>{getInitials(formData.name)}</AvatarFallback>
-                    </Avatar>
-                    <div className="absolute inset-0 bg-black/50 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                        <Camera className="h-8 w-8 text-white" />
-                    </div>
-                  </div>
-                  <div>
-                    <CardTitle>Mi Perfil</CardTitle>
-                    <CardDescription>
-                      Actualiza tu información personal y foto. Estos datos se usarán en las
-                      cotizaciones si así lo especificas.
-                    </CardDescription>
-                  </div>
+    <main className="flex-1 p-4 md:p-6 lg:p-8">
+      <div className="mx-auto max-w-3xl space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Mi Perfil</h1>
+          <p className="text-sm text-muted-foreground">
+            Administra tu información personal, seguridad y preferencias de notificaciones.
+          </p>
+        </div>
+
+        <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
+          <Card>
+            <CardHeader>
+              <CardTitle>Información Personal</CardTitle>
+              <CardDescription>
+                Actualiza tu foto, datos de contacto y credenciales de acceso.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex flex-col sm:flex-row items-center gap-6">
+                <Avatar className="h-24 w-24 border-2 border-primary/20 shadow-md">
+                  <AvatarImage src={formData.avatar} alt={formData.name} />
+                  <AvatarFallback className="text-2xl font-bold bg-primary/10 text-primary">
+                    {getInitials(formData.name)}
+                  </AvatarFallback>
+                </Avatar>
+                <div {...getRootProps()} className="flex-1 cursor-pointer border-2 border-dashed border-muted hover:border-primary/50 transition-colors rounded-xl p-4 text-center">
+                  <input {...getInputProps()} />
+                  <Camera className="mx-auto h-6 w-6 text-muted-foreground mb-1" />
+                  <p className="text-xs font-semibold text-foreground">
+                    Arrastra una foto aquí o haz clic para seleccionarla
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    Formatos: JPG, PNG o WEBP (máx. 2MB)
+                  </p>
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="name">Nombre</Label>
+                  <Label htmlFor="name">Nombre Completo</Label>
                   <Input
                     id="name"
                     value={formData.name}
                     onChange={handleProfileChange}
+                    className="font-medium"
                   />
                 </div>
                 <div className="space-y-2">
@@ -282,154 +365,343 @@ export default function ProfilePage() {
                     type="email"
                     value={formData.email}
                     onChange={handleProfileChange}
+                    className="font-medium"
                   />
                 </div>
-                 <div className="space-y-2">
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
                   <Label htmlFor="erpAlias">Alias de Usuario (ERP)</Label>
-                  <Input
-                    id="erpAlias"
-                    value={formData.erpAlias || ''}
-                    onChange={handleProfileChange}
-                    placeholder="Tu nombre de usuario en el sistema ERP"
-                  />
-                   <p className="text-xs text-muted-foreground">Este alias se usará para filtrar órdenes y solicitudes por tu usuario del ERP.</p>
-                </div>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="phone">Teléfono</Label>
-                    <Input
-                      id="phone"
-                      value={formData.phone || ''}
-                      onChange={handleProfileChange}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="whatsapp">WhatsApp</Label>
-                    <Input
-                      id="whatsapp"
-                      value={formData.whatsapp || ''}
-                      onChange={handleProfileChange}
-                    />
-                  </div>
-                </div>
-
-                <Separator className="my-6" />
-                <div className="space-y-4">
-                  <h3 className="text-lg font-medium">Preferencias de Contacto</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Gobernanza sobre tus preferencias de notificaciones y alertas.
-                  </p>
-                  <div className="flex items-center space-x-3 p-3 bg-muted/20 border border-muted/50 rounded-xl">
-                    <Checkbox 
-                      id="deliveryNotifications" 
-                      checked={deliveryNotifications} 
-                      onCheckedChange={(checked) => setDeliveryNotifications(!!checked)} 
-                    />
-                    <Label htmlFor="deliveryNotifications" className="font-normal text-xs text-foreground cursor-pointer select-none leading-tight">
-                      Recibir notificaciones por correo de mis entregas / despachos activos
-                    </Label>
-                  </div>
-                </div>
-
-                <Separator className="my-6" />
-                <div className="space-y-4">
-                    <h3 className="text-lg font-medium">Cambiar Contraseña</h3>
-                    <div className="space-y-2">
-                        <Label htmlFor="current">Contraseña Actual</Label>
-                        <Input id="current" type="password" value={passwords.current} onChange={handlePasswordChange} />
-                    </div>
-                    <div className="space-y-2">
-                        <Label htmlFor="new">Nueva Contraseña</Label>
-                        <Input id="new" type="password" value={passwords.new} onChange={handlePasswordChange}/>
-                    </div>
-                     <div className="space-y-2">
-                        <Label htmlFor="confirm">Confirmar Nueva Contraseña</Label>
-                        <Input id="confirm" type="password" value={passwords.confirm} onChange={handlePasswordChange}/>
-                    </div>
-                </div>
-              </CardContent>
-              <CardFooter className="border-t px-6 py-4">
-                <Button>Guardar Cambios</Button>
-              </CardFooter>
-            </Card>
-          </form>
-
-          {user.employeeId && (
-            <Card className="mt-6 border border-blue-100/50 shadow-sm dark:border-zinc-800">
-              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <div>
-                  <CardTitle className="text-lg font-bold flex items-center gap-2 text-primary">
-                    Expediente Laboral ERP
-                  </CardTitle>
-                  <CardDescription>
-                    Información de planilla y contratación sincronizada
-                  </CardDescription>
-                </div>
-                {loadingEmployee ? (
-                  <span className="text-xs text-muted-foreground animate-pulse">Cargando...</span>
-                ) : employeeDetails ? (
-                  <div className="flex items-center gap-2">
-                    <span className={`h-2.5 w-2.5 rounded-full ${employeeDetails.ACTIVO === 'S' ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
-                    <span className="text-xs font-semibold uppercase">
-                      {employeeDetails.ACTIVO === 'S' ? 'Activo' : 'Inactivo'}
+                  {!hasPermission('users:edit:erp-alias') && (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-600 dark:text-amber-400 bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
+                      <Lock className="w-3 h-3" /> Solo Lectura
                     </span>
+                  )}
+                </div>
+                <Input
+                  id="erpAlias"
+                  value={formData.erpAlias || ''}
+                  onChange={handleProfileChange}
+                  placeholder="Tu nombre de usuario en el sistema ERP"
+                  disabled={!hasPermission('users:edit:erp-alias')}
+                  className={!hasPermission('users:edit:erp-alias') ? "bg-muted/50 text-muted-foreground cursor-not-allowed font-medium" : "font-medium"}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {hasPermission('users:edit:erp-alias') ? (
+                    "Este alias se usará para asociar tus órdenes de venta, solicitudes y entregas generadas."
+                  ) : (
+                    "🔒 La edición del Alias ERP está protegida. Contacta a un administrador para modificarlo."
+                  )}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="phone" className="font-bold flex items-center justify-between">
+                    <span>Teléfono / Celular</span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-extrabold">📱 Requerido para SMS</span>
+                  </Label>
+                  <Input
+                    id="phone"
+                    value={formData.phone || ''}
+                    onChange={handleProfileChange}
+                    placeholder="Ej. +50688888888 o 88888888"
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Formato recomendado: <code className="text-indigo-600 dark:text-indigo-400 font-bold">+50688888888</code> o 8 dígitos <code className="text-indigo-600 dark:text-indigo-400 font-bold">88888888</code> (Usado para SMS del chofer).
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="whatsapp" className="font-bold">WhatsApp Notificaciones</Label>
+                  <Input
+                    id="whatsapp"
+                    value={formData.whatsapp || ''}
+                    onChange={handleProfileChange}
+                    placeholder="Ej. +50688888888"
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    Número asignado para alertas vía WhatsApp.
+                  </p>
+                </div>
+              </div>
+
+              {/* Centro de Preferencias Granulares de Notificaciones */}
+              <Separator className="my-6" />
+              
+              <div className="space-y-5">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-gradient-to-r from-blue-500/10 via-indigo-500/10 to-transparent border border-blue-500/20 rounded-2xl">
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <Bell className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                      <h3 className="text-base font-extrabold text-slate-900 dark:text-slate-100">
+                        Centro de Notificaciones y Alertas
+                      </h3>
+                    </div>
+                    <p className="text-xs text-muted-foreground font-medium">
+                      Control maestro y granular de avisos por correo y Telegram para tus actividades.
+                    </p>
                   </div>
-                ) : (
-                  <span className="text-xs text-muted-foreground">No sincronizado</span>
-                )}
-              </CardHeader>
-              <CardContent className="space-y-4 pt-4">
-                {employeeDetails ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                    <div className="space-y-1">
-                      <span className="text-xs text-muted-foreground block font-medium">Código de Empleado</span>
-                      <span className="font-mono font-semibold text-foreground">{employeeDetails.EMPLEADO}</span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-xs text-muted-foreground block font-medium">Identificación / Cédula</span>
-                      <span className="font-semibold text-foreground">{employeeDetails.IDENTIFICACION || 'N/A'}</span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-xs text-muted-foreground block font-medium">Nombre Completo</span>
-                      <span className="font-semibold text-foreground">{employeeDetails.NOMBRE}</span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-xs text-muted-foreground block font-medium">Dirección Habitación</span>
-                      <span className="font-semibold text-foreground">{employeeDetails.DIRECCION_HAB || 'N/A'}</span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-xs text-muted-foreground block font-medium">Pasaporte</span>
-                      <span className="font-semibold text-foreground">{employeeDetails.PASAPORTE || 'N/A'}</span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-xs text-muted-foreground block font-medium">País</span>
-                      <span className="font-semibold text-foreground">{employeeDetails.PAIS || 'N/A'}</span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-xs text-muted-foreground block font-medium">Permiso / Licencia de Conducir</span>
-                      <span className="font-semibold text-foreground">{employeeDetails.PERMISO_CONDUCIR || 'N/A'}</span>
-                    </div>
-                    <div className="space-y-1">
-                      <span className="text-xs text-muted-foreground block font-medium">Fecha de Ingreso</span>
-                      <span className="font-semibold text-foreground">{employeeDetails.FECHA_INGRESO || 'N/A'}</span>
-                    </div>
-                    {employeeDetails.FECHA_SALIDA && (
-                      <div className="space-y-1">
-                        <span className="text-xs text-muted-foreground block font-medium">Fecha de Salida</span>
-                        <span className="font-semibold text-rose-600 dark:text-rose-400">{employeeDetails.FECHA_SALIDA}</span>
+                  <div className="flex items-center gap-2 self-end sm:self-center">
+                    <span className="text-xs font-bold text-muted-foreground">
+                      {notifPrefs.master ? 'Todas Activas' : 'Silenciadas'}
+                    </span>
+                    <Switch
+                      checked={notifPrefs.master}
+                      onCheckedChange={(val) => setNotifPrefs(prev => ({ ...prev, master: val }))}
+                    />
+                  </div>
+                </div>
+
+                {/* Sub-paneles granulares (deshabilitados visualmente si master está apagado) */}
+                <div className={`space-y-4 transition-opacity ${notifPrefs.master ? 'opacity-100' : 'opacity-40 pointer-events-none'}`}>
+                  
+                  {/* Canales de Entrega */}
+                  <div className="p-3.5 bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 rounded-xl space-y-3">
+                    <span className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                      <ShieldCheck className="w-3.5 h-3.5 text-blue-500" />
+                      Canales de Recepción Habilitados
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div className="flex items-center justify-between p-2.5 bg-white dark:bg-slate-950 border rounded-lg">
+                        <div className="flex items-center gap-2">
+                          <Mail className="w-4 h-4 text-emerald-600" />
+                          <div className="flex flex-col">
+                            <span className="text-xs font-bold">Correo Electrónico</span>
+                            <span className="text-[10px] text-muted-foreground truncate max-w-[150px]">{formData.email || 'Sin correo'}</span>
+                          </div>
+                        </div>
+                        <Switch
+                          checked={notifPrefs.channelEmail}
+                          onCheckedChange={(val) => setNotifPrefs(prev => ({ ...prev, channelEmail: val }))}
+                        />
                       </div>
-                    )}
-                    <div className="space-y-1">
-                      <span className="text-xs text-muted-foreground block font-medium">Nómina / Puesto</span>
-                      <span className="font-semibold text-foreground">{employeeDetails.NOMINA} - {employeeDetails.PUESTO}</span>
+
+                      <div className="flex items-center justify-between p-2.5 bg-white dark:bg-slate-950 border rounded-lg">
+                        <div className="flex items-center gap-2">
+                          <Send className="w-4 h-4 text-sky-500" />
+                          <div className="flex flex-col">
+                            <span className="text-xs font-bold">Bot de Telegram</span>
+                            <span className="text-[10px] text-muted-foreground">
+                              {user.telegramChatId ? `Vinculado (${user.telegramChatId})` : 'No vinculado'}
+                            </span>
+                          </div>
+                        </div>
+                        <Switch
+                          checked={notifPrefs.channelTelegram}
+                          onCheckedChange={(val) => setNotifPrefs(prev => ({ ...prev, channelTelegram: val }))}
+                        />
+                      </div>
+
+                      <div className="flex items-center justify-between p-2.5 bg-white dark:bg-slate-950 border rounded-lg">
+                        <div className="flex items-center gap-2">
+                          <Smartphone className="w-4 h-4 text-amber-500" />
+                          <div className="flex flex-col">
+                            <span className="text-xs font-bold">Mensajes SMS</span>
+                            <span className="text-[10px] text-muted-foreground truncate max-w-[150px]">
+                              {formData.phone ? formData.phone : 'Sin celular'}
+                            </span>
+                          </div>
+                        </div>
+                        <Switch
+                          checked={notifPrefs.channelSms ?? true}
+                          onCheckedChange={(val) => setNotifPrefs(prev => ({ ...prev, channelSms: val }))}
+                        />
+                      </div>
                     </div>
                   </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">Vinculado al código {user.employeeId} pero no se encontraron datos detallados en la base de datos local.</p>
-                )}
-              </CardContent>
-            </Card>
-          )}
+
+                  {/* 1. Logística y Despachos */}
+                  <div className="p-4 border rounded-xl space-y-3 bg-card shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Truck className="w-4 h-4 text-emerald-600" />
+                        <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
+                          Logística y Entregas (Tus Facturas / Despachos)
+                        </span>
+                      </div>
+                      <Badge variant="outline" className="text-[10px] font-bold border-emerald-500/20 bg-emerald-500/5 text-emerald-600">
+                        Ventas & Facturación
+                      </Badge>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                      <div className="flex items-center space-x-2.5 p-2 rounded-lg hover:bg-muted/40 transition-colors">
+                        <Checkbox
+                          id="delComp"
+                          checked={notifPrefs.deliveryCompleted}
+                          onCheckedChange={(c) => setNotifPrefs(p => ({ ...p, deliveryCompleted: !!c }))}
+                        />
+                        <Label htmlFor="delComp" className="text-xs font-medium cursor-pointer flex items-center gap-1.5">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Entregas Completas (Exitosas)
+                        </Label>
+                      </div>
+
+                      <div className="flex items-center space-x-2.5 p-2 rounded-lg hover:bg-muted/40 transition-colors">
+                        <Checkbox
+                          id="delIncomp"
+                          checked={notifPrefs.deliveryIncomplete}
+                          onCheckedChange={(c) => setNotifPrefs(p => ({ ...p, deliveryIncomplete: !!c }))}
+                        />
+                        <Label htmlFor="delIncomp" className="text-xs font-medium cursor-pointer flex items-center gap-1.5">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-500" /> Entregas Incompletas / Parciales
+                        </Label>
+                      </div>
+
+                      <div className="flex items-center space-x-2.5 p-2 rounded-lg hover:bg-muted/40 transition-colors">
+                        <Checkbox
+                          id="delRej"
+                          checked={notifPrefs.deliveryRejected}
+                          onCheckedChange={(c) => setNotifPrefs(p => ({ ...p, deliveryRejected: !!c }))}
+                        />
+                        <Label htmlFor="delRej" className="text-xs font-medium cursor-pointer flex items-center gap-1.5">
+                          <XCircle className="w-3.5 h-3.5 text-rose-500" /> Entregas Rechazadas / Incidencias
+                        </Label>
+                      </div>
+
+                      <div className="flex items-center space-x-2.5 p-2 rounded-lg hover:bg-muted/40 transition-colors">
+                        <Checkbox
+                          id="rtFin"
+                          checked={notifPrefs.routeFinalized}
+                          onCheckedChange={(c) => setNotifPrefs(p => ({ ...p, routeFinalized: !!c }))}
+                        />
+                        <Label htmlFor="rtFin" className="text-xs font-medium cursor-pointer flex items-center gap-1.5">
+                          <FileSpreadsheet className="w-3.5 h-3.5 text-blue-500" /> Liquidación / Cierre de Hoja de Ruta
+                        </Label>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 2. Flota Vehicular */}
+                  <div className="p-4 border rounded-xl space-y-3 bg-card shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Wrench className="w-4 h-4 text-purple-600" />
+                        <span className="text-xs font-extrabold uppercase tracking-wider text-purple-800 dark:text-purple-300">
+                          Flota Vehicular & Transportes
+                        </span>
+                      </div>
+                      <Badge variant="outline" className="text-[10px] font-bold border-purple-500/20 bg-purple-500/5 text-purple-600">
+                        Operaciones
+                      </Badge>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                      <div className="flex items-center space-x-2.5 p-2 rounded-lg hover:bg-muted/40 transition-colors">
+                        <Checkbox
+                          id="fltMaint"
+                          checked={notifPrefs.fleetMaintenance}
+                          onCheckedChange={(c) => setNotifPrefs(p => ({ ...p, fleetMaintenance: !!c }))}
+                        />
+                        <Label htmlFor="fltMaint" className="text-xs font-medium cursor-pointer">
+                          🛠️ Mantenimientos Preventivos / Vencidos
+                        </Label>
+                      </div>
+
+                      <div className="flex items-center space-x-2.5 p-2 rounded-lg hover:bg-muted/40 transition-colors">
+                        <Checkbox
+                          id="fltPermits"
+                          checked={notifPrefs.fleetPermits}
+                          onCheckedChange={(c) => setNotifPrefs(p => ({ ...p, fleetPermits: !!c }))}
+                        />
+                        <Label htmlFor="fltPermits" className="text-xs font-medium cursor-pointer">
+                          📄 Vencimiento de RTV, Marchamo y Permisos
+                        </Label>
+                      </div>
+
+                      <div className="flex items-center space-x-2.5 p-2 rounded-lg hover:bg-muted/40 transition-colors sm:col-span-2">
+                        <Checkbox
+                          id="fltFuel"
+                          checked={notifPrefs.fleetFuelAnomalies}
+                          onCheckedChange={(c) => setNotifPrefs(p => ({ ...p, fleetFuelAnomalies: !!c }))}
+                        />
+                        <Label htmlFor="fltFuel" className="text-xs font-medium cursor-pointer">
+                          ⛽ Alertas de Combustible y Saltos de Odómetro
+                        </Label>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 3. Tickets y Soporte */}
+                  <div className="p-4 border rounded-xl space-y-3 bg-card shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <TicketCheck className="w-4 h-4 text-sky-600" />
+                        <span className="text-xs font-extrabold uppercase tracking-wider text-sky-800 dark:text-sky-300">
+                          Tickets & Mesa de Ayuda IT
+                        </span>
+                      </div>
+                      <Badge variant="outline" className="text-[10px] font-bold border-sky-500/20 bg-sky-500/5 text-sky-600">
+                        Soporte & Casos
+                      </Badge>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                      <div className="flex items-center space-x-2.5 p-2 rounded-lg hover:bg-muted/40 transition-colors">
+                        <Checkbox
+                          id="tktAssigned"
+                          checked={notifPrefs.ticketsAssigned}
+                          onCheckedChange={(c) => setNotifPrefs(p => ({ ...p, ticketsAssigned: !!c }))}
+                        />
+                        <Label htmlFor="tktAssigned" className="text-xs font-medium cursor-pointer">
+                          📌 Casos y Solicitudes Asignadas a Mí
+                        </Label>
+                      </div>
+
+                      <div className="flex items-center space-x-2.5 p-2 rounded-lg hover:bg-muted/40 transition-colors">
+                        <Checkbox
+                          id="tktStatus"
+                          checked={notifPrefs.ticketsStatusChange}
+                          onCheckedChange={(c) => setNotifPrefs(p => ({ ...p, ticketsStatusChange: !!c }))}
+                        />
+                        <Label htmlFor="tktStatus" className="text-xs font-medium cursor-pointer">
+                          🔄 Cambios de Estado y Nuevas Respuestas
+                        </Label>
+                      </div>
+
+                      <div className="flex items-center space-x-2.5 p-2 rounded-lg hover:bg-muted/40 transition-colors sm:col-span-2">
+                        <Checkbox
+                          id="tktUrgent"
+                          checked={notifPrefs.ticketsUrgent}
+                          onCheckedChange={(c) => setNotifPrefs(p => ({ ...p, ticketsUrgent: !!c }))}
+                        />
+                        <Label htmlFor="tktUrgent" className="text-xs font-medium cursor-pointer">
+                          🚨 Casos con Prioridad Urgente / Crítica
+                        </Label>
+                      </div>
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+
+              {/* Cambiar Contraseña */}
+              <Separator className="my-6" />
+              <div className="space-y-4">
+                <h3 className="text-lg font-medium">Seguridad y Contraseña</h3>
+                <div className="space-y-2">
+                  <Label htmlFor="current">Contraseña Actual</Label>
+                  <Input id="current" type="password" value={passwords.current} onChange={handlePasswordChange} />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="new">Nueva Contraseña</Label>
+                    <Input id="new" type="password" value={passwords.new} onChange={handlePasswordChange}/>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="confirm">Confirmar Contraseña</Label>
+                    <Input id="confirm" type="password" value={passwords.confirm} onChange={handlePasswordChange}/>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+            <CardFooter className="border-t px-6 py-4 flex justify-end">
+              <Button type="submit" className="font-bold">Guardar Cambios</Button>
+            </CardFooter>
+          </Card>
+        </form>
 
           {/* Assigned IT Assets Section */}
           <Card className="mt-6 border border-zinc-100 dark:border-zinc-800 shadow-sm">

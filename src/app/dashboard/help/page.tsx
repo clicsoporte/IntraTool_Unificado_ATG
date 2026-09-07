@@ -100,6 +100,9 @@ import {
   Cpu,
   FileSignature,
   Settings,
+  Printer,
+  Smartphone,
+  ExternalLink,
 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -223,6 +226,177 @@ export default function HelpPage() {
                     </AlertDescription>
                 </Alert>
             </>
+        )
+    },
+    {
+        title: "Minitutorial: Gestión Logística y Despacho Diario (`/dashboard/operations/logistics`)",
+        icon: <Truck className="mr-4 h-6 w-6 text-emerald-500" />,
+        content: (
+            <div className="space-y-6">
+                <p>
+                    ¡Bienvenido al módulo de <strong>Logística</strong>! Si nunca has usado esta pantalla, no te preocupes: aquí organizamos todo el viaje de los pedidos, desde que salen de la bodega en el camión hasta que el cliente firma su entrega.
+                </p>
+
+                {/* Paso a Paso para Principiantes */}
+                <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-3">
+                    <h4 className="font-bold text-sm text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+                        <span>🚀</span> ¿Cómo funciona el despacho paso a paso? (Guía Rápida para Principiantes)
+                    </h4>
+                    <ol className="list-decimal space-y-2 pl-5 text-xs text-foreground">
+                        <li><strong>Crear o Asignar Ruta:</strong> En la pestaña <em>Rutas y Entregas</em>, vinculas las facturas del día a un chofer y a su camión.</li>
+                        <li><strong>El Chofer Recibe su Carga:</strong> El chofer abre su app en el celular (Clic Driver APK) y ve exactamente a qué clientes debe visitar en orden.</li>
+                        <li><strong>Monitoreo en Tiempo Real:</strong> Mientras el camión avanza, la pantalla te muestra en el mapa satelital dónde está, si está en movimiento (🟢), detenido en un semáforo (🔑) o parqueado en un cliente (🅿️).</li>
+                        <li><strong>Entrega y Firma:</strong> Cuando el chofer entrega la mercadería, el cliente firma en la pantalla del celular y se toma una foto de la factura sellada.</li>
+                        <li><strong>Confirmación Inmediata:</strong> Al instante verás la entrega marcada en verde con su boleta oficial y expediente fotográfico listo para consultar.</li>
+                    </ol>
+                </div>
+
+                <h4 className="font-semibold text-base pt-2 border-t text-purple-900 dark:text-purple-300 flex items-center gap-2">
+                    <BarChartBig className="w-5 h-5 text-purple-600" /> 1. Analítica & Indicadores OTIF (`/analytics`)
+                </h4>
+                <p className="text-sm">
+                    Esta pestaña te dice qué tan eficiente fue la flota sin enredarte con fórmulas:
+                </p>
+                <ul className="list-disc space-y-1.5 pl-6 text-xs">
+                    <li><strong>OTIF (A Tiempo y Completo):</strong> Muestra el porcentaje de pedidos entregados sin retrasos ni faltantes. ¡La meta ideal es superar el 95%!</li>
+                    <li><strong>Tiempo en Cliente:</strong> Promedio de minutos que tarda un camión estacionado descargando pedidos.</li>
+                    <li><strong>Buscador por Factura:</strong> Si un vendedor pregunta por su factura, escribe el número (ej. <code>FAC-10250</code>) y verás su historial completo.</li>
+                </ul>
+
+                <h4 className="font-semibold text-base pt-2 border-t text-indigo-900 dark:text-indigo-300 flex items-center gap-2">
+                    <Search className="w-5 h-5 text-indigo-600" /> 2. Auditoría & Expedientes con Fotos (`/audit`)
+                </h4>
+                <p className="text-sm">
+                    ¿Un cliente dice que no recibió un producto o que no firmó? Aquí encuentras las pruebas:
+                </p>
+                <ul className="list-disc space-y-1.5 pl-6 text-xs">
+                    <li>Filtra por número de factura, cliente, chofer o fecha del despacho.</li>
+                    <li>Haz clic en los botones de <strong>Evidencias (✍️ Firma / 📷 Fotos)</strong> para ver en pantalla completa la firma del cliente, la factura sellada y fotos de las cajas entregadas.</li>
+                    <li>Puedes descargar todos los resultados a un archivo de <strong>Excel (.xlsx)</strong> con un solo clic.</li>
+                </ul>
+
+                <h4 className="font-semibold text-base pt-2 border-t text-amber-900 dark:text-amber-300 flex items-center gap-2">
+                    <PackageCheck className="w-5 h-5 text-amber-600" /> 3. Solicitudes de Recolecta en Proveedores (`/collect`)
+                </h4>
+                <p className="text-sm">
+                    Sirve para pedirle a un chofer que pase a recoger repuestos o mercadería a la bodega de un proveedor (ej. compras directas en Softland ERP). Al seleccionarlo, se autocompletan el contacto y teléfono oficial del proveedor.
+                </p>
+            </div>
+        )
+    },
+    {
+        title: "Minitutorial: Centro de Configuración y Parámetros (`/dashboard/admin/operations/deliveries`)",
+        icon: <Wrench className="mr-4 h-6 w-6 text-indigo-600" />,
+        content: (
+            <div className="space-y-6">
+                <p>
+                    Esta pantalla es el <strong>panel de control de administradores</strong>. Aquí decides qué botones aparecen en los celulares de los choferes, cómo se imprimen los tiquetes y cómo se alertan las incidencias.
+                </p>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <Card className="bg-blue-500/5 border-blue-500/20">
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-bold text-blue-700 dark:text-blue-300">⚙️ Pestaña 1: Ajustes Generales</CardTitle>
+                        </CardHeader>
+                        <CardContent className="text-xs space-y-2">
+                            <p><strong>Consecutivos Oficiales:</strong> Define el prefijo y número correlativo de las boletas de chofer (ej. <code>BOL-000001</code>) y solicitudes de recolecta (<code>REC-000001</code>).</p>
+                            <p><strong>Bot de Telegram:</strong> Configura el asistente de mensajería para choferes que utilicen Telegram en lugar de la app nativa.</p>
+                            <p><strong>Correos por Defecto:</strong> Correos de logística y compras que reciben las alertas de devolución total o entregas incompletas.</p>
+                        </CardContent>
+                    </Card>
+
+                    <Card className="bg-emerald-500/5 border-emerald-500/20">
+                        <CardHeader className="pb-2">
+                            <CardTitle className="text-sm font-bold text-emerald-700 dark:text-emerald-300">📱 Pestaña 2: APK Nativa (Control Remoto)</CardTitle>
+                        </CardHeader>
+                        <CardContent className="text-xs space-y-2">
+                            <p><strong>Permisos Móviles:</strong> Activa o desactiva la firma obligatoria, fotos de evidencia, fotos de factura y el <strong>botón de revertir entrega (🔄)</strong>.</p>
+                            <p><strong>Chofer en Espera (⏱️):</strong> Define si el vendedor o creador del pedido recibe un correo o Telegram cuando el chofer presiona el reloj indicando que está esperando en sitio.</p>
+                            <p><strong>Impresión Térmica:</strong> Selecciona el método de impresión (Clic Print Connector, Intent o RawBT) y el diseño de la boleta.</p>
+                        </CardContent>
+                    </Card>
+                </div>
+
+                <div className="p-4 bg-muted/20 border border-muted/40 rounded-xl space-y-2 text-xs">
+                    <h5 className="font-bold text-foreground">💡 ¿Cómo se aplican los cambios a los teléfonos?</h5>
+                    <p className="text-muted-foreground">
+                        Cualquier ajuste que guardes en esta pantalla se aplicará automáticamente en los teléfonos de los choferes en su próxima <strong>Sincronización en Segundo Plano</strong> (parametrizable entre 5 y 120 minutos) o al presionar el botón 🔄 en el celular.
+                    </p>
+                </div>
+            </div>
+        )
+    },
+    {
+        title: "Manual Completo de la App Móvil: Clic Driver APK",
+        icon: <Smartphone className="mr-4 h-6 w-6 text-amber-500" />,
+        content: (
+            <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-transparent border border-amber-500/20 rounded-2xl">
+                    <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                            <Badge className="bg-amber-600 text-white font-bold">APK v1.2.26</Badge>
+                            <h4 className="font-bold text-base text-foreground">Manual de Usuario Clic Driver para Celulares</h4>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                            Guía oficial paso a paso con capturas de pantalla, flujos de trabajo diario, entregas completas, incidencias, firmas y conexión de impresoras térmicas Bluetooth.
+                        </p>
+                    </div>
+                    <Button 
+                        asChild
+                        className="bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl gap-2 whitespace-nowrap shadow-sm shadow-amber-200 dark:shadow-none"
+                    >
+                        <a href="/docs/Manual.html" target="_blank" rel="noopener noreferrer">
+                            <ExternalLink className="w-4 h-4" />
+                            Abrir Manual Interactivo Completo
+                        </a>
+                    </Button>
+                </div>
+
+                {/* Resumen del Flujo Diario del Chofer */}
+                <div className="space-y-3">
+                    <h4 className="font-bold text-sm text-foreground uppercase tracking-wider">
+                        📋 El Flujo Diario del Chofer en 6 Pasos:
+                    </h4>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+                        <div className="p-3 bg-muted/20 rounded-xl border border-muted/40 space-y-1">
+                            <span className="font-bold text-amber-600 dark:text-amber-400">1️⃣ Iniciar Ruta</span>
+                            <p className="text-muted-foreground">El chofer ingresa a la app con su usuario y presiona <strong>&quot;Iniciar Ruta&quot;</strong> registrando la hora de salida de bodega.</p>
+                        </div>
+                        <div className="p-3 bg-muted/20 rounded-xl border border-muted/40 space-y-1">
+                            <span className="font-bold text-amber-600 dark:text-amber-400">2️⃣ Cargar Facturas</span>
+                            <p className="text-muted-foreground">Descarga con un toque los pedidos asignados a su camión. La app almacena todo en memoria para trabajar 100% sin internet.</p>
+                        </div>
+                        <div className="p-3 bg-muted/20 rounded-xl border border-muted/40 space-y-1">
+                            <span className="font-bold text-amber-600 dark:text-amber-400">3️⃣ Navegar con Waze/Maps</span>
+                            <p className="text-muted-foreground">Al tocar el botón de mapa en un cliente, el celular abre Waze o Google Maps con la ubicación exacta.</p>
+                        </div>
+                        <div className="p-3 bg-muted/20 rounded-xl border border-muted/40 space-y-1">
+                            <span className="font-bold text-amber-600 dark:text-amber-400">4️⃣ Espera de Atención ⏱️</span>
+                            <p className="text-muted-foreground">Si el cliente tarda en recibir, el chofer presiona el reloj para avisar automáticamente al vendedor por correo/Telegram.</p>
+                        </div>
+                        <div className="p-3 bg-muted/20 rounded-xl border border-muted/40 space-y-1">
+                            <span className="font-bold text-amber-600 dark:text-amber-400">5️⃣ Procesar Entrega</span>
+                            <p className="text-muted-foreground">Se confirma entrega Completa, Incompleta o Rechazada, se captura la firma en pantalla, fotos de factura y se imprime el tiquete.</p>
+                        </div>
+                        <div className="p-3 bg-muted/20 rounded-xl border border-muted/40 space-y-1">
+                            <span className="font-bold text-amber-600 dark:text-amber-400">6️⃣ Ver Procesado & Revertir</span>
+                            <p className="text-muted-foreground">Las entregas ya cerradas se consultan en <strong>Modo Solo Lectura</strong> para reimprimir recibos o inspeccionar la firma registrada.</p>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Preguntas Frecuentes del Chofer */}
+                <div className="p-4 bg-muted/10 border border-muted/30 rounded-xl space-y-3">
+                    <h5 className="font-bold text-xs text-foreground uppercase tracking-wider">
+                        💡 Preguntas Frecuentes y Solución Rápida de Problemas en Celulares:
+                    </h5>
+                    <ul className="list-disc space-y-2 pl-5 text-xs text-muted-foreground">
+                        <li><strong>¿Qué pasa si me quedo sin señal o internet en la calle?</strong> La aplicación sigue funcionando con normalidad. Puedes procesar entregas, tomar fotos y firmar. En cuanto el teléfono detecte señal o WiFi, subirá los datos automáticamente al servidor.</li>
+                        <li><strong>¿Cómo conectar la mini-impresora Bluetooth?</strong> Enciende la impresora, ve al Menú Lateral ☰ de la app &gt; <em>Configurar Impresora</em> &gt; presiona <em>Buscar Dispositivos</em> &gt; selecciona tu impresora (ej. <code>MPT-II</code> o <code>RPP02N</code>) y presiona <em>Imprimir Prueba</em>.</li>
+                        <li><strong>¿Por qué el botón dice &quot;Ver Procesado&quot;?</strong> Cuando una entrega ya fue procesada, entra en modo seguro de solo lectura para evitar alteraciones accidentales. Si hubo un error y tu supervisor te lo autoriza, puedes usar el botón de Revertir (🔄) o solicitar al administrador su reapertura desde el portal web.</li>
+                    </ul>
+                </div>
+            </div>
         )
     },
     {
@@ -870,33 +1044,73 @@ export default function HelpPage() {
                      <li>
                         <strong>Toma de Inventario Físico (<ClipboardCheck className="inline h-4 w-4"/>):</strong> Permite registrar conteos físicos de un producto en una ubicación específica. Ahora incluye un <strong>&quot;Modo Escáner&quot;</strong>.
                     </li>
+                    <li>
+                        <strong>Matriz de Compatibilidad & Asistente de Taller (<Wrench className="inline h-4 w-4 text-indigo-600"/>):</strong> Permite asociar repuestos (filtros, aceites, refacciones) a marcas de vehículo (Freightliner, Isuzu, Hino, etc.), modelos y placas específicas (ej. <code>C123456</code>). Desde el botón <em>&quot;🔍 Asistente Taller & Flota&quot;</em> de <code>/dashboard/inventory</code> o la orden de trabajo en <code>/dashboard/tickets</code>, los mecánicos pueden filtrar al instante todos los repuestos compatibles en bodega.
+                    </li>
                 </ul>
             </div>
         )
     },
     {
-        title: "Guía: Herramientas de TI",
+        title: "Manual y Minitutorial: Herramientas de TI (`/dashboard/it-tools`)",
         icon: <Cpu className="mr-4 h-6 w-6 text-slate-700" />,
         content: (
-            <div className="space-y-4">
+            <div className="space-y-6">
                 <p>
-                Este es un nuevo panel de control diseñado para centralizar la documentación y las herramientas del departamento de Tecnologías de la Información.
+                    El módulo de <strong>Herramientas de TI</strong> centraliza la administración técnica de la empresa: control de celulares corporativos de choferes (MDM/OTA), inventario físico y licencias de computadoras (ITAM), base de conocimiento técnico y mesa de tickets.
                 </p>
-                <h4 className="font-semibold text-lg pt-2 border-t">Notas Técnicas (<BookCopy className="inline h-5 w-5 text-blue-600"/>)</h4>
-                <p>
-                La primera herramienta de este módulo es una base de conocimiento interna. Su objetivo es simple: documentar todo.
-                </p>
-                <ul className="list-disc space-y-3 pl-6">
-                    <li>
-                        <strong>Crear Conocimiento:</strong> Crea notas para documentar procedimientos de soporte, guías de configuración, soluciones a problemas recurrentes, o cualquier información técnica relevante.
-                    </li>
-                    <li>
-                        <strong>Vincular a Módulos:</strong> La característica más potente es la capacidad de vincular una nota a un módulo específico de la aplicación. Por ejemplo, puedes crear una &quot;Guía para Solicitudes de Compra&quot; y vincularla al módulo de &quot;Compras&quot;.
-                    </li>
-                    <li>
-                        <strong>Búsqueda y Filtrado:</strong> Usa la barra de búsqueda para encontrar notas por título o contenido, y utiliza el filtro de &quot;Módulo&quot; para ver solo la documentación relevante para un área específica del sistema.
-                    </li>
-                </ul>
+
+                {/* 1. Gestión de Flota Móvil y APK */}
+                <div className="p-4 bg-purple-500/5 border border-purple-500/20 rounded-xl space-y-3">
+                    <h4 className="font-bold text-sm text-purple-800 dark:text-purple-300 flex items-center gap-2">
+                        <Smartphone className="w-4 h-4 text-purple-600" /> 1. Gestión de Flota Móvil y APK (`/dashboard/it-tools/mobile`)
+                    </h4>
+                    <p className="text-xs text-muted-foreground">
+                        Permite supervisar en tiempo real todos los celulares Android utilizados por los choferes y despachadores:
+                    </p>
+                    <ul className="list-disc space-y-1.5 pl-5 text-xs text-foreground">
+                        <li><strong>Estado de Dispositivos:</strong> Nivel de batería (🔋), versión de la app instalada, chofer asignado, número de teléfono y última conexión satelital.</li>
+                        <li><strong>Actualizaciones OTA Silenciosas:</strong> Cuando subes un nuevo archivo APK, los celulares lo descargan e instalan automáticamente en segundo plano sin intervención manual del chofer.</li>
+                        <li><strong>Políticas MDM / Modo Kiosco:</strong> Configura el celular en modo protegido (Device Owner) para bloquear desinstalaciones, bloquear reseteos de fábrica no autorizados o reiniciar remotamente el teléfono.</li>
+                        <li><strong>Pausa de Actualizaciones:</strong> Si se detecta un problema con una versión, el administrador de TI puede pausar el despliegue masivo inmediatamente con un clic.</li>
+                    </ul>
+                </div>
+
+                {/* 2. Control de Activos de TI (ITAM) */}
+                <div className="p-4 bg-indigo-500/5 border border-indigo-500/20 rounded-xl space-y-3">
+                    <h4 className="font-bold text-sm text-indigo-800 dark:text-indigo-300 flex items-center gap-2">
+                        <Cpu className="w-4 h-4 text-indigo-600" /> 2. Control de Activos de TI & Licencias (`/dashboard/it-tools/assets`)
+                    </h4>
+                    <p className="text-xs text-muted-foreground">
+                        Inventario maestro de todo el hardware y software de la organización:
+                    </p>
+                    <ul className="list-disc space-y-1.5 pl-5 text-xs text-foreground">
+                        <li><strong>Registro de Equipos:</strong> Laptops, computadoras de escritorio, monitores, impresoras térmicas, teléfonos y switches de red con su número de serie, marca, modelo y estado físico.</li>
+                        <li><strong>Asignación a Empleados & Acta Digital:</strong> Vincula una computadora a un colaborador de la empresa y genera la boleta de entrega o envío de correo formal de custodia.</li>
+                        <li><strong>Alertas de RRHH:</strong> Notifica a TI cuando un empleado renuncia o es despedido para coordinar el retiro y bloqueo de sus equipos antes de su salida.</li>
+                        <li><strong>Control de Licencias de Software:</strong> Administra suscripciones como Microsoft 365, Softland, antivirus y licencias corporativas, avisando con anticipación antes de su vencimiento.</li>
+                    </ul>
+                </div>
+
+                {/* 3. Notas Técnicas */}
+                <div className="p-4 bg-slate-500/5 border border-slate-500/20 rounded-xl space-y-3">
+                    <h4 className="font-bold text-sm text-slate-800 dark:text-slate-300 flex items-center gap-2">
+                        <BookCopy className="w-4 h-4 text-slate-600" /> 3. Base de Conocimiento y Notas Técnicas (`/dashboard/it-tools/notes`)
+                    </h4>
+                    <p className="text-xs text-muted-foreground">
+                        Repositorio de procedimientos, manuales de solución de fallas (Troubleshooting), contraseñas maestras y guías de configuración vinculadas directamente a cada pantalla del sistema.
+                    </p>
+                </div>
+
+                {/* 4. Mesa de Tickets */}
+                <div className="p-4 bg-blue-500/5 border border-blue-500/20 rounded-xl space-y-3">
+                    <h4 className="font-bold text-sm text-blue-800 dark:text-blue-300 flex items-center gap-2">
+                        <Wrench className="w-4 h-4 text-blue-600" /> 4. Mesa de Tickets & Soporte (`/dashboard/tickets`)
+                    </h4>
+                    <p className="text-xs text-muted-foreground">
+                        Gestión de solicitudes de soporte técnico y órdenes de trabajo para reparación de vehículos o equipos de oficina, con control de tiempos y repuestos consumidos.
+                    </p>
+                </div>
             </div>
         )
     },

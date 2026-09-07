@@ -2,9 +2,10 @@ import { getDb } from '@/modules/core/lib/db';
 import { FLEET_TABLES } from './schema';
 import { logInfo, logError } from '@/modules/core/lib/logger';
 import { triggerNotificationEvent } from '@/modules/notifications/lib/notifications-engine';
-import { getVehicleById, updateVehicleMileageAndCheckAlerts } from './db';
+import { getVehicleById, updateVehicleMileageAndCheckAlerts, checkIsOilChange } from './db';
 import { format, parseISO } from 'date-fns';
 import { es } from 'date-fns/locale';
+import crypto from 'crypto';
 
 export interface TelegramBotState {
   chatId: string;
@@ -149,7 +150,7 @@ export async function getAllActiveBotStates(): Promise<any[]> {
       LEFT JOIN core_users u ON l.employeeId = ('U-' || u.id)
       ORDER BY s.updatedAt DESC
     `).all() as any[];
-    return rows;
+    return JSON.parse(JSON.stringify(rows));
   } catch (error) {
     console.error("Error in getAllActiveBotStates:", error);
     return [];
@@ -187,7 +188,19 @@ export async function getLinkageByCode(code: string): Promise<TelegramLinkage | 
       LEFT JOIN core_users u ON l.employeeId = ('U-' || u.id)
       WHERE l.activationCode = ? AND (e.EMPLEADO IS NOT NULL OR u.id IS NOT NULL)
     `).get(code.toUpperCase().trim()) as TelegramLinkage | undefined;
-    return row || null;
+
+    if (!row) return null;
+
+    // Validar expiración de 15 minutos (900,000 ms)
+    if (row.createdAt) {
+      const createdTime = new Date(row.createdAt).getTime();
+      const nowTime = Date.now();
+      if (nowTime - createdTime > 15 * 60 * 1000) {
+        return null; // Código expirado
+      }
+    }
+
+    return row;
   } catch (error) {
     console.error(`Error in getLinkageByCode for code ${code}:`, error);
     return null;
@@ -198,11 +211,12 @@ export async function createLinkageCode(employeeId: string): Promise<string> {
   const db = await getDb();
   const now = new Date().toISOString();
   
-  // Generate random 6-character alphanumeric code
+  // Generar código de 6 caracteres criptográficamente seguro (CSPRNG)
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // Omit confusing chars (1, I, 0, O)
   let code = '';
   for (let i = 0; i < 6; i++) {
-    code += chars.charAt(Math.floor(Math.random() * chars.length));
+    const idx = crypto.randomInt(0, chars.length);
+    code += chars.charAt(idx);
   }
 
   try {
@@ -436,7 +450,7 @@ export async function saveTelegramFuelLog(log: any, userName: string) {
             // Update current mileage if the log mileage is higher
             db.prepare(`
                 UPDATE ${FLEET_TABLES.vehicles} 
-                SET currentMileage = MAX(currentMileage, ?) 
+                SET currentMileage = MAX(COALESCE(currentMileage, 0), ?) 
                 WHERE id = ?
             `).run(data.mileageBefore, data.vehicleId);
         });
@@ -507,18 +521,18 @@ export async function saveTelegramMaintenanceLog(log: any, userName: string) {
             `).run(data);
 
             // If it's an oil change, update the last oil change mileage
-            const isOilChange = String(data.type).toLowerCase().includes('aceite');
+            const isOilChange = checkIsOilChange(data.type, data.description);
             
             if (isOilChange) {
                 db.prepare(`
                     UPDATE ${FLEET_TABLES.vehicles} 
-                    SET lastOilChangeMileage = ?, currentMileage = MAX(currentMileage, ?), lastOilChangeAlertThreshold = 0
+                    SET lastOilChangeMileage = ?, currentMileage = MAX(COALESCE(currentMileage, 0), ?), lastOilChangeAlertThreshold = 0
                     WHERE id = ?
                 `).run(data.mileage, data.mileage, data.vehicleId);
             } else {
                 db.prepare(`
                     UPDATE ${FLEET_TABLES.vehicles} 
-                    SET currentMileage = MAX(currentMileage, ?)
+                    SET currentMileage = MAX(COALESCE(currentMileage, 0), ?)
                     WHERE id = ?
                 `).run(data.mileage, data.vehicleId);
             }

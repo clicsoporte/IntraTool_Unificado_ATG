@@ -173,6 +173,10 @@ export default function VehicleForm({ vehicle, settings }: { vehicle?: any, sett
                                 <Input name="oilChangeInterval" type="number" defaultValue={vehicle?.oilChangeInterval || 5000} />
                             </div>
                             <div className="space-y-2">
+                                <Label>Último Cambio de Aceite ({selectedUnit})</Label>
+                                <Input name="lastOilChangeMileage" type="number" defaultValue={vehicle?.lastOilChangeMileage || 0} />
+                            </div>
+                            <div className="space-y-2">
                                 <Label>Vencimiento RTV</Label>
                                 <Input name="rtvExpiration" type="date" defaultValue={vehicle?.rtvExpiration} />
                             </div>

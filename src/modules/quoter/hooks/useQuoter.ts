@@ -32,6 +32,7 @@ import {
   getUserPreferences,
 } from "@/modules/core/lib/db";
 import { format, parseISO, isValid } from "date-fns";
+import { getLocalDateStr, getLocalDateTimeStr } from "@/modules/core/lib/time-utils";
 import { useDebounce } from "use-debounce";
 import { useAuth } from "@/modules/core/hooks/useAuth";
 import { generateDocument } from "@/modules/core/lib/pdf-generator";
@@ -321,11 +322,11 @@ export const useQuoter = () => {
 
     if (!isMounted) {
       const today = new Date();
-      setQuoteDate(today.toISOString().substring(0, 10));
-      setDeliveryDate(today.toISOString().substring(0, 16));
+      setQuoteDate(getLocalDateStr(today));
+      setDeliveryDate(getLocalDateTimeStr(today));
       const validDate = new Date();
       validDate.setDate(today.getDate() + 8);
-      setValidUntilDate(validDate.toISOString().substring(0, 10));
+      setValidUntilDate(getLocalDateStr(validDate));
       loadPreferences();
       setIsMounted(true);
     }
@@ -780,9 +781,9 @@ export const useQuoter = () => {
     setSelectedCustomer(initialQuoteState.selectedCustomer);
     setCustomerDetails(initialQuoteState.customerDetails);
     setDeliveryAddress(initialQuoteState.deliveryAddress);
-    setDeliveryDate(today.toISOString().substring(0, 16));
+    setDeliveryDate(getLocalDateTimeStr(today));
     setSellerName(currentUser?.name || initialQuoteState.sellerName);
-    setQuoteDate(today.toISOString().substring(0, 10));
+    setQuoteDate(getLocalDateStr(today));
     setPurchaseOrderNumber(initialQuoteState.purchaseOrderNumber);
     setExchangeRate(apiExchangeRate);
     setSellerType("user");
@@ -790,7 +791,7 @@ export const useQuoter = () => {
     setCreditDays(initialQuoteState.creditDays);
     const validDate = new Date();
     validDate.setDate(today.getDate() + 8);
-    setValidUntilDate(validDate.toISOString().substring(0, 10));
+    setValidUntilDate(getLocalDateStr(validDate));
     setNotes(initialQuoteState.notes);
     setProductSearchTerm("");
     setCustomerSearchTerm("");

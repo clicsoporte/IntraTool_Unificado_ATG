@@ -17,7 +17,9 @@ import {
     FileText, 
     RotateCcw 
 } from 'lucide-react';
-import { formatFechaEntrega } from '@/modules/operations/lib/utils';
+import { formatFechaEntrega, parsePhotoUrls } from '@/modules/operations/lib/utils';
+import { SelectedPhoto } from '@/modules/operations/components/EvidencePhotoViewer';
+import { IncompleteDocData } from '@/modules/operations/components/IncompleteDeliveryModal';
 
 interface HistoricalDeliveriesTabProps {
     historyDate: string;
@@ -29,7 +31,8 @@ interface HistoricalDeliveriesTabProps {
     tvMode: boolean;
     hasPermission: (permission: string) => boolean;
     handleRevertDelivery: (doc: any) => void;
-    setSelectedPhoto: (photo: { url: string; title: string } | null) => void;
+    setSelectedPhoto: (photo: SelectedPhoto | null) => void;
+    setSelectedIncompleteDoc?: (doc: IncompleteDocData | null) => void;
 }
 
 export function HistoricalDeliveriesTab({
@@ -42,8 +45,11 @@ export function HistoricalDeliveriesTab({
     tvMode,
     hasPermission,
     handleRevertDelivery,
-    setSelectedPhoto
+    setSelectedPhoto,
+    setSelectedIncompleteDoc
 }: HistoricalDeliveriesTabProps) {
+    const [invoiceFilter, setInvoiceFilter] = React.useState('');
+
     return (
         <div className="space-y-6">
             {/* Historical Controls */}
@@ -54,11 +60,20 @@ export function HistoricalDeliveriesTab({
                     <Calendar className="w-5 h-5 text-blue-500" />
                     <div className="space-y-0.5">
                         <h3 className="text-sm font-bold">Consultar Historial de Entregas</h3>
-                        <p className="text-[10px] text-muted-foreground font-medium">Seleccione una fecha para revisar el desglose y trazabilidad de los despachos cerrados.</p>
+                        <p className="text-[10px] text-muted-foreground font-medium">Seleccione una fecha o busque por número de factura/cliente para revisar el historial.</p>
                     </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                    <Input
+                        type="text"
+                        placeholder="Buscar N° Factura / Cliente..."
+                        value={invoiceFilter}
+                        onChange={(e) => setInvoiceFilter(e.target.value)}
+                        className={`h-9 w-52 rounded-xl font-bold text-xs ${
+                            tvMode ? 'bg-slate-950 border-slate-800 text-white' : ''
+                        }`}
+                    />
                     <Input
                         type="date"
                         value={historyDate}
@@ -96,8 +111,19 @@ export function HistoricalDeliveriesTab({
             ) : (
                 <div className={`grid grid-cols-1 ${tvMode ? 'md:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3' : 'md:grid-cols-2 lg:grid-cols-3'} gap-6`}>
                     {historicalAssignments.map((ass) => {
-                        const docsForAss = historicalDeliveries.filter(d => d.asignacion_id === ass.id || d.devolucion_asignacion_id === ass.id);
+                        const allDocsForAss = historicalDeliveries.filter(d => d.asignacion_id === ass.id || d.devolucion_asignacion_id === ass.id);
                         
+                        const docsForAss = allDocsForAss.filter(d => {
+                            if (!invoiceFilter.trim()) return true;
+                            const q = invoiceFilter.trim().toLowerCase();
+                            const docNum = (d.documento_numero || '').toLowerCase();
+                            const clientName = (d.cliente_nombre || '').toLowerCase();
+                            const clientId = (d.cliente_id || '').toLowerCase();
+                            return docNum.includes(q) || clientName.includes(q) || clientId.includes(q);
+                        });
+
+                        if (invoiceFilter.trim() && docsForAss.length === 0) return null;
+
                         // Calculate assignment stats
                         const total = docsForAss.length;
                         const complete = docsForAss.filter(d => d.estado === 'completo').length;
@@ -161,24 +187,47 @@ export function HistoricalDeliveriesTab({
                                                     {/* Doc header row */}
                                                     <div className="flex justify-between items-start gap-2">
                                                         <div className="min-w-0">
-                                                            <span className="text-xs font-black font-mono tracking-tight leading-none block text-foreground dark:text-slate-200">
-                                                                {doc.documento_numero}
-                                                            </span>
+                                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                                                <span className="text-xs font-black font-mono tracking-tight leading-none block text-foreground dark:text-slate-200">
+                                                                    {doc.boleta_numero ? `📄 ${doc.boleta_numero}` : doc.documento_numero}
+                                                                </span>
+                                                                {doc.boleta_numero && doc.boleta_numero !== doc.documento_numero && (
+                                                                    <span className="text-[9px] font-mono text-muted-foreground bg-muted/50 px-1 py-0.2 rounded border">
+                                                                        ERP: #{doc.documento_numero}
+                                                                    </span>
+                                                                )}
+                                                            </div>
                                                             <p className="text-[10px] font-bold truncate pt-0.5 text-foreground/70 dark:text-slate-300">
                                                                 {doc.cliente_nombre}
                                                             </p>
                                                         </div>
 
                                                         <div className="flex items-center gap-1.5 shrink-0">
-                                                            <Badge className={`text-[8px] font-extrabold uppercase px-1.5 py-0 border-none ${
-                                                                doc.devolucion_asignacion_id === ass.id ? 'bg-red-500/10 text-red-500 border border-red-500/20' :
-                                                                doc.estado === 'completo' ? 'bg-emerald-500/10 text-emerald-500' :
-                                                                doc.estado === 'incompleto' ? 'bg-amber-500/10 text-amber-500' :
-                                                                doc.estado === 'rechazado' ? 'bg-red-500/10 text-red-500' :
-                                                                'bg-blue-500/10 text-blue-500'
-                                                            }`}>
-                                                                {doc.devolucion_asignacion_id === ass.id ? 'DEVUELTA ❌' : doc.estado} {doc.fecha_entrega ? ` | ${formatFechaEntrega(doc.fecha_entrega)}` : ''}
-                                                            </Badge>
+                                                            {(() => {
+                                                                const isDiscrepancy = (doc.estado === 'incompleto' || doc.estado === 'rechazado') && !!setSelectedIncompleteDoc;
+                                                                return (
+                                                                    <Badge 
+                                                                        onClick={(e) => {
+                                                                            if (isDiscrepancy) {
+                                                                                e.stopPropagation();
+                                                                                setSelectedIncompleteDoc(doc);
+                                                                            }
+                                                                        }}
+                                                                        className={`text-[8px] font-extrabold uppercase px-1.5 py-0 border-none ${
+                                                                            doc.devolucion_asignacion_id === ass.id ? 'bg-red-500/10 text-red-500 border border-red-500/20' :
+                                                                            doc.estado === 'completo' ? 'bg-emerald-500/10 text-emerald-500' :
+                                                                            doc.estado === 'incompleto' ? 'bg-amber-500/10 text-amber-500' :
+                                                                            doc.estado === 'rechazado' ? 'bg-red-500/10 text-red-500' :
+                                                                            'bg-blue-500/10 text-blue-500'
+                                                                        } ${
+                                                                            isDiscrepancy ? 'cursor-pointer hover:ring-2 hover:ring-amber-400/80 hover:scale-105 active:scale-95 transition-all shadow-md' : ''
+                                                                        }`}
+                                                                        title={isDiscrepancy ? "🔍 Clic para ver desglose de artículos faltantes" : undefined}
+                                                                    >
+                                                                        {doc.devolucion_asignacion_id === ass.id ? 'DEVUELTA ❌' : doc.estado} {doc.fecha_entrega ? ` | ${formatFechaEntrega(doc.fecha_entrega)}` : ''}
+                                                                    </Badge>
+                                                                );
+                                                            })()}
 
                                                             {doc.estado !== 'pendiente' && doc.estado !== 'en_ruta' && (!doc.latitud || !doc.longitud) ? (
                                                                 <Badge className="bg-red-500/10 text-red-500 border border-red-500/30 text-[8px] font-extrabold px-1.5 py-0 shrink-0 flex items-center gap-1">
@@ -213,7 +262,14 @@ export function HistoricalDeliveriesTab({
                                                                 <Button
                                                                     variant="outline"
                                                                     size="sm"
-                                                                    onClick={() => setSelectedPhoto({ url: `/api/fleet/files/${doc.foto_evidencia}`, title: "Evidencia de Entrega" })}
+                                                                    onClick={() => {
+                                                                        const urls = parsePhotoUrls(doc.foto_evidencia);
+                                                                        setSelectedPhoto({ 
+                                                                            urls, 
+                                                                            url: urls[0], 
+                                                                            title: `Evidencia de Entrega ${urls.length > 1 ? `(${urls.length} fotos)` : ''}` 
+                                                                        });
+                                                                    }}
                                                                     className="rounded-lg h-7 text-[10px] font-extrabold gap-1.5 border-blue-500/20 bg-blue-500/5 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10"
                                                                 >
                                                                     <Camera className="w-3.5 h-3.5" />
@@ -224,14 +280,21 @@ export function HistoricalDeliveriesTab({
                                                                 <Button
                                                                     variant="outline"
                                                                     size="sm"
-                                                                    onClick={() => setSelectedPhoto({ url: `/api/fleet/files/${doc.foto_factura}`, title: "Factura Firmada" })}
+                                                                    onClick={() => {
+                                                                        const urls = parsePhotoUrls(doc.foto_factura);
+                                                                        setSelectedPhoto({ 
+                                                                            urls, 
+                                                                            url: urls[0], 
+                                                                            title: `Factura Firmada ${urls.length > 1 ? `(${urls.length} fotos)` : ''}` 
+                                                                        });
+                                                                    }}
                                                                     className="rounded-lg h-7 text-[10px] font-extrabold gap-1.5 border-emerald-500/20 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10"
                                                                 >
                                                                     <FileText className="w-3.5 h-3.5" />
                                                                     Factura Firmada
                                                                 </Button>
                                                             )}
-                                                            {['completo', 'incompleto', 'rechazado'].includes(doc.estado) && hasPermission('deliveries:write') && (
+                                                            {['completo', 'incompleto', 'rechazado'].includes(doc.estado) && hasPermission('deliveries:revert') && (
                                                                 <Button
                                                                     variant="outline"
                                                                     size="sm"

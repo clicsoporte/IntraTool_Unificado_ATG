@@ -5,6 +5,7 @@
 "use server";
 
 import { getDb, getAllSalespersons, getGeographyData, saveGeographyData } from '@/modules/core/lib/db';
+import { getCurrentUser } from '@/modules/core/lib/auth';
 import { getBusinessDateStr } from '@/modules/core/lib/timezone';
 import { authorizeAction } from '@/modules/core/lib/auth-guard';
 import { revalidatePath } from 'next/cache';
@@ -39,13 +40,35 @@ export async function getDeliverySettings(): Promise<Record<string, string>> {
             collect_consecutive_next: '1',
             route_consecutive_prefix: 'RUT-',
             route_consecutive_next: '1',
-            notificaciones_ruta_emails: 'logistica@empresa.com'
+            boleta_consecutive_prefix: 'BOL-',
+            boleta_consecutive_next: '1',
+            driver_boleta_print_method: 'all',
+            notificaciones_ruta_emails: 'logistica@empresa.com',
+            route_sheet_iso_text: 'DOC-LOG-04 | Ver. 02 | Sistema de Gestión de Calidad ISO 9001:2015',
+            tracking_source: 'hybrid',
+            tiempo_maximo_cliente_min: '20',
+            driver_boleta_pdf_enabled: 'true',
+            driver_boleta_email_enabled: 'true',
+            driver_boleta_print_enabled: 'true',
+            driver_boleta_paper_size: '80mm',
+            parqueo_latitud: '10.025541',
+            parqueo_longitud: '-84.273252',
+            parqueo_radio_metros: '500',
+            auto_start_route_on_depot_exit: 'true',
+            auto_record_arrival_on_depot_entry: 'true',
+            intervalo_consulta_gps: '12',
+            gps_modo_predeterminado: 'autoAjuste',
+            gps_tour_tiempo_sec: '10',
+            gps_tour_zoom_level: '17',
+            gps_auto_ajuste_interval_sec: '15',
+            gps_geocoding_threshold_m: '200',
+            gps_ui_refresh_sec: '5'
         };
         const settings: Record<string, string> = { ...defaults };
         for (const row of rows) {
             settings[row.key] = row.value;
         }
-        return settings;
+        return JSON.parse(JSON.stringify(settings));
     } catch (e: any) {
         logError('Error fetching ops_delivery_settings:', e.message);
         return {
@@ -76,6 +99,14 @@ export async function updateDeliverySettings(settings: Record<string, string>): 
     await authorizeAction('deliveries:admin');
     const db = await getDb();
     try {
+        // Validación: el intervalo de sincronización automática de la APK no puede ser menor a 5 minutos.
+        if (settings.apk_background_sync_minutes !== undefined) {
+            const parsed = parseInt(String(settings.apk_background_sync_minutes), 10);
+            if (Number.isNaN(parsed) || parsed < 5) {
+                return { success: false, error: 'El intervalo de sincronización automática debe ser de al menos 5 minutos.' };
+            }
+            settings.apk_background_sync_minutes = String(parsed);
+        }
         const stmt = db.prepare('INSERT OR REPLACE INTO ops_delivery_settings (key, value) VALUES (?, ?)');
         const transaction = db.transaction((data) => {
             for (const [key, value] of Object.entries(data)) {
@@ -83,6 +114,7 @@ export async function updateDeliverySettings(settings: Record<string, string>): 
             }
         });
         transaction(settings);
+        logInfo('[GPS Configuración] Parámetros de entregas y GPS actualizados correctamente', { totalKeys: Object.keys(settings).length });
         revalidatePath('/dashboard/operations/logistics/deliveries');
         return { success: true };
     } catch (e: any) {
@@ -96,7 +128,8 @@ export async function updateDeliverySettings(settings: Record<string, string>): 
 export async function getDeliveryRoutes(): Promise<any[]> {
     const db = await getDb();
     try {
-        return db.prepare('SELECT * FROM ops_delivery_routes ORDER BY name ASC').all();
+        const rows = db.prepare('SELECT * FROM ops_delivery_routes ORDER BY name ASC').all();
+        return JSON.parse(JSON.stringify(rows));
     } catch (e: any) {
         logError('Error getting ops_delivery_routes:', e.message);
         return [];
@@ -229,7 +262,7 @@ export async function getActiveAssignmentsToday(includeCompleted = false): Promi
             JOIN fleet_vehicles v ON a.vehiculo_id = v.id
             WHERE a.fecha = ? AND (a.activa = 1 OR ? = 1)
         `).all(todayStr, includeCompleted ? 1 : 0);
-        return rows;
+        return JSON.parse(JSON.stringify(rows));
     } catch (e: any) {
         logError('Error getting active assignments:', e.message);
         return [];
@@ -289,7 +322,7 @@ export async function getHistoricalAssignments(dateString: string): Promise<{ as
             ORDER BY q.fecha_registro DESC
         `).all(dateString);
 
-        return { assignments, deliveries };
+        return JSON.parse(JSON.stringify({ assignments, deliveries }));
     } catch (e: any) {
         logError('Error getting historical assignments:', e.message);
         return { assignments: [], deliveries: [] };
@@ -302,6 +335,14 @@ export async function createAssignment(rutaId: number, employeeId: number, vehic
     try {
         const todayStr = await getBusinessDateStr();
         
+        const vehicleObj = db.prepare('SELECT plate, status FROM fleet_vehicles WHERE id = ?').get(vehicleId) as { plate: string; status: string } | undefined;
+        if (vehicleObj && (vehicleObj.status === 'maintenance' || vehicleObj.status === 'in_taller')) {
+            return {
+                success: false,
+                error: `⚠️ El vehículo (${vehicleObj.plate}) se encuentra actualmente EN TALLER por mantenimiento y no puede ser asignado a una ruta.`
+            };
+        }
+
         // Check if vehicle is already active today
         const vehicleConflict = db.prepare(`
             SELECT u.name as chofer_nombre, r.name as ruta_nombre
@@ -356,7 +397,7 @@ export async function finalizeRouteAssignmentInternal(
     db: any,
     lat: number | null = null,
     lng: number | null = null
-): Promise<{ success: boolean; consecutivo?: string; error?: string }> {
+): Promise<{ success: boolean; consecutivo?: string; message?: string; error?: string }> {
     try {
         const nowStr = new Date().toISOString();
         
@@ -385,45 +426,80 @@ export async function finalizeRouteAssignmentInternal(
             return { success: true, consecutivo: assignment.consecutivo };
         }
 
-        // 2. Generate consecutive
-        const prefixRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'route_consecutive_prefix'").get() as { value: string } | undefined;
-        const nextRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'route_consecutive_next'").get() as { value: string } | undefined;
+        // 2. Verificar si la asignación tuvo documentos cargados (en cola activa o procesados)
+        const totalDocsCountRow = db.prepare(`
+            SELECT COUNT(*) as count 
+            FROM ops_delivery_queue 
+            WHERE asignacion_id = ? OR devolucion_asignacion_id = ?
+        `).get(assignmentId, assignmentId) as { count: number };
+        const hadDocuments = (totalDocsCountRow?.count || 0) > 0;
 
-        const prefix = prefixRow?.value || 'RUT-';
-        const nextNum = parseInt(nextRow?.value || '1', 10);
-        const consecutivo = `${prefix}${String(nextNum).padStart(6, '0')}`;
+        let consecutivo: string | undefined = undefined;
+        let deliveries: any[] = [];
 
-        // 3. Update next counter
-        db.prepare("INSERT OR REPLACE INTO ops_delivery_settings (key, value) VALUES ('route_consecutive_next', ?)").run(String(nextNum + 1));
+        db.transaction(() => {
+            // CASO A: Si la ruta se abrió y NUNCA se cargó ninguna factura (0 documentos)
+            if (!hadDocuments) {
+                db.prepare(`
+                    UPDATE ops_delivery_assignments
+                    SET activa = 0, fecha_completada = ?, consecutivo = NULL, latitud_llegada = ?, longitud_llegada = ?, siguiente_cliente = NULL, siguiente_cliente_fecha = NULL
+                    WHERE id = ?
+                `).run(nowStr, lat, lng, assignmentId);
+                return;
+            }
 
-        // 4. Update assignment
-        db.prepare(`
-            UPDATE ops_delivery_assignments
-            SET activa = 0, fecha_completada = ?, consecutivo = ?, latitud_llegada = ?, longitud_llegada = ?, siguiente_cliente = NULL, siguiente_cliente_fecha = NULL
-            WHERE id = ?
-        `).run(nowStr, consecutivo, lat, lng, assignmentId);
+            // CASO B: Si la ruta SÍ tuvo al menos 1 factura cargada
+            // 2.1. Generar consecutivo oficial
+            const prefixRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'route_consecutive_prefix'").get() as { value: string } | undefined;
+            const nextRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'route_consecutive_next'").get() as { value: string } | undefined;
 
-        // 5. Reset remaining pending documents to general queue (marking their devolucion_asignacion_id)
-        db.prepare(`
-            UPDATE ops_delivery_queue 
-            SET devolucion_asignacion_id = asignacion_id, asignacion_id = NULL, estado = 'pendiente', canal_registro = 'web', gestionado_por = ?
-            WHERE asignacion_id = ? AND entregado = 0
-        `).run(closedBy, assignmentId);
+            const prefix = prefixRow?.value || 'RUT-';
+            const nextNum = parseInt(nextRow?.value || '1', 10);
+            consecutivo = `${prefix}${String(nextNum).padStart(6, '0')}`;
+
+            // 2.2. Actualizar contador
+            db.prepare("INSERT OR REPLACE INTO ops_delivery_settings (key, value) VALUES ('route_consecutive_next', ?)").run(String(nextNum + 1));
+
+            // 2.3. Actualizar asignación con el consecutivo
+            db.prepare(`
+                UPDATE ops_delivery_assignments
+                SET activa = 0, fecha_completada = ?, consecutivo = ?, latitud_llegada = ?, longitud_llegada = ?, siguiente_cliente = NULL, siguiente_cliente_fecha = NULL
+                WHERE id = ?
+            `).run(nowStr, consecutivo, lat, lng, assignmentId);
+
+            // 2.4. Resetear los documentos que quedaron sin entregar de regreso a la cola general marcando devolucion_asignacion_id
+            db.prepare(`
+                UPDATE ops_delivery_queue 
+                SET devolucion_asignacion_id = asignacion_id, asignacion_id = NULL, estado = 'pendiente', canal_registro = 'web', gestionado_por = ?
+                WHERE asignacion_id = ? AND entregado = 0
+            `).run(closedBy, assignmentId);
+
+            // 2.5. Consultar entregas para la Hoja de Ruta
+            deliveries = db.prepare(`
+                SELECT * FROM ops_delivery_queue 
+                WHERE asignacion_id = ? OR devolucion_asignacion_id = ?
+                ORDER BY CASE WHEN entregado = 1 THEN 0 ELSE 1 END, fecha_entrega ASC, id ASC
+            `).all(assignmentId, assignmentId) as any[];
+        })();
+
+        if (!hadDocuments) {
+            return { 
+                success: true, 
+                consecutivo: undefined, 
+                message: 'Ruta finalizada/anulada sin documentos cargados. No se generó Hoja de Ruta.' 
+            };
+        }
 
         // Update local object for rendering
         assignment.fecha_completada = nowStr;
+        if (consecutivo) {
+            assignment.consecutivo = consecutivo;
+        }
 
-        // 6. Query processed deliveries
-        const deliveries = db.prepare(`
-            SELECT * FROM ops_delivery_queue 
-            WHERE asignacion_id = ? OR (devolucion_asignacion_id = ? AND estado IN ('incompleto', 'rechazado'))
-            ORDER BY fecha_entrega ASC
-        `).all(assignmentId, assignmentId) as any[];
+        // 2.6. Compilar reporte HTML de Hoja de Ruta
+        const htmlReport = await generateRouteSheetHtml(consecutivo || 'RUT-000000', assignment, deliveries, db);
 
-        // 7. Compile HTML report
-        const htmlReport = generateRouteSheetHtml(consecutivo, assignment, deliveries, db);
-
-        // 8. Dispatch Email
+        // 2.7. Despacho de Correo (Asíncrono no bloqueante)
         const emailSettingsRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'notificaciones_ruta_emails'").get() as { value: string } | undefined;
         const emailSettingEnabled = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'notificaciones_email'").get() as { value: string } | undefined;
         
@@ -434,12 +510,15 @@ export async function finalizeRouteAssignmentInternal(
             const emailList = emailsStr.split(',').map(e => e.trim()).filter(e => e.length > 0);
             if (emailList.length > 0) {
                 const subject = `📋 Hoja de Ruta Finalizada - Consecutivo #${consecutivo} - ${assignment.ruta_nombre}`;
-                await sendEmail({
+                sendEmail({
                     to: emailList,
                     subject,
                     html: htmlReport
+                }).then(() => {
+                    logInfo(`Sent route sheet email for assignment ${assignmentId} consecutive ${consecutivo} to ${emailList.join(', ')}`);
+                }).catch((emailErr: any) => {
+                    logWarn(`No se pudo enviar correo de liquidación para ruta ${assignmentId} (${consecutivo}): ${emailErr.message}`);
                 });
-                logInfo(`Sent route sheet email for assignment ${assignmentId} consecutive ${consecutivo} to ${emailList.join(', ')}`);
             }
         }
 
@@ -473,9 +552,46 @@ export async function getFinalizedRoutesReport(filters: {
     routeId?: string;
     driverId?: string;
     query?: string;
-}): Promise<any[]> {
+    page?: number;
+    pageSize?: number;
+}): Promise<any> {
     const db = await getDb();
     try {
+        let whereSql = ` WHERE a.consecutivo IS NOT NULL`;
+        const params: any[] = [];
+
+        if (filters.startDate) {
+            whereSql += ` AND DATE(a.fecha_completada) >= ?`;
+            params.push(filters.startDate);
+        }
+        if (filters.endDate) {
+            whereSql += ` AND DATE(a.fecha_completada) <= ?`;
+            params.push(filters.endDate);
+        }
+        if (filters.routeId) {
+            whereSql += ` AND a.ruta_id = ?`;
+            params.push(Number(filters.routeId));
+        }
+        if (filters.driverId) {
+            whereSql += ` AND a.empleado_id = ?`;
+            params.push(Number(filters.driverId));
+        }
+        if (filters.query) {
+            whereSql += ` AND (a.consecutivo LIKE ? OR u.name LIKE ?)`;
+            params.push(`%${filters.query}%`, `%${filters.query}%`);
+        }
+
+        const countSql = `
+            SELECT COUNT(*) as count 
+            FROM ops_delivery_assignments a
+            JOIN ops_delivery_routes r ON a.ruta_id = r.id
+            JOIN core_users u ON a.empleado_id = u.id
+            JOIN fleet_vehicles v ON a.vehiculo_id = v.id
+            ${whereSql}
+        `;
+        const countRow = db.prepare(countSql).get(...params) as { count: number };
+        const totalCount = countRow?.count || 0;
+
         let sql = `
             SELECT 
                 a.*,
@@ -484,42 +600,31 @@ export async function getFinalizedRoutesReport(filters: {
                 v.plate as vehiculo_placa,
                 v.brand as vehiculo_marca,
                 v.model as vehiculo_modelo,
-                (SELECT COUNT(*) FROM ops_delivery_queue q WHERE q.asignacion_id = a.id) as total_entregas
+                (SELECT COUNT(DISTINCT q.id) FROM ops_delivery_queue q WHERE q.asignacion_id = a.id OR (q.devolucion_asignacion_id = a.id AND q.asignacion_id IS NULL)) as total_entregas
             FROM ops_delivery_assignments a
             JOIN ops_delivery_routes r ON a.ruta_id = r.id
             JOIN core_users u ON a.empleado_id = u.id
             JOIN fleet_vehicles v ON a.vehiculo_id = v.id
-            WHERE a.consecutivo IS NOT NULL
+            ${whereSql}
+            ORDER BY a.fecha_completada DESC
         `;
-        const params: any[] = [];
 
-        if (filters.startDate) {
-            sql += ` AND DATE(a.fecha_completada) >= ?`;
-            params.push(filters.startDate);
-        }
-        if (filters.endDate) {
-            sql += ` AND DATE(a.fecha_completada) <= ?`;
-            params.push(filters.endDate);
-        }
-        if (filters.routeId) {
-            sql += ` AND a.ruta_id = ?`;
-            params.push(Number(filters.routeId));
-        }
-        if (filters.driverId) {
-            sql += ` AND a.empleado_id = ?`;
-            params.push(Number(filters.driverId));
-        }
-        if (filters.query) {
-            sql += ` AND (a.consecutivo LIKE ? OR u.name LIKE ?)`;
-            params.push(`%${filters.query}%`, `%${filters.query}%`);
+        if (filters.page && filters.pageSize) {
+            const limit = Number(filters.pageSize);
+            const offset = (Number(filters.page) - 1) * limit;
+            sql += ` LIMIT ? OFFSET ?`;
+            const pageParams = [...params, limit, offset];
+            const rawData = db.prepare(sql).all(...pageParams);
+            const data = JSON.parse(JSON.stringify(rawData));
+            const totalPages = Math.ceil(totalCount / limit) || 1;
+            return { data, totalCount, totalPages, page: Number(filters.page), pageSize: limit };
         }
 
-        sql += ` ORDER BY a.fecha_completada DESC`;
-
-        return db.prepare(sql).all(...params);
+        const rawData = db.prepare(sql).all(...params);
+        return JSON.parse(JSON.stringify(rawData));
     } catch (e: any) {
         logError('Error getting finalized routes report:', e.message);
-        return [];
+        return filters.page ? { data: [], totalCount: 0, totalPages: 1, page: 1, pageSize: 25 } : [];
     }
 }
 
@@ -547,11 +652,11 @@ export async function getRouteSheetPreviewHtml(assignmentId: number): Promise<{ 
 
         const deliveries = db.prepare(`
             SELECT * FROM ops_delivery_queue 
-            WHERE asignacion_id = ? OR (devolucion_asignacion_id = ? AND estado IN ('incompleto', 'rechazado'))
-            ORDER BY fecha_entrega ASC
+            WHERE asignacion_id = ? OR devolucion_asignacion_id = ?
+            ORDER BY CASE WHEN entregado = 1 THEN 0 ELSE 1 END, fecha_entrega ASC, id ASC
         `).all(assignmentId, assignmentId) as any[];
 
-        const html = generateRouteSheetHtml(assignment.consecutivo, assignment, deliveries, db);
+        const html = await generateRouteSheetHtml(assignment.consecutivo, assignment, deliveries, db);
         return { success: true, html };
     } catch (e: any) {
         logError('Error rendering preview html:', e.message);
@@ -583,11 +688,11 @@ export async function resendRouteSheetEmail(assignmentId: number): Promise<{ suc
 
         const deliveries = db.prepare(`
             SELECT * FROM ops_delivery_queue 
-            WHERE asignacion_id = ? OR (devolucion_asignacion_id = ? AND estado IN ('incompleto', 'rechazado'))
-            ORDER BY fecha_entrega ASC
+            WHERE asignacion_id = ? OR devolucion_asignacion_id = ?
+            ORDER BY CASE WHEN entregado = 1 THEN 0 ELSE 1 END, fecha_entrega ASC, id ASC
         `).all(assignmentId, assignmentId) as any[];
 
-        const htmlReport = generateRouteSheetHtml(assignment.consecutivo, assignment, deliveries, db);
+        const htmlReport = await generateRouteSheetHtml(assignment.consecutivo, assignment, deliveries, db);
 
         const emailSettingsRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'notificaciones_ruta_emails'").get() as { value: string } | undefined;
         const emailsStr = emailSettingsRow?.value || 'logistica@empresa.com';
@@ -611,17 +716,34 @@ export async function resendRouteSheetEmail(assignmentId: number): Promise<{ suc
     }
 }
 
-function generateRouteSheetHtml(
+export async function getRouteSheetEmailRecipientsAction(): Promise<{ success: boolean; emails: string[]; error?: string }> {
+    try {
+        const db = await getDb();
+        const emailSettingsRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'notificaciones_ruta_emails'").get() as { value: string } | undefined;
+        const emailsStr = emailSettingsRow?.value || 'logistica@empresa.com';
+        const emails = emailsStr.split(',').map(e => e.trim()).filter(e => e.length > 0);
+        return { success: true, emails };
+    } catch (e: any) {
+        return { success: false, emails: [], error: e.message };
+    }
+}
+
+async function generateRouteSheetHtml(
     consecutivo: string,
     assignment: any,
     deliveries: any[],
     db: any
-): string {
-    const companyName = 'Industrias Garend S.A.';
-    const companyTaxId = '3-101-133082';
-    const companyAddress = 'Alajuela, Poás, Carrillos bajo, del EBAIS 700 oeste.';
-    const companyPhone = '+506 2458-4343';
-    const companyEmail = 'ventas@industriasgarend.com';
+): Promise<string> {
+    const { getCompanySettings } = await import('@/modules/core/lib/db');
+    const company = await getCompanySettings();
+    const companyName = company?.name || 'Industrias Garend S.A.';
+    const companyTaxId = company?.taxId || '3101133082';
+    const companyAddress = company?.address || 'Alajuela, Poás, Carrillos bajo, del EBAIS 700 oeste.';
+    const companyPhone = company?.phone || '+506 2458-4343';
+    const companyEmail = company?.email || 'ventas@industriasgarend.com';
+
+    const isoSettingRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'route_sheet_iso_text'").get() as { value: string } | undefined;
+    const isoText = isoSettingRow?.value || 'DOC-LOG-04 | Ver. 02 | Sistema de Gestión de Calidad ISO 9001:2015';
 
     const dateStr = new Date(assignment.fecha_completada || assignment.fecha || Date.now()).toLocaleDateString('es-CR', { timeZone: 'America/Costa_Rica' });
     const timeStr = new Date(assignment.fecha_completada || assignment.fecha || Date.now()).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit' });
@@ -630,7 +752,7 @@ function generateRouteSheetHtml(
     if (deliveries.length === 0) {
         rowsHtml = `
             <tr>
-                <td colspan="5" style="padding: 12px; text-align: center; color: #64748b; font-style: italic;">
+                <td colspan="7" style="padding: 16px; text-align: center; color: #64748b; font-style: italic; background: #ffffff;">
                     No se registraron entregas procesadas en esta ruta.
                 </td>
             </tr>
@@ -638,10 +760,14 @@ function generateRouteSheetHtml(
     } else {
         deliveries.forEach((d) => {
             let statusLabel = 'Completo';
-            let statusColor = '#10b981';
+            let statusColor = '#059669';
             let statusBg = '#d1fae5';
 
-            if (d.estado === 'incompleto') {
+            if (d.entregado === 0 || d.estado === 'pendiente') {
+                statusLabel = 'No Entregado';
+                statusColor = '#b45309'; // ámbar oscuro
+                statusBg = '#fef3c7';    // amarillo claro
+            } else if (d.estado === 'incompleto') {
                 statusLabel = 'Incompleto';
                 statusColor = '#d97706';
                 statusBg = '#fef3c7';
@@ -664,20 +790,73 @@ function generateRouteSheetHtml(
             } catch (e) {}
 
             const deliveryTime = d.fecha_entrega ? new Date(d.fecha_entrega).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit' }) : 'N/D';
+            const receptorText = d.nombre_recibe ? `<strong>${d.nombre_recibe}</strong>` : '<span style="color: #94a3b8; font-style: italic;">Sin registrar</span>';
+
+            // Resolve Firma Digital (Convert file name to inline Base64 data URI so it never breaks in web/PDF/email)
+            let firmaDataUri: string | null = null;
+            if (d.firma_cliente) {
+                if (d.firma_cliente.startsWith('data:image/')) {
+                    firmaDataUri = d.firma_cliente;
+                } else if (d.firma_cliente.startsWith('http://') || d.firma_cliente.startsWith('https://')) {
+                    firmaDataUri = d.firma_cliente;
+                } else {
+                    try {
+                        const fs = require('fs');
+                        const path = require('path');
+                        const filePath = path.join(process.cwd(), 'fleet_uploads', path.basename(d.firma_cliente));
+                        if (fs.existsSync(filePath)) {
+                            const ext = path.extname(filePath).toLowerCase().replace('.', '') || 'png';
+                            const fileBuffer = fs.readFileSync(filePath);
+                            firmaDataUri = `data:image/${ext === 'jpg' ? 'jpeg' : ext};base64,${fileBuffer.toString('base64')}`;
+                        } else {
+                            firmaDataUri = `/api/fleet/files/${d.firma_cliente}`;
+                        }
+                    } catch (e) {
+                        firmaDataUri = `/api/fleet/files/${d.firma_cliente}`;
+                    }
+                }
+            }
+
+            // Firma Digital Container (Uniform Rectangular Size for ISO 9001 compliance)
+        const firmaHtml = firmaDataUri
+                ? `<div style="width: 95px; height: 38px; border: 1px solid #cbd5e1; border-radius: 4px; background: #ffffff; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; padding: 1px; box-sizing: border-box;">
+                     <img src="${firmaDataUri}" alt="Firma Recibido" style="max-width: 100%; max-height: 100%; object-fit: contain;" />
+                   </div>`
+                : `<div style="width: 95px; height: 38px; border: 1px dashed #cbd5e1; border-radius: 4px; background: #f8fafc; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; color: #94a3b8; font-style: italic; box-sizing: border-box;">
+                     Sin firma digital
+                   </div>`;
+
+            let boletaBadgeHtml = '';
+            if (d.boleta_numero && d.boleta_numero !== d.documento_numero) {
+                boletaBadgeHtml = `
+                    <div style="margin-top: 3px;">
+                        <span style="display: inline-block; font-size: 9.5px; font-family: monospace; font-weight: 800; color: #0284c7; background: #e0f2fe; border: 1px solid #bae6fd; padding: 1.5px 5px; border-radius: 4px; white-space: nowrap;">
+                            📄 Boleta: #${d.boleta_numero}
+                        </span>
+                    </div>
+                `;
+            }
 
             rowsHtml += `
-                <tr style="border-bottom: 1px solid #e2e8f0;">
-                    <td style="padding: 10px; font-size: 13px; color: #1e293b;">${deliveryTime}</td>
-                    <td style="padding: 10px; font-size: 13px; color: #1e293b;">
+                <tr style="border-bottom: 1px solid #e2e8f0; page-break-inside: avoid;">
+                    <td style="padding: 8px 6px; font-size: 12px; color: #1e293b; text-align: center; white-space: nowrap;">${deliveryTime}</td>
+                    <td style="padding: 8px 6px; font-size: 12px; color: #1e293b;">
                         <strong>${d.cliente_nombre}</strong><br/>
-                        <span style="font-size: 11px; color: #64748b;">ID: ${d.cliente_id}</span>
+                        <span style="font-size: 10px; color: #64748b; font-weight: 600;">ID: ${d.cliente_id}</span>
                     </td>
-                    <td style="padding: 10px; font-size: 13px; color: #0f172a; font-family: monospace; font-weight: bold;">${d.documento_numero}</td>
-                    <td style="padding: 10px; font-size: 12px; color: #475569;">${addressText}</td>
-                    <td style="padding: 10px; text-align: center;">
-                        <span style="display: inline-block; padding: 4px 8px; border-radius: 9999px; font-size: 11px; font-weight: bold; color: ${statusColor}; background-color: ${statusBg};">
+                    <td style="padding: 8px 6px; font-size: 12px; color: #0f172a; font-family: monospace; font-weight: bold; white-space: nowrap;">
+                        ${d.documento_numero}
+                        ${boletaBadgeHtml}
+                    </td>
+                    <td style="padding: 8px 6px; font-size: 11px; color: #475569; line-height: 1.3;">${addressText}</td>
+                    <td style="padding: 8px 6px; font-size: 11px; color: #334155;">${receptorText}</td>
+                    <td style="padding: 8px 6px; text-align: center;">
+                        <span style="display: inline-block; padding: 3px 8px; border-radius: 9999px; font-size: 10px; font-weight: bold; color: ${statusColor}; background-color: ${statusBg}; white-space: nowrap;">
                             ${statusLabel}
                         </span>
+                    </td>
+                    <td style="padding: 6px 4px; text-align: center; vertical-align: middle;">
+                        ${firmaHtml}
                     </td>
                 </tr>
             `;
@@ -686,66 +865,137 @@ function generateRouteSheetHtml(
 
     return `
     <!DOCTYPE html>
-    <html>
+    <html lang="es">
     <head>
         <meta charset="utf-8">
         <title>Hoja de Ruta - ${consecutivo}</title>
+        <style>
+            @page {
+                size: letter landscape;
+                margin: 10mm 12mm 10mm 12mm;
+            }
+            @media print {
+                body {
+                    background-color: #ffffff !important;
+                    padding: 0 !important;
+                    font-size: 11px;
+                }
+                .no-print {
+                    display: none !important;
+                }
+                .route-sheet-page {
+                    border: none !important;
+                    box-shadow: none !important;
+                    padding: 0 !important;
+                    max-width: 100% !important;
+                    margin-bottom: 0 !important;
+                    page-break-after: always;
+                    break-after: page;
+                }
+                .route-sheet-page:last-child {
+                    page-break-after: avoid;
+                    break-after: avoid;
+                }
+                thead {
+                    display: table-header-group;
+                }
+                tr {
+                    page-break-inside: avoid;
+                }
+            }
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                background-color: #f1f5f9;
+                margin: 0;
+                padding: 24px;
+                color: #0f172a;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            .route-sheet-page {
+                max-width: 1100px;
+                margin: 0 auto 30px auto;
+                background-color: #ffffff;
+                border: 1px solid #cbd5e1;
+                border-radius: 8px;
+                padding: 24px;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+            }
+            table {
+                width: 100%;
+                border-collapse: collapse;
+            }
+            .page-badge {
+                display: inline-block;
+                background-color: #f1f5f9;
+                color: #475569;
+                font-size: 10px;
+                font-weight: 800;
+                padding: 2px 8px;
+                border-radius: 4px;
+                border: 1px solid #cbd5e1;
+                margin-top: 4px;
+            }
+        </style>
     </head>
-    <body style="font-family: Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 20px; color: #1e293b;">
-        <div style="max-width: 800px; margin: 0 auto; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 30px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+    <body>
+        <!-- PÁGINA 1: LISTADO DE ENTREGAS Y FACTURAS -->
+        <div class="route-sheet-page">
             
-            <!-- Cabecera de la Empresa -->
-            <table style="width: 100%; border-collapse: collapse; margin-bottom: 25px;">
+            <!-- Encabezado Institucional Página 1 -->
+            <table style="margin-bottom: 16px; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px;">
                 <tr>
-                    <td style="width: 60%; vertical-align: top;">
-                        <h2 style="margin: 0; color: #1e3a8a; font-size: 22px; font-weight: bold;">${companyName}</h2>
-                        <p style="margin: 4px 0; font-size: 12px; color: #475569;">Cédula Jurídica: ${companyTaxId}</p>
-                        <p style="margin: 2px 0; font-size: 12px; color: #475569;">Dirección: ${companyAddress}</p>
-                        <p style="margin: 2px 0; font-size: 12px; color: #475569;">Tel: ${companyPhone} | Email: ${companyEmail}</p>
+                    <td style="width: 56%; vertical-align: top;">
+                        <h1 style="margin: 0 0 4px 0; font-size: 19px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 0.05em;">
+                            ${companyName}
+                        </h1>
+                        <div style="font-size: 11px; color: #475569; line-height: 1.4;">
+                            <strong>Cédula Jurídica:</strong> ${companyTaxId}<br/>
+                            ${companyAddress}<br/>
+                            <strong>Teléfono:</strong> ${companyPhone} | <strong>Email:</strong> ${companyEmail}
+                        </div>
                     </td>
-                    <td style="width: 40%; text-align: right; vertical-align: top;">
-                        <div style="display: inline-block; background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 12px 18px; text-align: right;">
-                            <span style="font-size: 11px; font-weight: bold; color: #1e40af; text-transform: uppercase; display: block; margin-bottom: 4px;">HOJA DE RUTA</span>
-                            <span style="font-size: 18px; font-weight: bold; color: #1d4ed8; font-family: monospace;">${consecutivo}</span>
-                            <span style="font-size: 12px; color: #475569; display: block; margin-top: 6px;">Fecha: ${dateStr} ${timeStr}</span>
+                    <td style="width: 44%; text-align: right; vertical-align: top;">
+                        <div style="display: inline-block; background-color: #eff6ff; border: 1.5px solid #93c5fd; border-radius: 8px; padding: 8px 14px; text-align: right; min-width: 250px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                                <span style="font-size: 10px; font-weight: 800; color: #1e40af; text-transform: uppercase; letter-spacing: 0.05em;">HOJA DE RUTA</span>
+                                <span style="font-size: 16px; font-weight: 900; color: #1d4ed8; font-family: monospace;">${consecutivo}</span>
+                            </div>
+                            <div style="font-size: 9.5px; font-weight: bold; color: #0284c7; background: #e0f2fe; padding: 2.5px 6px; border-radius: 4px; margin: 3px 0; text-align: center; border: 1px solid #bae6fd;">
+                                📋 ${isoText}
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+                                <span style="font-size: 10.5px; color: #475569;">Fecha: <strong>${dateStr} ${timeStr}</strong></span>
+                                <span class="page-badge">Hoja 1 de 2</span>
+                            </div>
                         </div>
                     </td>
                 </tr>
             </table>
 
-            <hr style="border: 0; border-top: 1px solid #e2e8f0; margin-bottom: 20px;"/>
-
             <!-- Datos Generales de la Ruta -->
-            <h3 style="margin: 0 0 12px 0; color: #1e3a8a; font-size: 15px; text-transform: uppercase; border-left: 4px solid #3b82f6; padding-left: 8px;">
-                Información del Viaje
-            </h3>
-            <table style="width: 100%; border-collapse: collapse; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 25px;">
+            <table style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 16px;">
                 <tr>
-                    <td style="padding: 10px; font-size: 13px; color: #475569; border-bottom: 1px solid #e2e8f0; width: 25%;"><strong>Ruta:</strong></td>
-                    <td style="padding: 10px; font-size: 13px; color: #0f172a; border-bottom: 1px solid #e2e8f0; width: 25%;">${assignment.ruta_nombre}</td>
-                    <td style="padding: 10px; font-size: 13px; color: #475569; border-bottom: 1px solid #e2e8f0; width: 25%;"><strong>Chofer:</strong></td>
-                    <td style="padding: 10px; font-size: 13px; color: #0f172a; border-bottom: 1px solid #e2e8f0; width: 25%;">${assignment.chofer_nombre}</td>
-                </tr>
-                <tr>
-                    <td style="padding: 10px; font-size: 13px; color: #475569; width: 25%;"><strong>Vehículo / Placa:</strong></td>
-                    <td style="padding: 10px; font-size: 13px; color: #0f172a; width: 25%;">${assignment.vehiculo_marca} ${assignment.vehiculo_modelo} (${assignment.vehiculo_placa})</td>
-                    <td style="padding: 10px; font-size: 13px; color: #475569; width: 25%;"><strong>Fecha Cierre:</strong></td>
-                    <td style="padding: 10px; font-size: 13px; color: #0f172a;">${dateStr}</td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 10%;"><strong>Ruta:</strong></td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 25%;">${assignment.ruta_nombre}</td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 10%;"><strong>Chofer:</strong></td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 25%;">${assignment.chofer_nombre}</td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 12%;"><strong>Vehículo:</strong></td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 18%;">${assignment.vehiculo_marca} ${assignment.vehiculo_modelo} (${assignment.vehiculo_placa})</td>
                 </tr>
             </table>
 
-            <!-- Listado de Entregas -->
-            <h3 style="margin: 0 0 12px 0; color: #1e3a8a; font-size: 15px; text-transform: uppercase; border-left: 4px solid #3b82f6; padding-left: 8px;">
-                Resumen de Entregas Realizadas
-            </h3>
-            <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
+            <!-- Listado de Entregas con Firma Digital -->
+            <table id="route-sheet-deliveries-table" style="margin-bottom: 20px; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden;">
                 <thead>
                     <tr style="background-color: #f1f5f9; border-bottom: 2px solid #cbd5e1;">
-                        <th style="padding: 10px; text-align: left; font-size: 12px; font-weight: bold; color: #475569;">Hora</th>
-                        <th style="padding: 10px; text-align: left; font-size: 12px; font-weight: bold; color: #475569;">Cliente</th>
-                        <th style="padding: 10px; text-align: left; font-size: 12px; font-weight: bold; color: #475569;">N° Factura</th>
-                        <th style="padding: 10px; text-align: left; font-size: 12px; font-weight: bold; color: #475569;">Dirección (EMB)</th>
-                        <th style="padding: 10px; text-align: center; font-size: 12px; font-weight: bold; color: #475569;">Estado</th>
+                        <th style="padding: 8px 6px; text-align: center; font-size: 11px; font-weight: bold; color: #334155; width: 65px;">Hora</th>
+                        <th style="padding: 8px 6px; text-align: left; font-size: 11px; font-weight: bold; color: #334155; width: 210px;">Cliente</th>
+                        <th style="padding: 8px 6px; text-align: left; font-size: 11px; font-weight: bold; color: #334155; width: 110px;">N° Factura</th>
+                        <th style="padding: 8px 6px; text-align: left; font-size: 11px; font-weight: bold; color: #334155;">Dirección (EMB)</th>
+                        <th style="padding: 8px 6px; text-align: left; font-size: 11px; font-weight: bold; color: #334155; width: 140px;">Recibido Por</th>
+                        <th style="padding: 8px 6px; text-align: center; font-size: 11px; font-weight: bold; color: #334155; width: 85px;">Estado</th>
+                        <th style="padding: 8px 6px; text-align: center; font-size: 11px; font-weight: bold; color: #334155; width: 110px;">Firma Digital</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -753,23 +1003,146 @@ function generateRouteSheetHtml(
                 </tbody>
             </table>
 
-            <!-- Espacio de Firmas -->
-            <table style="width: 100%; border-collapse: collapse; margin-top: 40px;">
+            <!-- Espacio de Firmas de Cierre Hoja 1 -->
+            <table style="margin-top: 25px; page-break-inside: avoid;">
                 <tr>
-                    <td style="width: 45%; text-align: center; padding-top: 30px; border-top: 1px solid #cbd5e1; font-size: 12px; color: #475569;">
-                        <strong>Firma Chofer</strong><br/>
-                        ${assignment.chofer_nombre}
+                    <td style="width: 42%; text-align: center; padding-top: 25px; border-top: 1.5px solid #94a3b8; font-size: 11px; color: #334155;">
+                        <strong style="font-size: 12px; text-transform: uppercase;">FIRMA CHOFER / TRANSPORTISTA</strong><br/>
+                        <span style="font-size: 11px; color: #64748b;">${assignment.chofer_nombre}</span>
                     </td>
-                    <td style="width: 10%;"></td>
-                    <td style="width: 45%; text-align: center; padding-top: 30px; border-top: 1px solid #cbd5e1; font-size: 12px; color: #475569;">
-                        <strong>Recibido Transportes</strong><br/>
-                        Firma y Sello
+                    <td style="width: 16%;"></td>
+                    <td style="width: 42%; text-align: center; padding-top: 25px; border-top: 1.5px solid #94a3b8; font-size: 11px; color: #334155;">
+                        <strong style="font-size: 12px; text-transform: uppercase;">RECIBIDO / VERIFICADO LOGÍSTICA</strong><br/>
+                        <span style="font-size: 11px; color: #64748b;">Firma de Conforme</span>
                     </td>
                 </tr>
             </table>
 
-            <div style="margin-top: 50px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 15px;">
-                Este es un reporte automático generado por el sistema de logística Clic-Tools en cumplimiento con las normas ISO 9001.
+            <div style="margin-top: 14px; text-align: right; font-size: 10px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 8px;">
+                Continúa en Hoja 2 (Anexo Inspección y Limpieza de Vehículos ISO 9001) ▶
+            </div>
+        </div>
+
+        <!-- PÁGINA 2: ANEXO DE LIMPIEZA E INSPECCIÓN DE VEHÍCULOS ISO 9001 -->
+        <div class="route-sheet-page" style="page-break-before: always; break-before: page;">
+            
+            <!-- Encabezado Institucional Página 2 -->
+            <table style="margin-bottom: 16px; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px;">
+                <tr>
+                    <td style="width: 56%; vertical-align: top;">
+                        <h1 style="margin: 0 0 4px 0; font-size: 19px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 0.05em;">
+                            ${companyName}
+                        </h1>
+                        <div style="font-size: 11px; color: #475569; line-height: 1.4;">
+                            <strong>Cédula Jurídica:</strong> ${companyTaxId}<br/>
+                            ${companyAddress}<br/>
+                            <strong>Teléfono:</strong> ${companyPhone} | <strong>Email:</strong> ${companyEmail}
+                        </div>
+                    </td>
+                    <td style="width: 44%; text-align: right; vertical-align: top;">
+                        <div style="display: inline-block; background-color: #eff6ff; border: 1.5px solid #93c5fd; border-radius: 8px; padding: 8px 14px; text-align: right; min-width: 250px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+                                <span style="font-size: 10px; font-weight: 800; color: #1e40af; text-transform: uppercase; letter-spacing: 0.05em;">HOJA DE RUTA</span>
+                                <span style="font-size: 16px; font-weight: 900; color: #1d4ed8; font-family: monospace;">${consecutivo}</span>
+                            </div>
+                            <div style="font-size: 9.5px; font-weight: bold; color: #0284c7; background: #e0f2fe; padding: 2.5px 6px; border-radius: 4px; margin: 3px 0; text-align: center; border: 1px solid #bae6fd;">
+                                📋 ${isoText}
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px;">
+                                <span style="font-size: 10.5px; color: #475569;">Fecha: <strong>${dateStr} ${timeStr}</strong></span>
+                                <span class="page-badge">Hoja 2 de 2</span>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+            </table>
+
+            <!-- Datos Generales de la Ruta Página 2 -->
+            <table style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 20px;">
+                <tr>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 10%;"><strong>Ruta:</strong></td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 25%;">${assignment.ruta_nombre}</td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 10%;"><strong>Chofer:</strong></td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 25%;">${assignment.chofer_nombre}</td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 12%;"><strong>Vehículo:</strong></td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 18%;">${assignment.vehiculo_marca} ${assignment.vehiculo_modelo} (${assignment.vehiculo_placa})</td>
+                </tr>
+            </table>
+
+            <!-- Título de Sección Anexa -->
+            <div style="margin-bottom: 12px; padding: 6px 12px; background-color: #f1f5f9; border-left: 4px solid #1d4ed8; border-radius: 0 4px 4px 0;">
+                <span style="font-size: 12px; font-weight: 800; color: #1e3a8a; text-transform: uppercase; letter-spacing: 0.05em;">
+                    ANEXO: CONTROL DE CALIDAD E INSPECCIÓN PRE-OPERACIONAL DEL VEHÍCULO
+                </span>
+            </div>
+
+            <!-- Lista de Verificación ISO 9001: Limpieza e Inspección de Vehículos -->
+            <div style="border: 1.5px solid #0f172a; border-radius: 6px; overflow: hidden; background-color: #ffffff; margin-bottom: 28px;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 11.5px;">
+                    <thead>
+                        <tr style="background-color: #0f172a; color: #ffffff;">
+                            <th style="padding: 8px 14px; text-align: left; font-weight: 800; font-size: 11.5px; letter-spacing: 0.05em; text-transform: uppercase;">
+                                Limpieza e Inspección de Vehículos (X) - Control de Calidad ISO 9001
+                            </th>
+                            <th style="padding: 8px 14px; text-align: center; width: 100px; font-weight: 800; font-size: 11.5px; letter-spacing: 0.05em; border-left: 1px solid #334155;">
+                                ESTADO
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr style="border-bottom: 1px solid #cbd5e1;">
+                            <td style="padding: 7px 14px; color: #1e293b;">* Pisos libres de humedad:</td>
+                            <td style="padding: 7px 14px; text-align: center; font-weight: 800; color: #0f172a; border-left: 1px solid #cbd5e1; background-color: #f8fafc;">SI</td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid #cbd5e1;">
+                            <td style="padding: 7px 14px; color: #1e293b;">* Pisos y esquinas libres de residuos:</td>
+                            <td style="padding: 7px 14px; text-align: center; font-weight: 800; color: #0f172a; border-left: 1px solid #cbd5e1; background-color: #f8fafc;">SI</td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid #cbd5e1;">
+                            <td style="padding: 7px 14px; color: #1e293b;">* Libre de plagas o insectos:</td>
+                            <td style="padding: 7px 14px; text-align: center; font-weight: 800; color: #0f172a; border-left: 1px solid #cbd5e1; background-color: #f8fafc;">SI</td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid #cbd5e1;">
+                            <td style="padding: 7px 14px; color: #1e293b;">* Paredes y puertas libres de humedad o suciedad:</td>
+                            <td style="padding: 7px 14px; text-align: center; font-weight: 800; color: #0f172a; border-left: 1px solid #cbd5e1; background-color: #f8fafc;">SI</td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid #cbd5e1;">
+                            <td style="padding: 7px 14px; color: #1e293b;">* Cabina libre de suciedad o basura:</td>
+                            <td style="padding: 7px 14px; text-align: center; font-weight: 800; color: #0f172a; border-left: 1px solid #cbd5e1; background-color: #f8fafc;">SI</td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid #cbd5e1;">
+                            <td style="padding: 7px 14px; color: #1e293b;">* Nivel de combustible:</td>
+                            <td style="padding: 7px 14px; text-align: center; font-weight: 800; color: #0f172a; border-left: 1px solid #cbd5e1; background-color: #f8fafc;">Revisado</td>
+                        </tr>
+                        <tr style="background-color: #f1f5f9;">
+                            <td style="padding: 8px 14px; font-weight: 800; color: #0f172a;">
+                                Realizado por: <span style="font-weight: 700; color: #1e40af;">${assignment.chofer_nombre}</span>
+                            </td>
+                            <td style="padding: 8px 14px; text-align: center; font-size: 11px; font-weight: 700; color: #475569; border-left: 1px solid #cbd5e1;">
+                                CONFORME
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Espacio de Firmas de Cierre -->
+            <table style="margin-top: 35px; page-break-inside: avoid;">
+                <tr>
+                    <td style="width: 42%; text-align: center; padding-top: 30px; border-top: 1.5px solid #94a3b8; font-size: 11px; color: #334155;">
+                        <strong style="font-size: 12px; text-transform: uppercase;">FIRMA CHOFER / TRANSPORTISTA</strong><br/>
+                        <span style="font-size: 11px; color: #64748b;">${assignment.chofer_nombre}</span>
+                    </td>
+                    <td style="width: 16%;"></td>
+                    <td style="width: 42%; text-align: center; padding-top: 30px; border-top: 1.5px solid #94a3b8; font-size: 11px; color: #334155;">
+                        <strong style="font-size: 12px; text-transform: uppercase;">RECIBIDO / VERIFICADO LOGÍSTICA</strong><br/>
+                        <span style="font-size: 11px; color: #64748b;">Firma de Conforme</span>
+                    </td>
+                </tr>
+            </table>
+
+            <div style="margin-top: 35px; text-align: center; font-size: 10px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 8px;">
+                Documento de control logístico emitido bajo las directrices del Sistema de Gestión de Calidad ISO 9001:2015.
             </div>
         </div>
     </body>
@@ -777,20 +1150,26 @@ function generateRouteSheetHtml(
     `;
 }
 
-
 // --- Queue ---
 
 export async function getGeneralQueue(): Promise<any[]> {
     const db = await getDb();
     try {
+        // Auto-cleanup orphan telegram locks older than 15 minutes (TTL 15 min)
+        try {
+            const fifteenMinAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+            db.prepare('UPDATE ops_delivery_queue SET telegram_lock_at = NULL, telegram_lock_by = NULL WHERE telegram_lock_at IS NOT NULL AND telegram_lock_at < ?').run(fifteenMinAgo);
+        } catch (_) {}
+
         // Returns pending, unassigned delivery documents (including returns 'D' for visual reference, but they are excluded from routing in the UI)
-        return db.prepare(`
+        const rows = db.prepare(`
             SELECT q.*, c.phone as cliente_telefono
             FROM ops_delivery_queue q
             LEFT JOIN core_customers c ON q.cliente_id = c.id
             WHERE q.entregado = 0 AND q.asignacion_id IS NULL
             ORDER BY q.fecha_registro DESC
         `).all();
+        return JSON.parse(JSON.stringify(rows));
     } catch (e: any) {
         logError('Error getting general delivery queue:', e.message);
         return [];
@@ -800,9 +1179,15 @@ export async function getGeneralQueue(): Promise<any[]> {
 export async function getAssignedDeliveriesToday(includeCompleted = false): Promise<any[]> {
     const db = await getDb();
     try {
+        // Auto-cleanup orphan telegram locks older than 15 minutes (TTL 15 min)
+        try {
+            const fifteenMinAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+            db.prepare('UPDATE ops_delivery_queue SET telegram_lock_at = NULL, telegram_lock_by = NULL WHERE telegram_lock_at IS NOT NULL AND telegram_lock_at < ?').run(fifteenMinAgo);
+        } catch (_) {}
+
         const todayStr = await getBusinessDateStr();
         // Joins queue docs with daily assignments (either active or closed where they got returned)
-        return db.prepare(`
+        const rows = db.prepare(`
             SELECT 
                 q.*,
                 c.phone as cliente_telefono,
@@ -818,6 +1203,7 @@ export async function getAssignedDeliveriesToday(includeCompleted = false): Prom
             WHERE a.fecha = ? AND (a.activa = 1 OR ? = 1)
             ORDER BY q.fecha_registro DESC
         `).all(todayStr, includeCompleted ? 1 : 0);
+        return JSON.parse(JSON.stringify(rows));
     } catch (e: any) {
         logError('Error getting assigned deliveries:', e.message);
         return [];
@@ -929,7 +1315,7 @@ export async function updateDeliveryStatus(
 }
 
 export async function revertDeliveryStatus(id: number): Promise<{ success: boolean; error?: string }> {
-    await authorizeAction('deliveries:write');
+    await authorizeAction('deliveries:revert');
     const db = await getDb();
     try {
         const transaction = db.transaction(() => {
@@ -941,8 +1327,10 @@ export async function revertDeliveryStatus(id: number): Promise<{ success: boole
             db.prepare(`
                 UPDATE ops_delivery_queue
                 SET estado = 'pendiente', comentario = null, canal_registro = null, gestionado_por = null, 
-                    entregado = 0, fecha_entrega = null, release_code_id = null, 
-                    foto_evidencia = null, foto_factura = null, latitud = null, longitud = null
+                    entregado = 0, fecha_entrega = null, hora_entrega_efectiva = null, tiempo_descarga_min = null,
+                    boleta_numero = null, release_code_id = null, 
+                    foto_evidencia = null, foto_factura = null, firma_cliente = null, nombre_recibe = null,
+                    latitud = null, longitud = null, telegram_lock_at = null, telegram_lock_by = null
                 WHERE id = ?
             `).run(id);
 
@@ -1021,7 +1409,7 @@ export async function populateDeliveryQueueFromERPInternal(options?: {
             if (options.daysLookback !== undefined && options.daysLookback !== null) {
                 const dateThreshold = new Date();
                 dateThreshold.setDate(dateThreshold.getDate() - options.daysLookback);
-                const thresholdStr = dateThreshold.toISOString().split('T')[0];
+                const thresholdStr = await getBusinessDateStr(dateThreshold);
                 
                 whereInvoices += " AND FECHA >= ?";
                 whereOrders += " AND FECHA_PEDIDO >= ?";
@@ -1043,11 +1431,26 @@ export async function populateDeliveryQueueFromERPInternal(options?: {
             }
         }
 
+        const fallbackDateStr = await getBusinessDateStr();
         const transaction = db.transaction(() => {
-            // A. Import from active ERP Invoices (Both F and D)
+            // A. Import from active ERP Invoices (Both F and D) cruzando con core_erp_order_headers por PEDIDO
             const erpInvoices = db.prepare(`
-                SELECT FACTURA, CLIENTE, NOMBRE_CLIENTE, USUARIO, FECHA, TIPO_DOCUMENTO, FACTURA_ORIGINAL, PEDIDO
-                FROM core_erp_invoice_headers
+                SELECT 
+                    h.FACTURA, 
+                    h.CLIENTE, 
+                    h.NOMBRE_CLIENTE, 
+                    h.USUARIO as FACTURADOR_USUARIO, 
+                    h.VENDEDOR, 
+                    h.FECHA, 
+                    h.TIPO_DOCUMENTO, 
+                    h.FACTURA_ORIGINAL, 
+                    h.PEDIDO,
+                    o.USUARIO as CREADOR_PEDIDO_USUARIO
+                FROM core_erp_invoice_headers h
+                LEFT JOIN core_erp_order_headers o ON (
+                    (h.PEDIDO IS NOT NULL AND h.PEDIDO <> '' AND h.PEDIDO = o.PEDIDO)
+                    OR (h.PEDIDO IS NOT NULL AND h.PEDIDO <> '' AND TRIM(h.PEDIDO) = TRIM(o.PEDIDO))
+                )
                 WHERE ${whereInvoices}
             `).all(...paramsInvoices) as any[];
 
@@ -1057,31 +1460,56 @@ export async function populateDeliveryQueueFromERPInternal(options?: {
             `);
 
             const checkInvoiceExists = db.prepare('SELECT 1 FROM ops_delivery_queue WHERE documento_numero = ? AND tipo_documento = \'factura\'');
-            const getOrderCreator = db.prepare('SELECT USUARIO FROM core_erp_order_headers WHERE PEDIDO = ?');
 
             for (const inv of erpInvoices) {
                 const exists = checkInvoiceExists.get(inv.FACTURA);
                 if (!exists) {
-                    let orderCreator = null;
-                    if (inv.PEDIDO) {
-                        const order = getOrderCreator.get(inv.PEDIDO) as { USUARIO: string } | undefined;
-                        if (order?.USUARIO) {
-                            orderCreator = order.USUARIO;
-                        }
-                    }
-                    const finalCreator = orderCreator || inv.USUARIO || 'ERP_SYNC';
+                    // Prioridad: 1. Creador real del Pedido en Softland -> 2. Vendedor de Factura -> 3. Usuario Facturador de Lote
+                    const finalCreator = (inv.CREADOR_PEDIDO_USUARIO && String(inv.CREADOR_PEDIDO_USUARIO).trim())
+                        ? String(inv.CREADOR_PEDIDO_USUARIO).trim()
+                        : ((inv.VENDEDOR && String(inv.VENDEDOR).trim())
+                            ? String(inv.VENDEDOR).trim()
+                            : (inv.FACTURADOR_USUARIO || 'ERP_SYNC'));
 
                     insertInvoice.run(
                         inv.FACTURA, 
                         inv.CLIENTE, 
                         inv.NOMBRE_CLIENTE || 'Cliente ERP', 
                         finalCreator, 
-                        inv.FECHA || new Date().toISOString().split('T')[0],
+                        inv.FECHA || fallbackDateStr,
                         inv.TIPO_DOCUMENTO || 'F',
                         inv.FACTURA_ORIGINAL || null
                     );
                     addedCount++;
                 }
+            }
+
+            // A.1. Auto-Curación Retrospectiva: Actualizar el creador real de todas las facturas en cola (no entregadas) que tengan pedido asignado
+            try {
+                db.prepare(`
+                    UPDATE ops_delivery_queue
+                    SET creado_por = (
+                        SELECT o.USUARIO
+                        FROM core_erp_invoice_headers h
+                        JOIN core_erp_order_headers o ON (h.PEDIDO = o.PEDIDO OR TRIM(h.PEDIDO) = TRIM(o.PEDIDO))
+                        WHERE h.FACTURA = ops_delivery_queue.documento_numero
+                          AND o.USUARIO IS NOT NULL
+                          AND o.USUARIO <> ''
+                        LIMIT 1
+                    )
+                    WHERE tipo_documento = 'factura'
+                      AND EXISTS (
+                        SELECT 1
+                        FROM core_erp_invoice_headers h
+                        JOIN core_erp_order_headers o ON (h.PEDIDO = o.PEDIDO OR TRIM(h.PEDIDO) = TRIM(o.PEDIDO))
+                        WHERE h.FACTURA = ops_delivery_queue.documento_numero
+                          AND o.USUARIO IS NOT NULL
+                          AND o.USUARIO <> ''
+                          AND ops_delivery_queue.creado_por <> o.USUARIO
+                      )
+                `).run();
+            } catch (curationErr: any) {
+                console.warn('Auto-curación de creadores ERP advertencia:', curationErr.message);
             }
 
             // B. Import from active ERP Orders
@@ -1107,7 +1535,7 @@ export async function populateDeliveryQueueFromERPInternal(options?: {
                     const exists = checkOrderExists.get(ord.PEDIDO);
                     if (!exists) {
                         const cust = getCustomerName.get(ord.CLIENTE) as { name: string } | undefined;
-                        insertOrder.run(ord.PEDIDO, ord.CLIENTE, cust?.name || 'Cliente ERP', ord.USUARIO || 'ERP_SYNC', ord.FECHA_PEDIDO || new Date().toISOString().split('T')[0]);
+                        insertOrder.run(ord.PEDIDO, ord.CLIENTE, cust?.name || 'Cliente ERP', ord.USUARIO || 'ERP_SYNC', ord.FECHA_PEDIDO || fallbackDateStr);
                         addedCount++;
                     }
                 }
@@ -1192,7 +1620,7 @@ export async function getDrivers(): Promise<any[]> {
     const db = await getDb();
     try {
         // Enforce using the manual driver list configured in Fleet Settings
-        return db.prepare(`
+        const rows = db.prepare(`
             SELECT id, name 
             FROM core_users 
             WHERE employeeId IN (
@@ -1200,6 +1628,7 @@ export async function getDrivers(): Promise<any[]> {
             )
             ORDER BY name ASC
         `).all();
+        return JSON.parse(JSON.stringify(rows));
     } catch (e: any) {
         logError('Error getting drivers:', e.message);
         return [];
@@ -1209,7 +1638,8 @@ export async function getDrivers(): Promise<any[]> {
 export async function getVehicles(): Promise<any[]> {
     const db = await getDb();
     try {
-        return db.prepare('SELECT id, plate, brand, model FROM fleet_vehicles ORDER BY plate ASC').all();
+        const rows = db.prepare('SELECT id, plate, brand, model FROM fleet_vehicles ORDER BY plate ASC').all();
+        return JSON.parse(JSON.stringify(rows));
     } catch (e: any) {
         logError('Error getting vehicles:', e.message);
         return [];
@@ -1437,10 +1867,39 @@ export async function sweepActiveAssignments(closedBy: string): Promise<{ succes
                             }
                         }
 
+                        const shouldSendNotification = (userId: number, channel: 'email' | 'telegram', estado: string): boolean => {
+                            try {
+                                const prefs = db.prepare("SELECT key, value FROM core_user_preferences WHERE userId = ?").all(userId) as { key: string, value: string }[];
+                                const map = new Map(prefs.map(p => [p.key, p.value]));
+                                const master = map.get('notif_master');
+                                if (master === 'false' || master === '0') return false;
+                                if (channel === 'email') {
+                                    const chEmail = map.get('notif_channel_email');
+                                    if (chEmail === 'false' || chEmail === '0') return false;
+                                }
+                                const norm = estado.toLowerCase().trim();
+                                if (norm === 'completo' || norm === 'entregado') {
+                                    const comp = map.get('ops_notif_delivery_completed');
+                                    if (comp === 'false' || comp === '0') return false;
+                                    const legacy = map.get('ops_delivery_notifications_enabled');
+                                    if (comp === undefined && (legacy === 'false' || legacy === '0')) return false;
+                                } else if (norm === 'incompleto') {
+                                    const incomp = map.get('ops_notif_delivery_incomplete');
+                                    if (incomp === 'false' || incomp === '0') return false;
+                                } else if (norm === 'rechazado') {
+                                    const rej = map.get('ops_notif_delivery_rejected');
+                                    if (rej === 'false' || rej === '0') return false;
+                                }
+                                return true;
+                            } catch (e) {
+                                return true;
+                            }
+                        };
+
                         if (salespersonCode) {
                             const spData = db.prepare('SELECT ACTIVO FROM core_salespersons WHERE VENDEDOR = ?').get(salespersonCode) as { ACTIVO: string } | undefined;
                             if (!spData || spData.ACTIVO !== 'N') {
-                                const spUser = db.prepare('SELECT id, email, employeeId FROM core_users WHERE salespersonId = ?').get(salespersonCode) as { id: string, email: string, employeeId: string | null } | undefined;
+                                const spUser = db.prepare('SELECT id, email, employeeId FROM core_users WHERE salespersonId = ?').get(salespersonCode) as { id: number, email: string, employeeId: string | null } | undefined;
                                 if (spUser && spUser.email) {
                                     let spActive = true;
                                     if (spUser.employeeId) {
@@ -1449,10 +1908,10 @@ export async function sweepActiveAssignments(closedBy: string): Promise<{ succes
                                             spActive = false;
                                         }
                                     }
+
                                     if (spActive) {
-                                        const spPref = db.prepare("SELECT value FROM core_user_preferences WHERE userId = ? AND key = 'ops_delivery_notifications_enabled'").get(spUser.id) as { value: string } | undefined;
-                                        const isEnabled = spPref ? (spPref.value === 'true' || spPref.value === '1') : true;
-                                        if (isEnabled) {
+                                        const isAllowed = shouldSendNotification(Number(spUser.id), 'email', doc.estado || 'completo');
+                                        if (isAllowed) {
                                             logInfo(`Sending salesperson night sweep notification to ${spUser.email} for document ${doc.documento_numero}`);
                                             await sendEmail({
                                                 to: spUser.email,
@@ -1469,7 +1928,7 @@ export async function sweepActiveAssignments(closedBy: string): Promise<{ succes
                         // --- 2. Resolve ERP Creador (User) ---
                         const erpAlias = doc.creado_por;
                         if (erpAlias) {
-                            const creatorUser = db.prepare('SELECT id, email, employeeId, salespersonId FROM core_users WHERE erpAlias = ?').get(erpAlias) as { id: string, email: string, employeeId: string | null, salespersonId: string | null } | undefined;
+                            const creatorUser = db.prepare('SELECT id, email, employeeId, salespersonId FROM core_users WHERE erpAlias = ?').get(erpAlias) as { id: number, email: string, employeeId: string | null, salespersonId: string | null } | undefined;
                             if (creatorUser && creatorUser.email) {
                                 const emailClean = creatorUser.email.toLowerCase().trim();
                                 if (!sentEmails.has(emailClean)) {
@@ -1487,12 +1946,15 @@ export async function sweepActiveAssignments(closedBy: string): Promise<{ succes
                                         }
                                     }
                                     if (creatorActive) {
-                                        logInfo(`Sending ERP Creator night sweep notification to ${creatorUser.email} for document ${doc.documento_numero}`);
-                                        await sendEmail({
-                                            to: creatorUser.email,
-                                            subject: emailSubject,
-                                            html: emailHtml
-                                        });
+                                        const isAllowed = shouldSendNotification(Number(creatorUser.id), 'email', doc.estado || 'completo');
+                                        if (isAllowed) {
+                                            logInfo(`Sending ERP Creator night sweep notification to ${creatorUser.email} for document ${doc.documento_numero}`);
+                                            await sendEmail({
+                                                to: creatorUser.email,
+                                                subject: emailSubject,
+                                                html: emailHtml
+                                            });
+                                        }
                                     }
                                 }
                             }
@@ -1628,6 +2090,65 @@ export async function getTelegramDeliveryBotLogsAction(dateString?: string): Pro
     }
 }
 
+/**
+ * Consulta la bitácora de eventos y diagnósticos enviados por la aplicación móvil Clic Driver APK.
+ * Filtra el ruido técnico para la vista operativa de supervisores de ruta.
+ */
+export async function getApkDriverLogsAction(dateString?: string): Promise<any[]> {
+    try {
+        const db = await getDb();
+        const targetDate = dateString || await getBusinessDateStr();
+
+        db.prepare(`
+            CREATE TABLE IF NOT EXISTS ops_driver_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                user_name TEXT,
+                chofer_nombre TEXT,
+                chofer_telefono TEXT,
+                ruta_nombre TEXT,
+                placa_vehiculo TEXT,
+                level TEXT NOT NULL,
+                category TEXT DEFAULT 'operativo',
+                message TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            )
+        `).run();
+
+        const rows = db.prepare(`
+            SELECT * FROM ops_driver_logs
+            WHERE (date(timestamp, '-6 hours') = ? OR date(timestamp) = ?)
+              AND message NOT LIKE 'GET http%'
+              AND message NOT LIKE 'Diagnóstico%'
+              AND message NOT LIKE 'CHECKLIST CONFIGURACIÓN%'
+              AND message NOT LIKE '1. Empresa Cliente%'
+              AND message NOT LIKE '2. PIN Admin%'
+              AND message NOT LIKE '3. Modo Kiosco%'
+              AND message NOT LIKE '4. Guardián GPS%'
+              AND message NOT LIKE '5. Tamaño Papel%'
+              AND message NOT LIKE '6. Apps Autorizadas%'
+              AND message NOT LIKE 'Iniciando diagnóstico%'
+              AND message NOT LIKE '🔒 Verificación de Permisos%'
+              AND message NOT LIKE '🔍 Consultando actualización%'
+              AND message NOT LIKE '✅ Aplicación al día%'
+              AND message NOT LIKE '✅ OTA RESPUESTA%'
+              AND message NOT LIKE '🚀 BackgroundSyncService%'
+              AND message NOT LIKE '🟢 BackgroundSyncService%'
+              AND message NOT LIKE '👑 Políticas MDM%'
+              AND message NOT LIKE '👑 ESTADO DEVICE OWNER%'
+              AND message NOT LIKE '🔒 VERIFICACIÓN DE MODO KIOSCO%'
+              AND message NOT LIKE '🔓 MODO KIOSCO NATIVO%'
+              AND message NOT LIKE '🔄 Sync automático completado (intervalo 5 min, 0 entregas%'
+            ORDER BY timestamp DESC
+        `).all(targetDate, targetDate) as any[];
+
+        return JSON.parse(JSON.stringify(rows));
+    } catch (error: any) {
+        console.error("Error fetching APK driver logs:", error);
+        return [];
+    }
+}
+
 export async function getDeliveryGPSData(dateString?: string): Promise<{
     activeTrucks: any[];
     gpsPaths: Record<number, any[]>;
@@ -1710,11 +2231,12 @@ export async function getDeliveryGPSData(dateString?: string): Promise<{
             WHERE (q.fecha_registro = ? OR (a.fecha = ? AND a.id IS NOT NULL))
         `).all(dateStr, dateStr) as any[];
 
-        return JSON.parse(JSON.stringify({
+        const result = {
             activeTrucks,
             gpsPaths,
             deliveryMarkers
-        }));
+        };
+        return JSON.parse(JSON.stringify(result));
     } catch (error: any) {
         console.error("Error in getDeliveryGPSData:", error);
         return {
@@ -1730,7 +2252,7 @@ export async function getSystemUsers(): Promise<{ id: number; name: string; emai
     const db = await getDb();
     try {
         const rows = db.prepare('SELECT id, name, email, phone FROM core_users WHERE is_active IS NOT 0 ORDER BY name').all() as any[];
-        return rows;
+        return JSON.parse(JSON.stringify(rows));
     } catch (e: any) {
         logError('Error fetching system users:', e.message);
         return [];
@@ -1741,6 +2263,7 @@ export async function getSystemUsers(): Promise<{ id: number; name: string; emai
 export async function createCollectRequestAction(
     supplierName: string,
     formData: {
+        supplier_id?: string;
         orden_compra?: string;
         factura?: string;
         metodo_pago: 'pagar_al_retirar' | 'ya_esta_pago' | 'credito';
@@ -1758,14 +2281,19 @@ export async function createCollectRequestAction(
         horario_proveedor: string;
         lugar_entrega: string;
         detalle_adicional?: string;
-    }
+        provincia_nombre?: string;
+        canton_nombre?: string;
+        distrito_nombre?: string;
+        direccion_detalle?: string;
+    },
+    lines?: { codigo?: string; descripcion: string; cantidad: number; unidad?: string }[]
 ): Promise<{ success: boolean; consecutive?: string; error?: string }> {
     await authorizeAction('deliveries:collect');
     const db = await getDb();
     try {
         const localTodayStr = await getBusinessDateStr();
         
-        // Transaction to safely generate and increment consecutive number
+        // Transaction to safely generate consecutive, queue doc, lines, and update supplier address
         const consecutive = db.transaction(() => {
             const prefixRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'collect_consecutive_prefix'").get() as { value: string } | undefined;
             const nextRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'collect_consecutive_next'").get() as { value: string } | undefined;
@@ -1776,30 +2304,72 @@ export async function createCollectRequestAction(
             const cons = `${prefix}${String(nextVal).padStart(6, '0')}`;
             
             db.prepare("INSERT OR REPLACE INTO ops_delivery_settings (key, value) VALUES ('collect_consecutive_next', ?)").run(String(nextVal + 1));
+            
+            const notes = JSON.stringify(formData);
+            const suppId = formData.supplier_id || 'PROV_MANUAL';
+            
+            const res = db.prepare(`
+                INSERT INTO ops_delivery_queue (
+                    documento_numero,
+                    tipo_documento,
+                    cliente_id,
+                    cliente_nombre,
+                    creado_por,
+                    fecha_registro,
+                    estado,
+                    entregado,
+                    comentario
+                ) VALUES (?, 'recoger', ?, ?, ?, ?, 'pendiente', 0, ?)
+            `).run(
+                cons,
+                suppId,
+                supplierName,
+                formData.solicitante_nombre,
+                localTodayStr,
+                notes
+            );
+
+            const docId = res.lastInsertRowid;
+
+            // Insert itemized product lines into ops_delivery_lines
+            if (lines && lines.length > 0) {
+                const insertLine = db.prepare(`
+                    INSERT INTO ops_delivery_lines (
+                        delivery_order_id,
+                        producto_codigo,
+                        producto_descripcion,
+                        cantidad_pedida,
+                        cantidad_entregada,
+                        cantidad_faltante
+                    ) VALUES (?, ?, ?, ?, 0, ?)
+                `);
+                for (const l of lines) {
+                    const code = l.codigo || 'ART';
+                    const desc = l.unidad ? `${l.descripcion} (${l.unidad})` : l.descripcion;
+                    const qty = Number(l.cantidad) || 1;
+                    insertLine.run(docId, code, desc, qty, qty);
+                }
+            }
+
+            // Auto-learn / update supplier address in core_suppliers if blank
+            const fullAddress = [
+                formData.provincia_nombre,
+                formData.canton_nombre,
+                formData.distrito_nombre,
+                formData.direccion_detalle || formData.lugar_entrega
+            ].filter(Boolean).join(', ');
+
+            if (fullAddress.trim().length > 0) {
+                try {
+                    const suppRow = db.prepare('SELECT id, address FROM core_suppliers WHERE id = ? OR LOWER(name) = LOWER(?)').get(suppId, supplierName) as { id: string; address: string | null } | undefined;
+                    if (suppRow && (!suppRow.address || suppRow.address.trim() === '')) {
+                        db.prepare('UPDATE core_suppliers SET address = ? WHERE id = ?').run(fullAddress.trim(), suppRow.id);
+                    }
+                } catch (_) {}
+            }
+
             return cons;
         })();
-
-        const notes = JSON.stringify(formData);
-        
-        db.prepare(`
-            INSERT INTO ops_delivery_queue (
-                documento_numero,
-                tipo_documento,
-                cliente_id,
-                cliente_nombre,
-                creado_por,
-                fecha_registro,
-                estado,
-                entregado,
-                comentario
-            ) VALUES (?, 'recoger', 'PROV_MANUAL', ?, ?, ?, 'pendiente', 0, ?)
-        `).run(
-            consecutive,
-            supplierName,
-            formData.solicitante_nombre,
-            localTodayStr,
-            notes
-        );
 
         revalidatePath('/dashboard/operations/logistics/deliveries');
         return { success: true, consecutive };
@@ -1818,7 +2388,8 @@ export async function triggerCollectAssignedEmail(id: number): Promise<void> {
 
         let details: any = {};
         try {
-            details = JSON.parse(doc.comentario);
+            const parsed = JSON.parse(doc.comentario);
+            if (parsed && typeof parsed === 'object') details = parsed;
         } catch (e: any) {
             logError('Error parsing collect comments JSON:', e.message);
             return;
@@ -1909,7 +2480,8 @@ export async function triggerCollectUpdateEmail(id: number, estado: string, come
 
         let details: any = {};
         try {
-            details = JSON.parse(doc.comentario);
+            const parsed = JSON.parse(doc.comentario);
+            if (parsed && typeof parsed === 'object') details = parsed;
         } catch (e: any) {
             logError('Error parsing collect comments JSON:', e.message);
             return;
@@ -1982,6 +2554,44 @@ export async function triggerCollectUpdateEmail(id: number, estado: string, come
                 html: emailHtml
             });
         }
+
+        // --- Telegram Notification Dispatch to Collect Request Creator ---
+        try {
+            let targetTelegramUserId: number | undefined;
+
+            if (details.en_nombre_de_companero && details.companero_email) {
+                const compUser = db.prepare('SELECT id FROM core_users WHERE LOWER(email) = LOWER(?)').get(details.companero_email) as { id: number } | undefined;
+                if (compUser) targetTelegramUserId = compUser.id;
+            }
+
+            if (!targetTelegramUserId && (recipientEmail || doc.creado_por)) {
+                const solUser = db.prepare('SELECT id FROM core_users WHERE LOWER(email) = LOWER(?) OR LOWER(name) = LOWER(?)').get(recipientEmail || '', doc.creado_por || '') as { id: number } | undefined;
+                if (solUser) targetTelegramUserId = solUser.id;
+            }
+
+            if (targetTelegramUserId) {
+                const { getTelegramChatIdForUser } = await import('@/modules/notifications/lib/telegram-lookup');
+                const chatId = await getTelegramChatIdForUser({ userId: targetTelegramUserId });
+
+                if (chatId) {
+                    const { sendTelegramMessage } = await import('@/modules/notifications/lib/telegram-service');
+                    const icon = estado === 'completo' ? '✅' : '❌';
+                    const telegramMsg = `
+<b>${icon} Actualización de Solicitud de Recolecta #${doc.documento_numero}</b>
+
+<b>Estado:</b> ${estadoLabel}
+<b>Proveedor:</b> ${doc.cliente_nombre}
+${details.orden_compra ? `<b>Orden de Compra:</b> ${details.orden_compra}\n` : ''}${details.factura ? `<b>Factura:</b> ${details.factura}\n` : ''}<b>Chofer:</b> ${choferNombre}
+${comentarioChofer ? `<b>Nota del Chofer:</b> <i>"${comentarioChofer}"</i>\n` : ''}<b>Lugar Entrega:</b> ${details.lugar_entrega || 'N/D'}
+`.trim();
+
+                    await sendTelegramMessage(telegramMsg, chatId);
+                    logInfo(`Telegram notification sent for collect update #${doc.documento_numero} to Chat ID: ${chatId}`);
+                }
+            }
+        } catch (tgErr: any) {
+            logError('Error dispatching Telegram notification for collect update:', tgErr.message);
+        }
     } catch (e: any) {
         logError('Error triggering collect update email:', e.message);
     }
@@ -1991,15 +2601,22 @@ export async function triggerCollectUpdateEmail(id: number, estado: string, come
 
 import { CORE_TABLE_NAMES } from '@/modules/core/lib/schema';
 
-export async function getClientEmails(clienteId: string): Promise<string[]> {
+export async function getClientEmailConfig(clienteId: string): Promise<{ emails: string[]; notificarLlegada: boolean }> {
     const db = await getDb();
     try {
-        const rows = db.prepare('SELECT email FROM ops_client_emails WHERE cliente_id = ? ORDER BY created_at DESC').all(clienteId) as { email: string }[];
-        return rows.map(r => r.email);
+        const rows = db.prepare('SELECT email, notificar_llegada FROM ops_client_emails WHERE cliente_id = ? ORDER BY created_at DESC').all(clienteId) as { email: string; notificar_llegada: number }[];
+        const emails = rows.map(r => r.email);
+        const notificarLlegada = rows.length > 0 ? Boolean(rows[0].notificar_llegada ?? 1) : true;
+        return { emails, notificarLlegada };
     } catch (e: any) {
-        logError('Error getting client emails:', e.message);
-        return [];
+        logError('Error getting client email config:', e.message);
+        return { emails: [], notificarLlegada: true };
     }
+}
+
+export async function getClientEmails(clienteId: string): Promise<string[]> {
+    const config = await getClientEmailConfig(clienteId);
+    return config.emails;
 }
 
 export async function saveClientEmail(clienteId: string, email: string): Promise<{ success: boolean; error?: string }> {
@@ -2009,6 +2626,18 @@ export async function saveClientEmail(clienteId: string, email: string): Promise
         return { success: true };
     } catch (e: any) {
         logError('Error saving client email:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+export async function setClientArrivalNotification(clienteId: string, enabled: boolean): Promise<{ success: boolean; error?: string }> {
+    const db = await getDb();
+    try {
+        db.prepare('UPDATE ops_client_emails SET notificar_llegada = ? WHERE cliente_id = ?').run(enabled ? 1 : 0, clienteId);
+        logInfo(`Notificación de llegada a bodega para cliente ${clienteId} establecida a: ${enabled}`);
+        return { success: true };
+    } catch (e: any) {
+        logError('Error setting client arrival notification preference:', e.message);
         return { success: false, error: e.message };
     }
 }
@@ -2127,20 +2756,28 @@ export async function getBoletaPreviewHtml(docId: number): Promise<{ success: bo
 
         let parsedDetails: any = {};
         try {
-            parsedDetails = JSON.parse(doc.comentario);
+            if (doc.comentario) {
+                const parsed = JSON.parse(doc.comentario);
+                if (parsed && typeof parsed === 'object') {
+                    parsedDetails = parsed;
+                }
+            }
         } catch(e) {}
 
-        let routeName = 'Sin Asignar';
-        let driverName = 'Sin Asignar';
+        let routeName = 'Sin Asignar (Pendiente en Cola)';
+        let driverName = '_______________________';
         let driverId = 'N/D';
-        if (doc.asignacion_id) {
+        
+        // Si el documento está pendiente en cola o re-inyectado sin chofer asignado actualmente, no mostrar chofer anterior
+        const targetAssignmentId = doc.entregado === 1 ? (doc.asignacion_id || doc.devolucion_asignacion_id) : doc.asignacion_id;
+        if (targetAssignmentId) {
             const assignment = db.prepare(`
                 SELECT a.id, r.name as ruta_nombre, u.name as chofer_nombre, u.id as chofer_id
                 FROM ops_delivery_assignments a
                 JOIN ops_delivery_routes r ON a.ruta_id = r.id
                 JOIN core_users u ON a.empleado_id = u.id
                 WHERE a.id = ?
-            `).get(doc.asignacion_id) as any;
+            `).get(targetAssignmentId) as any;
             if (assignment) {
                 routeName = assignment.ruta_nombre;
                 driverName = assignment.chofer_nombre;
@@ -2151,7 +2788,41 @@ export async function getBoletaPreviewHtml(docId: number): Promise<{ success: bo
         const dateStr = new Date(doc.created_at || Date.now()).toLocaleDateString('es-CR', { timeZone: 'America/Costa_Rica' });
         
         let formattedMotivo = doc.comentario || 'Ninguno';
-        if (doc.tipo_documento === 'recoger' && Object.keys(parsedDetails).length > 0) {
+        
+        // Query delivery lines if present (checking both original doc id or original source doc if re-injected)
+        const docLines = db.prepare('SELECT producto_codigo as codigo, producto_descripcion as desc, cantidad_pedida as pedida, cantidad_entregada as entregada, cantidad_faltante as faltante FROM ops_delivery_lines WHERE delivery_order_id = ?').all(doc.id) as any[];
+
+        if (docLines && docLines.length > 0) {
+            let linesRowsHtml = docLines.map(l => `
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                    <td style="padding: 6px; font-family: monospace; font-weight: bold; color: #1e293b;">${l.codigo}</td>
+                    <td style="padding: 6px; color: #334155;">${l.desc}</td>
+                    <td style="padding: 6px; text-align: center; color: #64748b;">${l.pedida}</td>
+                    <td style="padding: 6px; text-align: center; font-weight: bold; color: #16a34a;">${l.entregada}</td>
+                    <td style="padding: 6px; text-align: center; font-weight: bold; color: #dc2626;">${l.faltante}</td>
+                </tr>
+            `).join('');
+
+            formattedMotivo = `
+                <div style="margin-bottom: 12px;">
+                    <table style="width: 100%; border-collapse: collapse; font-size: 12px; border: 1px solid #e2e8f0; background-color: #ffffff;">
+                        <thead>
+                            <tr style="background-color: #f8fafc; border-bottom: 2px solid #e2e8f0;">
+                                <th style="padding: 6px; text-align: left; color: #475569;">Código</th>
+                                <th style="padding: 6px; text-align: left; color: #475569;">Descripción</th>
+                                <th style="padding: 6px; text-align: center; color: #475569;">Pedida</th>
+                                <th style="padding: 6px; text-align: center; color: #475569;">Entregada</th>
+                                <th style="padding: 6px; text-align: center; color: #475569;">Faltante</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${linesRowsHtml}
+                        </tbody>
+                    </table>
+                </div>
+                ${doc.comentario ? `<div style="font-size: 12px; color: #475569;"><strong>Observaciones del Chofer:</strong> ${doc.comentario}</div>` : ''}
+            `;
+        } else if (doc.tipo_documento === 'recoger' && Object.keys(parsedDetails).length > 0) {
             formattedMotivo = `
 <table style="width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.6; font-family: sans-serif;">
   <tr><td style="padding: 6px; border-bottom: 1px solid #e2e8f0; font-weight: bold; width: 30%; color: #4b5563;">Orden de Compra:</td><td style="padding: 6px; border-bottom: 1px solid #e2e8f0; color: #111827; font-weight: 600;">${parsedDetails.orden_compra || 'N/D'}</td></tr>
@@ -2183,8 +2854,6 @@ export async function getBoletaPreviewHtml(docId: number): Promise<{ success: bo
         };
 
         let body = template.body;
-        // Prevent stylesheet code from ever displaying physically on screen
-        body = body.replace('<style>', '<style>style { display: none !important; } ');
 
         if (doc.tipo_documento === 'recoger') {
             body = body
@@ -2207,8 +2876,322 @@ export async function getBoletaPreviewHtml(docId: number): Promise<{ success: bo
             body = body.replace(re, v);
         }
 
+        const { getCompanySettings } = await import('@/modules/core/lib/db');
+        const company = await getCompanySettings();
+        const companyName = company?.name || 'Industrias Garend S.A';
+        const companyAddress = company?.address || 'Alajuela, Poás, Carrillos bajo, del EBAIS 700 oeste.';
+        const companyPhone = company?.phone || '+506 2458-4343';
+        const companyEmail = company?.email || 'ventas@industriasgarend.com';
+
+        body = body
+            .replace(/Clic-Tools Logistics/g, companyName)
+            .replace(/San José, Costa Rica/g, companyAddress)
+            .replace(/Teléfono: \+506 4000-0000 \| soporte@empresa\.com/g, `Teléfono: ${companyPhone} | ${companyEmail}`)
+            .replace(/max-width:\s*600px/g, 'max-width: 800px')
+            .replace(/max-width:\s*700px/g, 'max-width: 800px');
+
+        // Inject GPS Google Maps link if available
+        let gpsSection = '';
+        if (doc.latitud && doc.longitud) {
+            const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${doc.latitud},${doc.longitud}`;
+            gpsSection = `
+                <div style="margin-top: 15px; padding: 10px 14px; background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; font-size: 11.5px; color: #166534; display: flex; align-items: center; justify-content: space-between;">
+                    <span>📍 <strong>Ubicación GPS de Confirmación de Entrega:</strong> Lat ${doc.latitud}, Lng ${doc.longitud}</span>
+                    <a href="${mapsUrl}" target="_blank" style="display: inline-block; padding: 5px 12px; background-color: #16a34a; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: bold; font-size: 11px;">Abrir en Google Maps ↗</a>
+                </div>
+            `;
+        }
+
+        // Section for 3rd signer: Aprobado por / Supervisión
+        const aprobacionBlock = `
+            <div style="margin-top: 20px; padding: 16px; border: 1.5px dashed #cbd5e1; background-color: #f8fafc; border-radius: 8px;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 12px; color: #475569;">
+                    <tr>
+                        <td style="width: 50%; padding-bottom: 35px;"><strong>Aprobado por:</strong> ___________________________</td>
+                        <td style="width: 50%; padding-bottom: 35px;"><strong>Firma / Sello de Aprobación:</strong> ___________________________</td>
+                    </tr>
+                </table>
+            </div>
+        `;
+
+        // Inject Customer Signature, Receiver Name, Third Signer (Aprobado por) and GPS into HTML template
+        let firmaSection = '';
+        if (doc.firma_cliente) {
+            const signatureUrl = doc.firma_cliente.startsWith('http') || doc.firma_cliente.startsWith('data:') 
+                ? doc.firma_cliente 
+                : `/api/fleet/files/${doc.firma_cliente}`;
+            firmaSection = `
+                <div style="margin-top: 20px; padding: 14px; border: 1.5px dashed #cbd5e1; background-color: #f8fafc; border-radius: 8px; text-align: center;">
+                    <span style="font-size: 12px; font-weight: 800; color: #334155; display: block; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">✍️ Firma Digital del Cliente (Registrada en Pantalla Táctil)</span>
+                    <img src="${signatureUrl}" alt="Firma Cliente" style="max-height: 95px; max-width: 320px; display: block; margin: 0 auto; filter: contrast(150%);" />
+                    ${doc.nombre_recibe ? `<span style="font-size: 13px; font-weight: bold; color: #0f172a; display: block; margin-top: 8px;">Recibido Por: ${doc.nombre_recibe}</span>` : ''}
+                </div>
+                ${aprobacionBlock}
+                ${gpsSection}
+            `;
+        } else {
+            firmaSection = `
+                ${aprobacionBlock}
+                ${gpsSection}
+            `;
+        }
+
+        // Ensure letter-sized wrapper and clean body closing
+        if (body.includes('</body>')) {
+            body = body.replace('</body>', `${firmaSection}</body>`);
+        } else {
+            body = `${body}${firmaSection}`;
+        }
+
+        if (!body.includes('max-width: 800px')) {
+            body = `<div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 25px; border: 1px solid #cbd5e1; border-radius: 8px; background-color: #ffffff; color: #1e293b; box-sizing: border-box;">${body}</div>`;
+        }
+
         return { success: true, html: body };
     } catch (e: any) {
+        logError('Error rendering boleta preview html:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+/**
+ * Renders thermal receipt printable HTML for 80mm or 57mm Bluetooth/POS printers.
+ */
+export async function getBoletaThermalPrintHtml(docId: number): Promise<{ success: boolean; html?: string; error?: string }> {
+    const db = await getDb();
+    try {
+        const doc = db.prepare('SELECT * FROM ops_delivery_queue WHERE id = ?').get(docId) as any;
+        if (!doc) return { success: false, error: 'Documento no encontrado' };
+
+        const paperSizeSetting = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'driver_boleta_paper_size'").get() as { value: string } | undefined;
+        const paperSize = paperSizeSetting?.value === '57mm' ? '57mm' : '80mm';
+        const is57 = paperSize === '57mm';
+
+        let routeName = 'Sin Asignar (Pendiente)';
+        let driverName = '_______________________';
+        let vehiclePlate = 'N/D';
+        
+        // Si el documento está pendiente en cola o re-inyectado sin chofer asignado actualmente, no mostrar chofer anterior
+        const targetAssignmentId = doc.entregado === 1 ? (doc.asignacion_id || doc.devolucion_asignacion_id) : doc.asignacion_id;
+        if (targetAssignmentId) {
+            const assignment = db.prepare(`
+                SELECT a.id, r.name as ruta_nombre, u.name as chofer_nombre, v.plate as vehiculo_placa
+                FROM ops_delivery_assignments a
+                JOIN ops_delivery_routes r ON a.ruta_id = r.id
+                JOIN core_users u ON a.empleado_id = u.id
+                LEFT JOIN fleet_vehicles v ON a.vehiculo_id = v.id
+                WHERE a.id = ?
+            `).get(targetAssignmentId) as any;
+            if (assignment) {
+                routeName = assignment.ruta_nombre;
+                driverName = assignment.chofer_nombre;
+                vehiclePlate = assignment.vehiculo_placa || 'N/D';
+            }
+        }
+
+        const docLines = db.prepare('SELECT producto_codigo as codigo, producto_descripcion as desc, cantidad_pedida as pedida, cantidad_entregada as entregada, cantidad_faltante as faltante FROM ops_delivery_lines WHERE delivery_order_id = ?').all(doc.id) as any[];
+
+        const dateStr = new Date(doc.created_at || Date.now()).toLocaleDateString('es-CR', { timeZone: 'America/Costa_Rica' });
+        const timeStr = new Date(doc.created_at || Date.now()).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit' });
+
+        let statusText = 'COMPLETO';
+        if (doc.estado === 'incompleto') statusText = 'INCOMPLETO / PARCIAL';
+        if (doc.estado === 'rechazado') statusText = 'RECHAZADO / RETORNO';
+        if (doc.tipo_documento === 'recoger') statusText = 'RECOLECTA PROVEEDOR';
+
+        let linesHtml = '';
+        if (docLines && docLines.length > 0) {
+            linesHtml = docLines.map(l => `
+                <tr>
+                    <td style="font-weight: bold; width: 22%;">${l.codigo}</td>
+                    <td style="width: 42%;">${l.desc}</td>
+                    <td style="text-align: right; width: 11%;">${l.pedida}</td>
+                    <td style="text-align: right; width: 11%;">${l.entregada}</td>
+                    <td style="text-align: right; font-weight: bold; width: 14%; color: #000; white-space: nowrap;">${l.faltante}</td>
+                </tr>
+            `).join('');
+        }
+
+        let signatureUrl = '';
+        if (doc.firma_cliente) {
+            signatureUrl = doc.firma_cliente.startsWith('http') || doc.firma_cliente.startsWith('data:') 
+                ? doc.firma_cliente 
+                : `/api/fleet/files/${doc.firma_cliente}`;
+        }
+
+        const mapsUrl = (doc.latitud && doc.longitud) ? `https://www.google.com/maps/search/?api=1&query=${doc.latitud},${doc.longitud}` : '';
+
+        const { getCompanySettings } = await import('@/modules/core/lib/db');
+        const company = await getCompanySettings();
+        const companyName = company?.name || 'Industrias Garend S.A';
+        const systemName = company?.systemName || 'Clic-Tools Logistics';
+
+        let rawbtLinesText = '';
+        if (docLines && docLines.length > 0) {
+            rawbtLinesText = '--------------------------------\nDISCREPANCIAS / FALTANTES\nCod  | Prod             |Ped|Ent|Fal\n--------------------------------\n' + 
+            docLines.map(l => `${l.codigo.padEnd(4).substring(0,4)} | ${l.desc.padEnd(16).substring(0,16)} | ${l.pedida.toString().padStart(2)}| ${l.entregada.toString().padStart(2)}| ${l.faltante.toString().padStart(2)}`).join('\n') + '\n--------------------------------\n';
+        }
+
+        const firmaStatusText = doc.firma_cliente ? 'Firma: [ FIRMA DIGITAL REGISTRADA TÁCTIL ]' : 'Firma: _________________________';
+
+        const rawbtText = encodeURIComponent(`
+${companyName.toUpperCase()}
+Cedula Juridica: ${company?.taxId || 'N/D'}
+${company?.address || ''}
+${company?.phone || ''} | ${company?.email || ''}
+Boleta de Entrega (80mm)
+................................
+Boleta: #${doc.boleta_numero || doc.documento_numero}
+Doc ERP: #${doc.documento_numero}
+Estado: [ ${statusText} ]
+Fecha: ${dateStr} ${timeStr}
+Ruta: ${routeName}
+Camion: ${vehiclePlate}
+Chofer: ${driverName}
+--------------------------------
+CLIENTE:
+${doc.cliente_nombre} (${doc.cliente_id || 'N/D'})
+${doc.lugar_entrega ? `Destino: ${doc.lugar_entrega}\n` : ''}================================
+${rawbtLinesText}
+${doc.comentario ? `Notas: ${doc.comentario}\n................................\n` : ''}
+Recibido Por: ${doc.nombre_recibe || '_______________________'}
+
+${firmaStatusText}
+................................
+   ¡Gracias por su preferencia!
+`.trim());
+
+        const plainBoletaText = decodeURIComponent(rawbtText);
+        const clicPrintIntent = `intent://${rawbtText}#Intent;scheme=clicprint;package=com.clicsoporte.print;end;`;
+        const rawbtIntent = `intent://${rawbtText}#Intent;scheme=rawbt;package=ru.a42.rawbtprinter;end;`;
+        const settings = await getDeliverySettings();
+        const printMethod = settings.driver_boleta_print_method || 'all';
+
+        const html = `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Boleta Thermal ${doc.documento_numero}</title>
+    <style>
+        @media print {
+            @page {
+                size: ${is57 ? '57mm' : '80mm'} auto;
+                margin: 0mm;
+            }
+            html, body {
+                width: 100% !important;
+                max-width: 100% !important;
+                min-width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                height: auto !important;
+                overflow: visible !important;
+                -webkit-print-color-adjust: exact;
+                -webkit-text-size-adjust: 100%;
+                text-size-adjust: 100%;
+            }
+            .no-print { display: none !important; }
+        }
+        html, body {
+            font-family: 'Courier New', Courier, monospace, sans-serif;
+            width: 100%;
+            max-width: ${is57 ? '320px' : '400px'};
+            margin: 0 auto;
+            padding: 4px;
+            font-size: ${is57 ? '12px' : '14px'};
+            line-height: 1.25;
+            font-weight: 700;
+            color: #000000;
+            background: #ffffff;
+            height: auto;
+            box-sizing: border-box;
+            -webkit-text-size-adjust: 100%;
+            text-size-adjust: 100%;
+        }
+        .center { text-align: center; }
+        .bold { font-weight: 900; }
+        .dashed-line { border-bottom: 1.5px dashed #000; margin: 4px 0; }
+        .solid-line { border-bottom: 2px solid #000; margin: 4px 0; }
+        table { width: 100%; border-collapse: collapse; font-size: ${is57 ? '11px' : '13px'}; }
+        th, td { padding: 2px 0; vertical-align: top; word-break: break-word; }
+    </style>
+</head>
+<body>
+    <div class="center bold" style="font-size: ${is57 ? '15px' : '19px'}; text-transform: uppercase;">${companyName}</div>
+    ${company?.taxId ? `<div class="center" style="font-size: ${is57 ? '10px' : '13px'}; font-weight: bold;">Cédula Jurídica: ${company.taxId}</div>` : ''}
+    ${company?.address ? `<div class="center" style="font-size: ${is57 ? '9px' : '11px'};">${company.address}</div>` : ''}
+    ${company?.phone || company?.email ? `<div class="center" style="font-size: ${is57 ? '9px' : '11px'};">${company.phone || ''} ${company.email ? '| ' + company.email : ''}</div>` : ''}
+    <div class="center bold" style="font-size: ${is57 ? '13px' : '16px'}; margin-top: 2px;">Boleta de Entrega (${paperSize})</div>
+    <div class="dashed-line"></div>
+
+    <div><span class="bold">Boleta:</span> #${doc.boleta_numero || doc.documento_numero}</div>
+    <div><span class="bold">Doc ERP:</span> #${doc.documento_numero}</div>
+    <div style="white-space: nowrap;"><span class="bold">Estado:</span> [ ${statusText} ]</div>
+    <div><span class="bold">Fecha:</span> ${dateStr} ${timeStr}</div>
+    <div><span class="bold">Ruta:</span> ${routeName}</div>
+    <div><span class="bold">Camión:</span> ${vehiclePlate}</div>
+    <div><span class="bold">Chofer:</span> ${driverName}</div>
+    
+    <div class="dashed-line"></div>
+    <div class="bold">CLIENTE:</div>
+    <div>${doc.cliente_nombre} (${doc.cliente_id || 'N/D'})</div>
+    ${doc.lugar_entrega ? `<div><span class="bold">Destino:</span> ${doc.lugar_entrega}</div>` : ''}
+
+    <div class="solid-line"></div>
+    ${linesHtml ? `
+        <div class="bold center" style="font-size: ${is57 ? '13px' : '16px'}; font-weight: 900; margin-top: 2px;">DISCREPANCIAS / FALTANTES</div>
+        <table>
+            <thead>
+                <tr style="border-bottom: 1.5px solid #000;">
+                    <th style="text-align: left; width: 22%;">Cód</th>
+                    <th style="text-align: left; width: 42%;">Prod</th>
+                    <th style="text-align: right; width: 11%;">Ped</th>
+                    <th style="text-align: right; width: 11%;">Ent</th>
+                    <th style="text-align: right; width: 14%; white-space: nowrap;">Falt</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${linesHtml}
+            </tbody>
+        </table>
+        <div class="dashed-line"></div>
+    ` : ''}
+
+    ${doc.comentario ? `<div><span class="bold">Notas:</span> ${doc.comentario}</div><div class="dashed-line"></div>` : ''}
+
+    <div><span class="bold">Recibido Por:</span> ${doc.nombre_recibe || '_______________________'}</div>
+    ${signatureUrl ? `
+        <div class="center" style="margin-top: 4px;">
+            <img src="${signatureUrl}" style="max-height: 70px; max-width: 90%; width: 230px; display: block; margin: 4px auto; filter: contrast(200%);" />
+            <span style="font-size: 13px; font-weight: 900;">(Firma Digital Táctil)</span>
+        </div>
+    ` : `
+        <div style="margin-top: 25px; text-align: center; border-top: 1.5px solid #000; width: 80%; margin-left: auto; margin-right: auto; padding-top: 2px; font-size: 14px; font-weight: 900;">
+            Firma del Cliente
+        </div>
+    `}
+
+    <div class="dashed-line"></div>
+    <div class="center bold" style="font-size: 13px; margin-top: 3px;">¡Gracias por su preferencia!</div>
+
+    ${mapsUrl ? `
+        <div class="dashed-line"></div>
+        <div class="center" style="font-size: 8px;">
+            GPS: Lat ${doc.latitud}, Lng ${doc.longitud}<br/>
+            <a href="${mapsUrl}" target="_blank" style="color: #000;">Ver en Google Maps</a>
+        </div>
+    ` : ''}
+
+    <div class="dashed-line"></div>
+    <div class="center" style="font-size: 8px;">¡Gracias por su preferencia!</div>
+</body>
+</html>
+        `;
+
+        return { success: true, html };
+    } catch (e: any) {
+        logError('Error rendering thermal print html:', e.message);
         return { success: false, error: e.message };
     }
 }
@@ -2232,22 +3215,40 @@ export async function getUserCollectRequests(options?: {
         const pageSize = options?.pageSize || 10;
         
         let query = `
-            SELECT id, documento_numero, cliente_nombre, creado_por, fecha_registro, estado, entregado, comentario, asignacion_id, foto_factura, foto_evidencia
-            FROM ops_delivery_queue
-            WHERE tipo_documento = 'recoger'
+            SELECT 
+                q.id, 
+                q.documento_numero, 
+                q.cliente_nombre, 
+                q.creado_por, 
+                q.fecha_registro, 
+                q.estado, 
+                q.entregado, 
+                q.comentario, 
+                q.asignacion_id, 
+                q.foto_factura, 
+                q.foto_evidencia,
+                a.fecha as fecha_asignacion,
+                u.name as chofer_nombre,
+                u.phone as chofer_telefono,
+                r.name as ruta_nombre
+            FROM ops_delivery_queue q
+            LEFT JOIN ops_delivery_assignments a ON q.asignacion_id = a.id
+            LEFT JOIN core_users u ON a.empleado_id = u.id
+            LEFT JOIN ops_delivery_routes r ON a.ruta_id = r.id
+            WHERE q.tipo_documento = 'recoger'
         `;
         const params: any[] = [];
         
         if (options?.startDate) {
-            query += ` AND fecha_registro >= ?`;
+            query += ` AND q.fecha_registro >= ?`;
             params.push(options.startDate);
         }
         if (options?.endDate) {
-            query += ` AND fecha_registro <= ?`;
+            query += ` AND q.fecha_registro <= ?`;
             params.push(options.endDate);
         }
         
-        query += ` ORDER BY id DESC`;
+        query += ` ORDER BY q.id DESC`;
         
         const rows = db.prepare(query).all(...params) as any[];
 
@@ -2266,12 +3267,12 @@ export async function getUserCollectRequests(options?: {
         const startIndex = (page - 1) * pageSize;
         const paginatedRows = filteredRows.slice(startIndex, startIndex + pageSize);
 
-        return {
+        return JSON.parse(JSON.stringify({
             requests: paginatedRows,
             totalCount,
             page,
             totalPages
-        };
+        }));
     } catch (e: any) {
         logError('Error fetching user collect requests:', e.message);
         return {
@@ -2316,6 +3317,301 @@ export async function cancelCollectRequestAction(id: number): Promise<{ success:
     }
 }
 
+// --- Reinject / Reactivate Collect Request to General Queue ---
+export async function reinjectCollectToGeneralQueueAction(id: number): Promise<{ success: boolean; error?: string }> {
+    await authorizeAction('deliveries:collect');
+    const db = await getDb();
+    try {
+        const doc = db.prepare('SELECT id, documento_numero, estado, entregado, tipo_documento, asignacion_id FROM ops_delivery_queue WHERE id = ?').get(id) as any;
+        if (!doc) {
+            return { success: false, error: 'La solicitud de recolecta no existe.' };
+        }
+
+        if (doc.tipo_documento !== 'recoger') {
+            return { success: false, error: 'El documento no es una recolecta.' };
+        }
+
+        if (doc.estado === 'completo') {
+            return { success: false, error: 'No se puede reactivar una recolecta que ya fue completada exitosamente.' };
+        }
+
+        // Reset assignment, return flags and set back to active pending in general queue
+        db.prepare(`
+            UPDATE ops_delivery_queue 
+            SET asignacion_id = NULL, 
+                devolucion_asignacion_id = NULL, 
+                entregado = 0, 
+                estado = 'pendiente', 
+                canal_registro = 'web'
+            WHERE id = ?
+        `).run(id);
+
+        revalidatePath('/dashboard/operations/logistics/collect');
+        revalidatePath('/dashboard/operations/logistics/deliveries');
+        return { success: true };
+    } catch (e: any) {
+        logError('Error reinjecting collect request to general queue:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+/**
+ * Dispatcher: Notifica al Vendedor y Creador/Facturador del pedido cuando el chofer reporta que está esperando atención.
+ */
+export async function sendDriverWaitingCustomerNoticeAction(params: {
+    docId: number;
+    lat?: number | null;
+    lng?: number | null;
+}): Promise<{ success: boolean; message?: string; error?: string }> {
+    const db = await getDb();
+    try {
+        const doc = db.prepare(`
+            SELECT 
+                q.*, 
+                a.empleado_id, 
+                a.ruta_id, 
+                a.vehiculo_id,
+                COALESCE(u.name, '') as chofer_nombre,
+                COALESCE(v.plate, '') as vehiculo_placa,
+                COALESCE(r.name, '') as ruta_nombre
+            FROM ops_delivery_queue q
+            LEFT JOIN ops_delivery_assignments a ON q.asignacion_id = a.id
+            LEFT JOIN core_users u ON a.empleado_id = u.id
+            LEFT JOIN fleet_vehicles v ON a.vehiculo_id = v.id
+            LEFT JOIN ops_delivery_routes r ON a.ruta_id = r.id
+            WHERE q.id = ?
+        `).get(params.docId) as any;
+
+        if (!doc) {
+            return { success: false, error: 'Documento no encontrado' };
+        }
+
+        const lines = db.prepare('SELECT producto_codigo as codigo, producto_descripcion as desc, cantidad_pedida as pedida FROM ops_delivery_lines WHERE delivery_order_id = ?').all(doc.id) as any[];
+
+        const effectiveLat = params.lat ?? doc.latitud;
+        const effectiveLng = params.lng ?? doc.longitud;
+        const mapsLink = (effectiveLat && effectiveLng)
+            ? `https://www.google.com/maps/search/?api=1&query=${effectiveLat},${effectiveLng}`
+            : 'https://maps.google.com';
+
+        const dateObj = new Date();
+        const horaReporte = dateObj.toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit' }) + ' ' + dateObj.toLocaleDateString('es-CR', { timeZone: 'America/Costa_Rica' });
+
+        // Build HTML table for products
+        let productosTable = '';
+        if (lines && lines.length > 0) {
+            const rows = lines.map(l => `
+                <tr style="border-bottom: 1px solid #f1f5f9;">
+                    <td style="padding: 6px 8px; font-family: monospace; font-weight: bold; color: #475569;">${l.codigo}</td>
+                    <td style="padding: 6px 8px; color: #1e293b;">${l.desc}</td>
+                    <td style="padding: 6px 8px; text-align: right; font-weight: bold; color: #0f172a;">${l.pedida}</td>
+                </tr>
+            `).join('');
+            productosTable = `
+                <div style="margin-top: 15px; margin-bottom: 20px;">
+                    <div style="font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; margin-bottom: 6px;">Líneas de Producto que Transporta:</div>
+                    <table style="width: 100%; border-collapse: collapse; font-size: 12px; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden;">
+                        <thead>
+                            <tr style="background-color: #f8fafc; border-bottom: 1.5px solid #cbd5e1; color: #475569; font-weight: bold; text-align: left;">
+                                <th style="padding: 6px 8px;">Cód</th>
+                                <th style="padding: 6px 8px;">Descripción</th>
+                                <th style="padding: 6px 8px; text-align: right;">Cant</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        // Resolver dirección de embarque enriquecida (idéntica a la tarjeta del APK)
+        let resolvedAddress = '';
+        if (doc.tipo_documento === 'recoger') {
+            try {
+                if (doc.comentario && doc.comentario.trim().startsWith('{')) {
+                    const parsed = JSON.parse(doc.comentario);
+                    const dirExacta = parsed.direccion_exacta || parsed.direccion_detalle || parsed.direccionDetalle || '';
+                    const prov = parsed.provincia || parsed.provincia_nombre || '';
+                    const cant = parsed.canton || parsed.canton_nombre || '';
+                    const dist = parsed.distrito || parsed.distrito_nombre || '';
+                    const geo = [prov, cant, dist, dirExacta].filter(s => s && String(s).trim().length > 0 && String(s).trim() !== '0').join(', ');
+                    if (geo.length > 0) resolvedAddress = geo;
+                }
+            } catch (_) {}
+
+            if (!resolvedAddress) {
+                const supp = db.prepare('SELECT address FROM core_suppliers WHERE id = ? OR LOWER(name) = LOWER(?)').get(doc.cliente_id, doc.cliente_nombre) as { address?: string } | undefined;
+                if (supp?.address && supp.address.trim() !== '' && supp.address.trim() !== '0') {
+                    resolvedAddress = supp.address.trim();
+                }
+            }
+        } else {
+            // Factura o pedido de cliente: buscar por dirección de embarque del ERP
+            try {
+                const invoiceHeader = db.prepare('SELECT DIREC_EMBARQUE, OBSERVACIONES FROM core_erp_invoice_headers WHERE FACTURA = ?').get(doc.documento_numero) as { DIREC_EMBARQUE?: string; OBSERVACIONES?: string } | undefined;
+                const direcEmbarque = invoiceHeader?.DIREC_EMBARQUE;
+
+                if (direcEmbarque) {
+                    const sa = db.prepare(`
+                        SELECT descripcion, detalle_direccion 
+                        FROM core_customer_shipment_addresses 
+                        WHERE cliente_id = ? AND direccion_id = ?
+                        LIMIT 1
+                    `).get(doc.cliente_id, direcEmbarque) as { descripcion?: string; detalle_direccion?: string } | undefined;
+
+                    if (sa) {
+                        const isValid = (val?: string) => val && val.trim() !== '' && val.trim() !== '0' && !val.trim().endsWith('.0');
+                        if (isValid(sa.descripcion)) {
+                            resolvedAddress = sa.descripcion!.trim();
+                        } else if (isValid(sa.detalle_direccion)) {
+                            resolvedAddress = sa.detalle_direccion!.trim();
+                        }
+                    }
+                }
+
+                // Fallbacks si no se encontró con DIREC_EMBARQUE específico
+                if (!resolvedAddress) {
+                    const firstSa = db.prepare(`
+                        SELECT descripcion, detalle_direccion 
+                        FROM core_customer_shipment_addresses 
+                        WHERE cliente_id = ? 
+                          AND ((descripcion IS NOT NULL AND descripcion != '' AND descripcion NOT GLOB '*[0-9].0')
+                            OR (detalle_direccion IS NOT NULL AND detalle_direccion != '' AND detalle_direccion NOT GLOB '*[0-9].0'))
+                        ORDER BY id ASC LIMIT 1
+                    `).get(doc.cliente_id) as { descripcion?: string; detalle_direccion?: string } | undefined;
+                    if (firstSa) {
+                        const isValid = (val?: string) => val && val.trim() !== '' && val.trim() !== '0' && !val.trim().endsWith('.0');
+                        if (isValid(firstSa.descripcion)) {
+                            resolvedAddress = firstSa.descripcion!.trim();
+                        } else if (isValid(firstSa.detalle_direccion)) {
+                            resolvedAddress = firstSa.detalle_direccion!.trim();
+                        }
+                    }
+                }
+
+                if (!resolvedAddress) {
+                    const cust = db.prepare('SELECT address FROM core_customers WHERE id = ?').get(doc.cliente_id) as { address?: string } | undefined;
+                    if (cust?.address && cust.address.trim() !== '' && cust.address.trim() !== '0' && !cust.address.trim().endsWith('.0')) {
+                        resolvedAddress = cust.address.trim();
+                    }
+                }
+            } catch (_) {}
+        }
+
+        if (!resolvedAddress || resolvedAddress === '0') {
+            resolvedAddress = doc.lugar_entrega && doc.lugar_entrega !== '0' ? doc.lugar_entrega : 'Dirección registrada en expediente';
+        }
+
+        // Consultar configuraciones de envío
+        const getSetting = (key: string, defaultVal: string = '1') => {
+            const row = db.prepare('SELECT value FROM ops_delivery_settings WHERE key = ?').get(key) as { value: string } | undefined;
+            return row ? row.value : defaultVal;
+        };
+
+        const emailSalespersonEnabled = getSetting('notif_waiting_email_salesperson', '1') === '1';
+        const emailCreatorEnabled = getSetting('notif_waiting_email_creator', '1') === '1';
+        const telegramSalespersonEnabled = getSetting('notif_waiting_telegram_salesperson', '0') === '1';
+        const telegramCreatorEnabled = getSetting('notif_waiting_telegram_creator', '0') === '1';
+
+        // Obtener plantilla personalizada desde DB
+        const templateRow = db.prepare("SELECT * FROM notification_templates WHERE eventId = 'onDriverWaitingCustomer'").get() as any;
+        let subjectTemplate = templateRow?.subject || '⏱️ [EN ESPERA] Chofer esperando atención en {{clienteNombre}} - Factura #{{docNumero}}';
+        let bodyTemplate = templateRow?.body || '';
+        let telegramTemplate = templateRow?.telegram || '⏱️ <b>CHOFER EN ESPERA DE ATENCIÓN</b>\n\nDoc: <b>#{{docNumero}}</b>\nCliente: <b>{{clienteNombre}}</b>\nChofer: <b>{{choferNombre}}</b> ({{vehiculoPlaca}})\nHora: <b>{{horaReporte}}</b>\nDirección: <i>{{lugarEntrega}}</i>\n\n📍 <a href="{{mapsLink}}">Ver Ubicación GPS en Google Maps</a>';
+
+        const replaceVars = (tmpl: string) => {
+            return tmpl
+                .replace(/\{\{docNumero\}\}/g, doc.documento_numero || '')
+                .replace(/\{\{clienteNombre\}\}/g, doc.cliente_nombre || '')
+                .replace(/\{\{clienteId\}\}/g, doc.cliente_id || '')
+                .replace(/\{\{lugarEntrega\}\}/g, resolvedAddress)
+                .replace(/\{\{choferNombre\}\}/g, doc.chofer_nombre || 'Chofer')
+                .replace(/\{\{vehiculoPlaca\}\}/g, doc.vehiculo_placa || 'N/D')
+                .replace(/\{\{rutaNombre\}\}/g, doc.ruta_nombre || 'Ruta')
+                .replace(/\{\{horaReporte\}\}/g, horaReporte)
+                .replace(/\{\{mapsLink\}\}/g, mapsLink)
+                .replace(/\{\{productosTable\}\}/g, productosTable);
+        };
+
+        const renderedSubject = replaceVars(subjectTemplate);
+        const renderedBody = replaceVars(bodyTemplate);
+        const renderedTelegram = replaceVars(telegramTemplate);
+
+        const { sendEmail } = await import('@/modules/core/lib/email-service');
+        const { sendTelegramMessage } = await import('@/modules/notifications/lib/telegram-service');
+
+        const sentEmails = new Set<string>();
+        const sentTelegramChats = new Set<string>();
+
+        // 1. Resolver Vendedor
+        let salespersonCode: string | null = null;
+        if (doc.tipo_documento === 'factura') {
+            const erpInvoice = db.prepare('SELECT VENDEDOR FROM core_erp_invoice_headers WHERE FACTURA = ?').get(doc.documento_numero) as { VENDEDOR: string } | undefined;
+            if (erpInvoice?.VENDEDOR) salespersonCode = erpInvoice.VENDEDOR;
+        }
+        if (!salespersonCode) {
+            const cust = db.prepare('SELECT salesperson FROM core_customers WHERE id = ?').get(doc.cliente_id) as { salesperson: string } | undefined;
+            if (cust?.salesperson) salespersonCode = cust.salesperson;
+        }
+
+        if (salespersonCode) {
+            const spUser = db.prepare('SELECT id, email, telegramChatId FROM core_users WHERE salespersonId = ?').get(salespersonCode) as { id: string; email?: string; telegramChatId?: string } | undefined;
+            if (spUser) {
+                if (emailSalespersonEnabled && spUser.email && !sentEmails.has(spUser.email.toLowerCase())) {
+                    await sendEmail({
+                        to: spUser.email,
+                        subject: renderedSubject,
+                        html: renderedBody
+                    });
+                    sentEmails.add(spUser.email.toLowerCase());
+                }
+                if (telegramSalespersonEnabled && spUser.telegramChatId && !sentTelegramChats.has(spUser.telegramChatId)) {
+                    try {
+                        await sendTelegramMessage(renderedTelegram, spUser.telegramChatId);
+                        sentTelegramChats.add(spUser.telegramChatId);
+                    } catch (e: any) {
+                        logError(`Failed to send waiting Telegram notice to salesperson ${salespersonCode}:`, e.message);
+                    }
+                }
+            }
+        }
+
+        // 2. Resolver Creador / Facturador ERP
+        const erpCreatorAlias = doc.creado_por;
+        if (erpCreatorAlias) {
+            const creatorUser = db.prepare('SELECT id, email, telegramChatId FROM core_users WHERE erpAlias = ? OR email = ? OR name = ?').get(erpCreatorAlias, erpCreatorAlias, erpCreatorAlias) as { id: string; email?: string; telegramChatId?: string } | undefined;
+            if (creatorUser) {
+                if (emailCreatorEnabled && creatorUser.email && !sentEmails.has(creatorUser.email.toLowerCase())) {
+                    await sendEmail({
+                        to: creatorUser.email,
+                        subject: renderedSubject,
+                        html: renderedBody
+                    });
+                    sentEmails.add(creatorUser.email.toLowerCase());
+                }
+                if (telegramCreatorEnabled && creatorUser.telegramChatId && !sentTelegramChats.has(creatorUser.telegramChatId)) {
+                    try {
+                        await sendTelegramMessage(renderedTelegram, creatorUser.telegramChatId);
+                        sentTelegramChats.add(creatorUser.telegramChatId);
+                    } catch (e: any) {
+                        logError(`Failed to send waiting Telegram notice to creator ${erpCreatorAlias}:`, e.message);
+                    }
+                }
+            }
+        }
+
+        return {
+            success: true,
+            message: `Aviso enviado correctamente (${sentEmails.size} email(s), ${sentTelegramChats.size} telegram(s))`
+        };
+    } catch (e: any) {
+        logError('Error sending driver waiting notice:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+
+
 
 
 async function notifyDriverCollectAssignment(docId: number, assignmentId: number): Promise<void> {
@@ -2353,3 +3649,266 @@ async function notifyDriverCollectAssignment(docId: number, assignmentId: number
         logError('Error notifying driver of collect assignment:', err.message);
     }
 }
+
+export interface LogisticsAnalyticsFilters {
+    startDate?: string;
+    endDate?: string;
+    choferName?: string;
+    rutaId?: string;
+    vehiculoPlaca?: string;
+    searchClient?: string;
+    documentoNumero?: string;
+}
+
+export async function getLogisticsAnalyticsDataAction(filters: LogisticsAnalyticsFilters) {
+    const user = await getCurrentUser();
+    if (!user) throw new Error("No autenticado");
+
+    const db = await getDb();
+
+    let queueQuery = `
+        SELECT q.*, 
+               c.name as cliente_nombre_core,
+               COALESCE(u.name, q.gestionado_por) as chofer_nombre,
+               v.plate as vehiculo_placa,
+               r.name as ruta_nombre
+        FROM ops_delivery_queue q
+        LEFT JOIN core_customers c ON q.cliente_id = c.id
+        LEFT JOIN ops_delivery_assignments a ON (q.asignacion_id = a.id OR q.devolucion_asignacion_id = a.id)
+        LEFT JOIN core_users u ON a.empleado_id = u.id
+        LEFT JOIN fleet_vehicles v ON a.vehiculo_id = v.id
+        LEFT JOIN ops_delivery_routes r ON a.ruta_id = r.id
+        WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    const hasGlobalPermission = user.role === 'admin' || user.role === 'superadmin' || user.role === 'logistics_manager';
+    if (!hasGlobalPermission && (user.erpAlias || user.salespersonId)) {
+        queueQuery += ` AND (q.creado_por = ? OR q.vendedor = ?)`;
+        params.push(user.erpAlias || '', user.salespersonId || '');
+    }
+
+    if (filters.documentoNumero && filters.documentoNumero.trim()) {
+        queueQuery += ` AND q.documento_numero LIKE ?`;
+        params.push(`%${filters.documentoNumero.trim()}%`);
+    }
+
+    if (filters.startDate) {
+        queueQuery += ` AND DATE(q.fecha_registro) >= ?`;
+        params.push(filters.startDate);
+    }
+    if (filters.endDate) {
+        queueQuery += ` AND DATE(q.fecha_registro) <= ?`;
+        params.push(filters.endDate);
+    }
+    if (filters.choferName && filters.choferName !== 'all') {
+        queueQuery += ` AND (u.name LIKE ? OR q.gestionado_por LIKE ?)`;
+        params.push(`%${filters.choferName}%`, `%${filters.choferName}%`);
+    }
+    if (filters.vehiculoPlaca && filters.vehiculoPlaca !== 'all') {
+        queueQuery += ` AND v.plate LIKE ?`;
+        params.push(`%${filters.vehiculoPlaca}%`);
+    }
+    if (filters.searchClient && filters.searchClient.trim()) {
+        const term = `%${filters.searchClient.trim()}%`;
+        queueQuery += ` AND (q.cliente_nombre LIKE ? OR q.cliente_id LIKE ? OR c.name LIKE ?)`;
+        params.push(term, term, term);
+    }
+
+    queueQuery += ` ORDER BY q.id DESC LIMIT 2000`;
+
+    const rawDocs = db.prepare(queueQuery).all(...params) as any[];
+    const queueDocs = JSON.parse(JSON.stringify(rawDocs));
+
+    // Query assignments
+    let assQuery = `
+        SELECT a.*, r.name as ruta_nombre, u.name as chofer_nombre, v.plate as vehiculo_placa
+        FROM ops_delivery_assignments a
+        LEFT JOIN ops_delivery_routes r ON a.ruta_id = r.id
+        LEFT JOIN core_users u ON a.empleado_id = u.id
+        LEFT JOIN fleet_vehicles v ON a.vehiculo_id = v.id
+        WHERE 1=1
+    `;
+    const assParams: any[] = [];
+    if (filters.startDate) {
+        assQuery += ` AND a.fecha >= ?`;
+        assParams.push(filters.startDate);
+    }
+    if (filters.endDate) {
+        assQuery += ` AND a.fecha <= ?`;
+        assParams.push(filters.endDate);
+    }
+    if (filters.rutaId && filters.rutaId !== 'all') {
+        assQuery += ` AND a.ruta_id = ?`;
+        assParams.push(filters.rutaId);
+    }
+
+    assQuery += ` ORDER BY a.id DESC LIMIT 500`;
+
+    const rawAssignments = db.prepare(assQuery).all(...assParams) as any[];
+    const assignments = JSON.parse(JSON.stringify(rawAssignments));
+
+    return {
+        success: true,
+        queueDocs,
+        assignments
+    };
+}
+
+export async function getSuppliersAction(): Promise<{ id: string; name: string; alias?: string; email?: string; phone?: string; address?: string; latitude?: number; longitude?: number }[]> {
+    const db = await getDb();
+    try {
+        const suppliersMap = new Map<string, { id: string; name: string; alias?: string; email?: string; phone?: string; address?: string; latitude?: number; longitude?: number }>();
+
+        // 1. Catálogo Oficial ERP (core_suppliers)
+        try {
+            const rows = db.prepare('SELECT id, name, alias, email, phone, address, latitude, longitude FROM core_suppliers ORDER BY name ASC').all() as any[];
+            rows.forEach(r => {
+                if (r.name && r.name.trim()) {
+                    suppliersMap.set(r.name.trim().toLowerCase(), {
+                        id: r.id || r.name,
+                        name: r.name.trim(),
+                        alias: r.alias || '',
+                        email: r.email || '',
+                        phone: r.phone || '',
+                        address: r.address || '',
+                        latitude: r.latitude ?? undefined,
+                        longitude: r.longitude ?? undefined
+                    });
+                }
+            });
+        } catch (e) {}
+
+        // 2. Órdenes de Compra ERP (core_erp_purchase_order_headers) como respaldo oficial si el catálogo principal aún no se sincronizó
+        if (suppliersMap.size === 0) {
+            try {
+                const poRows = db.prepare('SELECT DISTINCT PROVEEDOR as id, PROVEEDOR as name FROM core_erp_purchase_order_headers WHERE PROVEEDOR IS NOT NULL AND PROVEEDOR != ""').all() as any[];
+                poRows.forEach(p => {
+                    if (p.name && p.name.trim() && !suppliersMap.has(p.name.trim().toLowerCase())) {
+                        suppliersMap.set(p.name.trim().toLowerCase(), {
+                            id: p.id || p.name,
+                            name: p.name.trim()
+                        });
+                    }
+                });
+            } catch (e) {}
+        }
+
+        const list = Array.from(suppliersMap.values());
+        return list.sort((a, b) => a.name.localeCompare(b.name));
+    } catch (e: any) {
+        logError('Error fetching suppliers:', e.message);
+        return [];
+    }
+}
+
+/**
+ * Obtiene el desglose de líneas de artículos reportados (pedidas, entregadas, faltantes)
+ * para un documento específico desde ops_delivery_lines.
+ */
+export async function getDeliveryLinesByDocIdAction(docId: number): Promise<{
+    success: boolean;
+    vendedor?: {
+        codigo: string;
+        nombre: string;
+        email?: string;
+        telefono?: string;
+    };
+    lines: Array<{
+        id: number;
+        codigo: string;
+        desc: string;
+        pedida: number;
+        entregada: number;
+        faltante: number;
+    }>;
+    error?: string;
+}> {
+    try {
+        const db = await getDb();
+
+        // 1. Obtener documento para extraer número, cliente y creador
+        const doc = db.prepare('SELECT id, documento_numero, cliente_id, creado_por FROM ops_delivery_queue WHERE id = ?').get(docId) as any;
+
+        // 2. Resolver Vendedor Asignado (Factura -> Cliente -> Creador)
+        let salespersonCode: string | null = null;
+        let salespersonName = '';
+        let salespersonEmail = '';
+        let salespersonPhone = '';
+
+        if (doc) {
+            // Prioridad 1: Vendedor en encabezado de factura ERP
+            const erpInvoice = db.prepare('SELECT VENDEDOR FROM core_erp_invoice_headers WHERE FACTURA = ?').get(doc.documento_numero) as { VENDEDOR: string } | undefined;
+            if (erpInvoice?.VENDEDOR && String(erpInvoice.VENDEDOR).trim()) {
+                salespersonCode = String(erpInvoice.VENDEDOR).trim();
+            } else if (doc.cliente_id) {
+                // Prioridad 2: Vendedor asociado al Cliente
+                const cust = db.prepare('SELECT salesperson FROM core_customers WHERE id = ?').get(doc.cliente_id) as { salesperson: string } | undefined;
+                if (cust?.salesperson && String(cust.salesperson).trim()) {
+                    salespersonCode = String(cust.salesperson).trim();
+                }
+            }
+
+            // Buscar datos del vendedor en core_salespersons
+            if (salespersonCode) {
+                const sp = db.prepare('SELECT NOMBRE, E_MAIL, TELEFONO FROM core_salespersons WHERE VENDEDOR = ?').get(salespersonCode) as any;
+                if (sp) {
+                    salespersonName = sp.NOMBRE || salespersonCode;
+                    salespersonEmail = sp.E_MAIL || '';
+                    salespersonPhone = sp.TELEFONO || '';
+                } else {
+                    // Fallback a core_users
+                    const u = db.prepare('SELECT name, email FROM core_users WHERE salespersonId = ? OR email = ? OR erpAlias = ?').get(salespersonCode, salespersonCode, salespersonCode) as any;
+                    if (u) {
+                        salespersonName = u.name || salespersonCode;
+                        salespersonEmail = u.email || '';
+                    } else {
+                        salespersonName = salespersonCode;
+                    }
+                }
+            } else if (doc.creado_por) {
+                // Prioridad 3: Usuario creador del pedido
+                const u = db.prepare('SELECT name, email, salespersonId FROM core_users WHERE email = ? OR erpAlias = ? OR id = ?').get(doc.creado_por, doc.creado_por, doc.creado_por) as any;
+                salespersonCode = u?.salespersonId || doc.creado_por;
+                salespersonName = u?.name || doc.creado_por;
+                salespersonEmail = u?.email || '';
+            }
+        }
+
+        // 3. Obtener líneas de entrega
+        const rows = db.prepare(`
+            SELECT 
+                id,
+                producto_codigo as codigo,
+                producto_descripcion as desc,
+                cantidad_pedida as pedida,
+                cantidad_entregada as entregada,
+                cantidad_faltante as faltante
+            FROM ops_delivery_lines
+            WHERE delivery_order_id = ?
+            ORDER BY id ASC
+        `).all(docId) as any[];
+
+        return {
+            success: true,
+            vendedor: salespersonCode ? {
+                codigo: salespersonCode,
+                nombre: salespersonName || salespersonCode,
+                email: salespersonEmail,
+                telefono: salespersonPhone
+            } : undefined,
+            lines: rows.map(r => ({
+                id: Number(r.id),
+                codigo: String(r.codigo || ''),
+                desc: String(r.desc || ''),
+                pedida: Number(r.pedida || 0),
+                entregada: Number(r.entregada || 0),
+                faltante: Number(r.faltante || 0)
+            }))
+        };
+    } catch (e: any) {
+        logError('Error getting delivery lines by doc id:', e.message);
+        return { success: false, lines: [], error: e.message };
+    }
+}
+

@@ -88,7 +88,8 @@ export default function WarehouseSearchPage() {
         allInventory: inventory,
         allItemLocations,
         stockLevels: stock,
-        stockSettings
+        stockSettings,
+        refreshAuth
     } = useAuth();
 
     const [isRefreshing, setIsRefreshing] = useState(false);
@@ -160,11 +161,11 @@ export default function WarehouseSearchPage() {
         setIsRefreshing(true);
         try {
             await syncAllData();
+            await refreshAuth();
             toast({
                 title: "Datos Actualizados",
-                description: `Los datos del ERP se han sincronizado. La página se recargará para reflejar los cambios.`
+                description: `Los datos del ERP se han sincronizado exitosamente.`
             });
-            window.location.reload();
         } catch (error: any) {
             logError("Error during manual data refresh", { error: error.message });
             toast({

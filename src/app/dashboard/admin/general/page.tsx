@@ -25,7 +25,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useDropzone } from "react-dropzone";
 import { Camera, Save } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { getInitials } from "@/lib/utils";
+import { getInitials, isTestEnvironment } from "@/lib/utils";
 
 // --- Helper Functions for Time Conversion ---
 
@@ -188,12 +188,23 @@ export default function GeneralSettingsPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="systemName">Nombre del Sistema</Label>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="systemName">Nombre del Sistema</Label>
+                      {isTestEnvironment(companyData.systemName) && (
+                        <span className="text-[10px] font-black uppercase text-rose-700 dark:text-rose-300 bg-rose-500/15 border border-rose-500/30 px-2 py-0.5 rounded-full animate-pulse">
+                          🧪 Ambiente de Pruebas Activo
+                        </span>
+                      )}
+                    </div>
                     <Input 
                       id="systemName" 
                       value={companyData.systemName || ''}
                       onChange={handleChange}
+                      className={isTestEnvironment(companyData.systemName) ? "border-rose-500 text-rose-700 dark:text-rose-400 font-bold" : ""}
                     />
+                    <p className="text-[11px] text-muted-foreground">
+                      💡 <strong>Tip:</strong> Si incluyes la palabra <code>&quot;prueba&quot;</code> o <code>&quot;pruebas&quot;</code> en el nombre, el sistema se teñirá automáticamente de <strong>rojo vino / borgoña</strong> con distintivos visuales en el Sidebar, Header y Login para diferenciar claramente este ambiente del productivo.
+                    </p>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="name">Nombre de la Empresa</Label>

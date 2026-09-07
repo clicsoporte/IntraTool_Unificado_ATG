@@ -1,17 +1,58 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { usePageTitle } from '@/modules/core/hooks/usePageTitle';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
-import { FileSignature, Truck, ArrowRight } from 'lucide-react';
+import { FileSignature, Truck, ArrowRight, ShieldAlert, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
+import { useAuthorization } from '@/modules/core/hooks/useAuthorization';
 
 export default function OperationsPage() {
     const { setTitle } = usePageTitle();
+    const router = useRouter();
+    const { hasPermission, isLoading } = useAuthorization(['operations:access', 'operaciones_chofer_web', 'deliveries:read']);
 
-    React.useEffect(() => {
+    const canLogisticsAdmin = hasPermission('operations:access') || hasPermission('deliveries:read');
+    const canDriverWeb = hasPermission('operaciones_chofer_web') || hasPermission('deliveries:write');
+
+    useEffect(() => {
         setTitle("Centro de Trazabilidad y Operaciones");
-    }, [setTitle]);
+        if (!isLoading && !canLogisticsAdmin && canDriverWeb) {
+            router.replace('/dashboard/operations/logistics/driver');
+        }
+    }, [setTitle, isLoading, canLogisticsAdmin, canDriverWeb, router]);
+
+    if (isLoading) {
+        return (
+            <main className="flex-1 p-4 md:p-6 lg:p-8">
+                <div className="flex items-center justify-center p-12 bg-card rounded-2xl border border-muted animate-pulse max-w-5xl mx-auto">
+                    <div className="text-center space-y-4">
+                        <RefreshCw className="w-8 h-8 animate-spin mx-auto text-teal-600" />
+                        <p className="text-muted-foreground font-medium">Cargando Centro de Operaciones...</p>
+                    </div>
+                </div>
+            </main>
+        );
+    }
+
+    if (!canLogisticsAdmin && !canDriverWeb) {
+        return (
+            <main className="flex-1 p-4 md:p-6 lg:p-8 animate-in fade-in duration-150">
+                <div className="mx-auto max-w-md bg-card border border-rose-200 rounded-2xl p-6 text-center space-y-4 shadow-lg">
+                    <div className="p-3 bg-rose-100 text-rose-600 rounded-full w-fit mx-auto">
+                        <ShieldAlert className="w-8 h-8" />
+                    </div>
+                    <div className="space-y-2">
+                        <h2 className="text-xl font-bold text-rose-800">Acceso Restringido</h2>
+                        <p className="text-sm text-muted-foreground">
+                            No posees los permisos necesarios para acceder al Centro de Operaciones.
+                        </p>
+                    </div>
+                </div>
+            </main>
+        );
+    }
 
     const submodules: any[] = [
         {
@@ -25,7 +66,7 @@ export default function OperationsPage() {
     ];
 
     return (
-        <main className="flex-1 p-4 md:p-6 lg:p-8 animate-in fade-in duration-500">
+        <main className="flex-1 p-4 md:p-6 lg:p-8 animate-in fade-in duration-150">
             <div className="mx-auto max-w-5xl space-y-8">
                 <div className="flex items-center gap-4">
                     <div className="p-3 bg-teal-600 rounded-2xl text-white shadow-lg shadow-teal-100">

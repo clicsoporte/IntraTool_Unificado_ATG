@@ -19,6 +19,7 @@ import { useAuth } from '@/modules/core/hooks/useAuth';
 import { subDays, startOfDay } from 'date-fns';
 import { useDebounce } from 'use-debounce';
 import { exportToExcel } from '@/modules/core/lib/excel-export';
+import { getLocalDateStr, formatDateToLocal } from '@/modules/core/lib/time-utils';
 import { useRouter } from 'next/navigation';
 
 
@@ -312,7 +313,7 @@ export function usePurchaseSuggestionsLogic() {
              try {
                 const client = item.involvedClients[0] || { id: 'VAR-CLI', name: 'VARIOS CLIENTES' };
                 const requestPayload = {
-                    requiredDate: item.earliestDueDate ? new Date(item.earliestDueDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+                    requiredDate: item.earliestDueDate ? formatDateToLocal(item.earliestDueDate) : getLocalDateStr(),
                     clientId: client.id,
                     clientName: client.name,
                     clientTaxId: '',

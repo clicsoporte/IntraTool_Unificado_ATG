@@ -1,0 +1,752 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Manual de Reconstrucción - Servidor API y Bot Telegram</title>
+    <style>
+        :root {
+            --bg: #0d1117;
+            --card-bg: #161b22;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --heading: #58a6ff;
+            --code-bg: #1c2128;
+            --code-text: #7ee787;
+            --highlight: #f78166;
+            --muted: #8b949e;
+            --danger: #f85149;
+            --success: #3fb950;
+            --warning: #f0883e;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.7;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 40px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        }
+
+        h1 {
+            color: #fff;
+            font-size: 2.2em;
+            border-bottom: 2px solid var(--border);
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+        }
+        h2 {
+            color: var(--heading);
+            font-size: 1.6em;
+            margin-top: 35px;
+            margin-bottom: 15px;
+            border-left: 4px solid var(--heading);
+            padding-left: 15px;
+        }
+        h3 {
+            color: #d2a8ff;
+            font-size: 1.2em;
+            margin-top: 25px;
+            margin-bottom: 10px;
+        }
+
+        .warning-box {
+            background: #3d1c1c;
+            border: 1px solid var(--danger);
+            border-radius: 8px;
+            padding: 15px 20px;
+            margin: 20px 0;
+            color: #ffb0b0;
+        }
+        .warning-box::before {
+            content: "⚠️ CRÍTICO: ";
+            font-weight: bold;
+            color: var(--danger);
+        }
+
+        .info-box {
+            background: #1c2a3d;
+            border: 1px solid #58a6ff;
+            border-radius: 8px;
+            padding: 15px 20px;
+            margin: 20px 0;
+            color: #b0d0ff;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+            font-size: 0.95em;
+        }
+        th {
+            background: #21262d;
+            color: #e6edf3;
+            padding: 12px 15px;
+            text-align: left;
+            border-bottom: 2px solid var(--border);
+        }
+        td {
+            padding: 10px 15px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+        tr:hover td { background: #1a1f27; }
+
+        pre {
+            background: var(--code-bg);
+            color: var(--code-text);
+            padding: 18px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+            font-size: 0.88em;
+            line-height: 1.5;
+            border: 1px solid var(--border);
+            margin: 12px 0;
+            position: relative;
+        }
+
+        code {
+            background: #2a3038;
+            color: #e6edf3;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+            font-size: 0.9em;
+        }
+        pre code {
+            background: none;
+            padding: 0;
+            color: inherit;
+        }
+
+        .copy-btn {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: #2a3038;
+            color: #c9d1d9;
+            border: 1px solid #444;
+            border-radius: 4px;
+            padding: 4px 10px;
+            cursor: pointer;
+            font-size: 0.75em;
+        }
+        .copy-btn:hover { background: #3a4048; }
+
+        .arch-diagram {
+            background: #1a1f27;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 25px;
+            margin: 20px 0;
+            text-align: center;
+            font-family: monospace;
+            line-height: 2;
+            color: #b0d0ff;
+        }
+
+        .step {
+            background: #1a2a1a;
+            border-left: 3px solid var(--success);
+            padding: 8px 15px;
+            margin: 8px 0;
+            border-radius: 0 6px 6px 0;
+        }
+
+        hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 30px 0;
+        }
+
+        .toc { margin: 20px 0; }
+        .toc a { color: #79c0ff; text-decoration: none; }
+        .toc a:hover { text-decoration: underline; }
+
+        @media print {
+            body { background: #fff; color: #000; }
+            .container { box-shadow: none; border: 1px solid #ccc; }
+            pre { background: #f5f5f5; color: #000; border: 1px solid #ddd; }
+            .copy-btn { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+
+        <h1>📘 Manual de Reconstrucción Completa del Sistema</h1>
+        <p style="color: var(--muted); font-size: 1.1em;">Servidor de API · Bot de Telegram · Infraestructura Segura<br>Versión 3.0 · Agosto 2026</p>
+
+        <div class="info-box">
+            Este manual cubre todos los componentes para reconstruir desde cero el servidor de API y bot de Telegram, incluyendo:
+            <ul>
+                <li>Servidor local (Next.js) en puertos 9003 (producción) y 9001 (desarrollo)</li>
+                <li>pfSense como firewall y concentrador VPN</li>
+                <li>VPS AWS Lightsail como proxy inverso y puente seguro</li>
+                <li>WireGuard para comunicación entre VPS, LAN y celulares</li>
+                <li>IPsec Mobile Clients como plan B para celulares</li>
+                <li>Nginx con filtrado de IPs de Telegram y SSL</li>
+            </ul>
+        </div>
+
+        <div class="toc">
+            <strong>📋 Índice</strong><br>
+            <a href="#arquitectura">1. Arquitectura General</a><br>
+            <a href="#servidor-local">2. Servidor Local (Next.js)</a><br>
+            <a href="#pfsense">3. pfSense - Firewall Corporativo</a><br>
+            <a href="#wireguard">4. WireGuard - Configuración Completa</a><br>
+            <a href="#vps">5. VPS AWS Lightsail - Ubuntu Server</a><br>
+            <a href="#nginx">6. Nginx - Proxy Inverso y SSL</a><br>
+            <a href="#ipsec">7. IPsec Mobile Clients (Plan B)</a><br>
+            <a href="#verificacion">8. Verificación y Pruebas</a><br>
+            <a href="#mantenimiento">9. Mantenimiento</a><br>
+            <a href="#solucion">10. Solución de Problemas</a>
+        </div>
+
+        <hr>
+
+        <h2 id="arquitectura">1. Arquitectura General</h2>
+
+        <div class="arch-diagram">
+            [Telegram] ──HTTPS──▶ [api.industriasgarend.com]<br>
+            &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│<br>
+            &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[VPS AWS Lightsail]<br>
+            &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;Ubuntu Server 22.04<br>
+            &emsp;&emsp;&emsp;&emsp;&emsp;IP Pública: 3.149.24.87<br>
+            &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;IP WG: 10.200.0.2<br>
+            &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│<br>
+            &emsp;&emsp;&emsp;&emsp;WireGuard VPN (MTU 1420)<br>
+            &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│<br>
+            &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;[pfSense Empresa]<br>
+            &emsp;&emsp;&emsp;&emsp;IP Pública: 190.171.122.99<br>
+            &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;IP WG: 10.200.0.1<br>
+            &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│<br>
+            &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;LAN<br>
+            &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│<br>
+            &emsp;&emsp;&emsp;[Servidor Local Windows]<br>
+            &emsp;&emsp;&emsp;&emsp;IP: 192.168.1.14<br>
+            &emsp;Puertos: 9003 (prod) / 9001 (dev)<br>
+            &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│<br>
+            &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│<br>
+            &emsp;&emsp;&emsp;[16 Celulares Android]<br>
+            &emsp;&emsp;&emsp;&emsp;IPs WG: 10.200.0.10-25<br>
+            &emsp;&emsp;&emsp;&emsp;IPsec: 10.200.0.128/28
+        </div>
+
+        <div class="warning-box">
+            El MTU del túnel WireGuard debe ser <strong>1420</strong> en todos los extremos (VPS, pfSense, Windows, celulares). Un MTU incorrecto causa fragmentación, mensajes atascados y fallos intermitentes.
+        </div>
+
+        <hr>
+
+        <h2 id="servidor-local">2. Servidor Local (Next.js)</h2>
+
+        <h3>2.1 Requisitos</h3>
+        <table>
+            <tr><td>Sistema Operativo</td><td>Windows Server 2019+ o Windows 10/11 Pro</td></tr>
+            <tr><td>Node.js</td><td>v18 o superior</td></tr>
+            <tr><td>Ruta de la app producción</td><td><code>C:\inetpub\wwwroot\clic-tools_Flota_Pruebas</code></td></tr>
+            <tr><td>Ruta de la app desarrollo</td><td><code>C:\inetpub\wwwroot\clic-tools_Flota_Dev</code> (o similar)</td></tr>
+            <tr><td>Puerto producción</td><td><code>9003</code></td></tr>
+            <tr><td>Puerto desarrollo</td><td><code>9001</code></td></tr>
+            <tr><td>Base de datos producción</td><td><code>clic_tools.db</code></td></tr>
+            <tr><td>Base de datos desarrollo</td><td><code>clic_tools_dev.db</code></td></tr>
+        </table>
+
+        <h3>2.2 Instalar WireGuard en Windows</h3>
+        <div class="step">Descargar de <a href="https://www.wireguard.com/install/" style="color:#79c0ff;">wireguard.com/install</a></div>
+        <div class="step">Instalar con opciones por defecto</div>
+        <div class="step">Para el servidor local, NO es obligatorio WireGuard (está en la LAN), pero se puede instalar si se necesita acceso remoto</div>
+
+        <h3>2.3 Iniciar la aplicación</h3>
+        <pre><code># Producción
+cd C:\inetpub\wwwroot\clic-tools_Flota_Pruebas
+npm run build
+npm run start -- -p 9003
+
+# Desarrollo
+cd C:\inetpub\wwwroot\clic-tools_Flota_Dev
+npm run build
+npm run start -- -p 9001</code></pre>
+
+        <h3>2.4 Mantener procesos con PM2 (recomendado)</h3>
+        <pre><code># Instalar PM2 globalmente
+npm install -g pm2
+
+# Producción
+cd C:\inetpub\wwwroot\clic-tools_Flota_Pruebas
+pm2 start npm --name "prod-bot" -- run start -- -p 9003
+
+# Desarrollo
+cd C:\inetpub\wwwroot\clic-tools_Flota_Dev
+pm2 start npm --name "dev-bot" -- run start -- -p 9001
+
+# Guardar configuración
+pm2 save
+pm2 startup</code></pre>
+
+        <hr>
+
+        <h2 id="pfsense">3. pfSense - Firewall Corporativo</h2>
+
+        <h3>3.1 Información del sistema</h3>
+        <table>
+            <tr><td>Versión</td><td>pfSense 2.7.2-RELEASE</td></tr>
+            <tr><td>Hostname</td><td>GarendFirewall</td></tr>
+            <tr><td>WAN 1</td><td>WAN_LIBERTY (cobre, IP dinámica)</td></tr>
+            <tr><td>WAN 2</td><td>WAN_TELECABLE (fibra, IP dinámica)</td></tr>
+            <tr><td>LAN</td><td>192.168.1.1/24</td></tr>
+            <tr><td>LAN2</td><td>192.168.2.1/24</td></tr>
+            <tr><td>LAN3</td><td>192.168.3.1/24</td></tr>
+            <tr><td>LAN4</td><td>192.168.4.1/24</td></tr>
+            <tr><td>Interfaz WG_Garend_Server</td><td>10.0.9.1/24 (túnel existente)</td></tr>
+            <tr><td>Interfaz WG_VPS</td><td>10.200.0.1/24 (túnel para VPS y celulares)</td></tr>
+        </table>
+
+        <h3>3.2 Configurar failover de WAN</h3>
+        <div class="step">System > Routing > Gateway Groups > Add</div>
+        <table>
+            <tr><td>Group Name</td><td><code>Wan_Fail_over_Kolbi_Cabletica</code></td></tr>
+            <tr><td>Gateway Priority</td><td>WAN_CABLETICA (Tier 1), WAN_KOLBI (Tier 2)</td></tr>
+        </table>
+
+        <h3>3.3 Configurar Dynamic DNS</h3>
+        <div class="step">Services > Dynamic DNS > Add</div>
+        <table>
+            <tr><td>Service type</td><td><code>freedns</code></td></tr>
+            <tr><td>Interface to monitor</td><td><code>Wan_Fail_over_Kolbi_Cabletica</code></td></tr>
+            <tr><td>Hostname</td><td><code>sisgarend.mooo.com</code></td></tr>
+        </table>
+
+        <h3>3.4 Configurar DNS Resolver para Split DNS</h3>
+        <div class="step">Services > DNS Resolver > General Settings > Enable DNS Resolver</div>
+        <div class="step">Services > DNS Resolver > Domain Overrides</div>
+        <table>
+            <tr><td>Domain</td><td><code>sisgarend.mooo.com</code></td></tr>
+            <tr><td>Lookup IP</td><td><code>192.168.1.1</code></td></tr>
+        </table>
+
+        <h3>3.5 Reglas de firewall necesarias</h3>
+        <table>
+            <tr><th>Interfaz</th><th>Protocolo</th><th>Puerto</th><th>Origen</th><th>Descripción</th></tr>
+            <tr><td>WAN</td><td>UDP</td><td>51821</td><td>Kolbi_Red_Movil</td><td>WireGuard celulares</td></tr>
+            <tr><td>WAN</td><td>UDP</td><td>500, 4500</td><td>Kolbi_Red_Movil</td><td>IPsec Mobile Clients</td></tr>
+            <tr><td>WG_VPS</td><td>TCP</td><td>9001-9003</td><td>10.200.0.0/24</td><td>WireGuard a servidor</td></tr>
+            <tr><td>IPsec</td><td>TCP</td><td>9001-9003</td><td>10.200.0.128/28</td><td>IPsec a servidor</td></tr>
+        </table>
+
+        <hr>
+
+        <h2 id="wireguard">4. WireGuard - Configuración Completa</h2>
+
+        <h3>4.1 Túnel principal (VPS + Celulares)</h3>
+        <table>
+            <tr><td>Túnel</td><td>tun_wg1</td></tr>
+            <tr><td>Descripción</td><td>Túnel VPS AWS</td></tr>
+            <tr><td>Listen Port</td><td>51821</td></tr>
+            <tr><td>MTU</td><td>1420</td></tr>
+            <tr><td>Interfaz asignada</td><td>WG_VPS (opt7)</td></tr>
+            <tr><td>IP de pfSense</td><td>10.200.0.1/24</td></tr>
+            <tr><td>Public Key pfSense</td><td>qFis1+c9eN5z/gzI++fUR0YUvkn0sYzUSJwEhtcSsWg=</td></tr>
+        </table>
+
+        <h3>4.2 Peers del túnel</h3>
+        <table>
+            <tr><th>Peer</th><th>Public Key</th><th>Allowed IPs</th><th>Endpoint</th></tr>
+            <tr><td>VPS AWS</td><td>GHOWqfmIkEmKH6FKID0JqzRPNhbKTDYBM1JS3nNoFVk=</td><td>10.200.0.2/32, 192.168.1.14/32</td><td>3.149.24.87:51821</td></tr>
+            <tr><td>Celular 1</td><td>x8vz/uIMcDWHoJ+8NOTDjrHbPitJs5BOtJBSes+7L0Y=</td><td>10.200.0.10/32</td><td>—</td></tr>
+            <tr><td>Celular 2</td><td>7s1sOnM1qE12Ks4E0+C0glGaLvHRnlWi9bBkqg3rfk8=</td><td>10.200.0.11/32</td><td>—</td></tr>
+            <tr><td>Celular 3</td><td>Ylkpf/7BytX+9dxxqb+1VSP4NOkiBkUOFUE3zgUcFHc=</td><td>10.200.0.12/32</td><td>—</td></tr>
+            <tr><td>Celular 4</td><td>2NFgsRVO9G4l5C5ghtnKsKXgK80GT4i3ecJ542KOpEc=</td><td>10.200.0.13/32</td><td>—</td></tr>
+            <tr><td>Celular 5</td><td>N2O7k7thXeqM185pTf0Sru22PMW17+PyOpEfKvPNI3U=</td><td>10.200.0.14/32</td><td>—</td></tr>
+            <tr><td>Celular 6</td><td>69/kXjMtKF2/WJYzktYE2CWaIsWteQhW5Mx626AvdhY=</td><td>10.200.0.15/32</td><td>—</td></tr>
+            <tr><td>Celular 7</td><td>W+pS/vFtmNvAyV/cu5GFG/v+ptgLKOg4KJKB/+MayRw=</td><td>10.200.0.16/32</td><td>—</td></tr>
+            <tr><td>Celular 8</td><td>/al74vUufCmuFZDwdKdoSlFEtPKPxIjcYvF10NK5pQ8=</td><td>10.200.0.17/32</td><td>—</td></tr>
+            <tr><td>Celular 9</td><td>avj8pYtv3Y19P+x2ugDCu0T8cTVNSiOSOmfbndAj1WQ=</td><td>10.200.0.18/32</td><td>—</td></tr>
+            <tr><td>Celular 10</td><td>Tpm6Hx5k8hCXAwh8L5WHrFcF2C+T5KHApiRXWIf/4ik=</td><td>10.200.0.19/32</td><td>—</td></tr>
+            <tr><td>Celular 11</td><td>7xN6kvshEWLX55g6MwONZOVOrDJbzfWdZMp4Lt76cCg=</td><td>10.200.0.20/32</td><td>—</td></tr>
+            <tr><td>Celular 12</td><td>meg3vgJoRg1eYLc/pI4vlBI37PYZYM2ogHBkH/oD2zM=</td><td>10.200.0.21/32</td><td>—</td></tr>
+            <tr><td>Celular 13</td><td>F/QzorvLt9cGcFivEHavGITjn2ug+3EuDM4sVuIk/gI=</td><td>10.200.0.22/32</td><td>—</td></tr>
+            <tr><td>Celular 14</td><td>vRYtpkRivr3laGxZ0Ak57lEFu2wb2tTdL146aQW1AFI=</td><td>10.200.0.23/32</td><td>—</td></tr>
+            <tr><td>Celular 15</td><td>O2+8JOVvDqMrLZZtu04X6fPFByYWqKl5WcgpGaU702g=</td><td>10.200.0.24/32</td><td>—</td></tr>
+            <tr><td>Celular 16</td><td>cfq+3XHXAaKYrMSpYazxi8PgGdpENetHQQGf2WIvjwI=</td><td>10.200.0.25/32</td><td>—</td></tr>
+        </table>
+
+        <h3>4.3 Configuración de celulares (archivo .conf)</h3>
+        <pre><code>[Interface]
+PrivateKey = &lt;CLAVE_PRIVADA_DEL_CELULAR&gt;
+Address = 10.200.0.10/24
+MTU = 1420
+
+[Peer]
+PublicKey = qFis1+c9eN5z/gzI++fUR0YUvkn0sYzUSJwEhtcSsWg=
+Endpoint = sisgarend.mooo.com:51821
+AllowedIPs = 192.168.1.14/32
+PersistentKeepalive = 25</code></pre>
+
+        <div class="info-box">
+            <strong>Nota sobre WiFi de empresa:</strong> Con <code>AllowedIPs = 192.168.1.14/32</code>, cuando el celular esté en la LAN, el tráfico irá directo sin pasar por VPN. El Split DNS resuelve <code>sisgarend.mooo.com</code> a la IP interna para que WireGuard conecte localmente.
+        </div>
+
+        <hr>
+
+        <h2 id="vps">5. VPS AWS Lightsail - Ubuntu Server</h2>
+
+        <h3>5.1 Crear instancia</h3>
+        <div class="step">AWS Lightsail → Create Instance → Ubuntu 22.04 LTS → $5/mes</div>
+        <div class="step">Crear IP estática y asociarla (3.149.24.87)</div>
+        <div class="step">Firewall: abrir puertos 80, 443, 51821 (UDP)</div>
+
+        <h3>5.2 Instalación inicial</h3>
+        <pre><code>ssh -i tu-llave.pem ubuntu@3.149.24.87
+
+sudo apt update && sudo apt upgrade -y
+sudo apt install nginx wireguard curl certbot python3-certbot-nginx -y</code></pre>
+
+        <h3>5.3 Configurar WireGuard</h3>
+        <pre><code>cd /etc/wireguard
+umask 077
+wg genkey | tee privatekey | wg pubkey > publickey
+
+sudo nano /etc/wireguard/wg0.conf</code></pre>
+
+        <pre><code>[Interface]
+PrivateKey = KFkBt9qbkuKKqjqyXe8S8h88Bp1R4K/RhiftyLDNLlk=
+Address = 10.200.0.2/24
+ListenPort = 51821
+MTU = 1420
+
+[Peer]
+PublicKey = qFis1+c9eN5z/gzI++fUR0YUvkn0sYzUSJwEhtcSsWg=
+Endpoint = 190.171.122.99:51821
+AllowedIPs = 10.200.0.0/24, 192.168.1.14/32
+PersistentKeepalive = 25</code></pre>
+
+        <pre><code>sudo systemctl enable wg-quick@wg0
+sudo systemctl start wg-quick@wg0
+sudo wg show</code></pre>
+
+        <h3>5.4 Verificar MTU</h3>
+        <pre><code>ip link show wg0 | grep mtu
+# Debe mostrar: mtu 1420</code></pre>
+
+        <hr>
+
+        <h2 id="nginx">6. Nginx - Proxy Inverso y SSL</h2>
+
+        <h3>6.1 Producción (api.industriasgarend.com)</h3>
+        <pre><code>sudo nano /etc/nginx/sites-available/api.industriasgarend.com</code></pre>
+
+        <pre><code>server {
+    listen 80;
+    server_name api.industriasgarend.com;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name api.industriasgarend.com;
+
+    ssl_certificate /etc/letsencrypt/live/api.industriasgarend.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.industriasgarend.com/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    location / {
+        return 403;
+    }
+
+    location /api/telegram/webhook {
+        allow 91.108.4.0/22;
+        allow 91.108.8.0/22;
+        allow 91.108.12.0/22;
+        allow 91.108.16.0/22;
+        allow 91.108.56.0/22;
+        allow 149.154.160.0/20;
+        deny all;
+
+        proxy_pass http://192.168.1.14:9003;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}</code></pre>
+
+        <h3>6.2 Desarrollo (dev-api.industriasgarend.com)</h3>
+        <pre><code>sudo nano /etc/nginx/sites-available/dev-api.industriasgarend.com</code></pre>
+
+        <pre><code>server {
+    listen 80;
+    server_name dev-api.industriasgarend.com;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name dev-api.industriasgarend.com;
+
+    ssl_certificate /etc/letsencrypt/live/dev-api.industriasgarend.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/dev-api.industriasgarend.com/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    location / {
+        return 403;
+    }
+
+    location /api/telegram/webhook {
+        allow 91.108.4.0/22;
+        allow 91.108.8.0/22;
+        allow 91.108.12.0/22;
+        allow 91.108.16.0/22;
+        allow 91.108.56.0/22;
+        allow 149.154.160.0/20;
+        deny all;
+
+        proxy_pass http://192.168.1.14:9001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}</code></pre>
+
+        <h3>6.3 Obtener certificados SSL</h3>
+        <pre><code># Para cada dominio, primero crear configuración temporal HTTP
+sudo tee /etc/nginx/sites-available/api.industriasgarend.com > /dev/null << 'EOF'
+server { listen 80; server_name api.industriasgarend.com; location / { return 200 "OK"; } }
+EOF
+sudo ln -s /etc/nginx/sites-available/api.industriasgarend.com /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d api.industriasgarend.com
+
+# Repetir para dev-api.industriasgarend.com
+
+# Luego restaurar configuraciones seguras completas
+sudo nginx -t && sudo systemctl reload nginx</code></pre>
+
+        <hr>
+
+        <h2 id="ipsec">7. IPsec Mobile Clients (Plan B)</h2>
+
+        <h3>7.1 Configurar Fase 1</h3>
+        <div class="step">VPN > IPsec > Tunnels > Add</div>
+        <table>
+            <tr><td>Description</td><td><code>MobileClients</code></td></tr>
+            <tr><td>Key Exchange version</td><td><code>IKEv2</code></td></tr>
+            <tr><td>Authentication Method</td><td><code>EAP - MSCHAPv2</code></td></tr>
+            <tr><td>My identifier</td><td><code>FQDN → sisgarend.mooo.com</code></td></tr>
+            <tr><td>My certificate</td><td>Seleccionar un certificado (puede ser el del WebGUI)</td></tr>
+            <tr><td>Encryption</td><td>AES 256</td></tr>
+            <tr><td>Hash</td><td>SHA256</td></tr>
+            <tr><td>DH Group</td><td>14 (2048 bit)</td></tr>
+        </table>
+
+        <h3>7.2 Configurar Mobile Clients</h3>
+        <div class="step">VPN > IPsec > Mobile Clients</div>
+        <table>
+            <tr><td>Enable IPsec Mobile Client Support</td><td>✅</td></tr>
+            <tr><td>Extended Authentication (Xauth)</td><td>✅</td></tr>
+            <tr><td>User Authentication</td><td><code>Local Database</code></td></tr>
+            <tr><td>Group Authentication</td><td><code>ipsec_movil</code></td></tr>
+            <tr><td>Virtual Address Pool</td><td><code>10.200.0.128/28</code></td></tr>
+            <tr><td>Network List</td><td><code>192.168.1.0/24</code></td></tr>
+            <tr><td>DNS Servers</td><td><code>192.168.1.1</code>, <code>192.168.2.1</code></td></tr>
+            <tr><td>Phase2 PFS Group</td><td><code>14 (2048 bit)</code></td></tr>
+        </table>
+
+        <h3>7.3 Crear grupo y usuarios</h3>
+        <pre><code># Grupo
+System > User Manager > Groups > Add
+Name: ipsec_movil
+Privileges: User - VPN: IPsec xauth Dialin
+
+# Usuarios (uno por celular)
+System > User Manager > Users > Add
+Username: celular1 ... celular16
+Password: Garend2026#01
+Group Membership: ipsec_movil</code></pre>
+
+        <h3>7.4 Configuración Android (Plan B)</h3>
+        <table>
+            <tr><td>Tipo</td><td><code>IKEv2/IPSec MSCHAPv2</code></td></tr>
+            <tr><td>Dirección del servidor</td><td><code>sisgarend.mooo.com</code></td></tr>
+            <tr><td>Certificado de CA de IPSec</td><td><code>no verificar el servidor</code></td></tr>
+            <tr><td>Certificado de servidor IPSec</td><td><code>no verificar el servidor</code></td></tr>
+            <tr><td>Servidores DNS</td><td><code>192.168.1.1</code></td></tr>
+            <tr><td>Desviando rutas</td><td><code>192.168.1.0/24</code></td></tr>
+            <tr><td>Nombre de usuario</td><td><code>celular1</code></td></tr>
+            <tr><td>Contraseña</td><td><code>Garend2026#01</code></td></tr>
+        </table>
+
+        <hr>
+
+        <h2 id="verificacion">8. Verificación y Pruebas</h2>
+
+        <h3>8.1 WireGuard</h3>
+        <pre><code>sudo wg show
+ping -c 4 10.200.0.1
+ping -c 4 192.168.1.14
+ip link show wg0 | grep mtu</code></pre>
+
+        <h3>8.2 Nginx</h3>
+        <pre><code>curl -I https://api.industriasgarend.com
+curl -I https://dev-api.industriasgarend.com</code></pre>
+
+        <h3>8.3 Backend</h3>
+        <pre><code>curl -X POST http://192.168.1.14:9003/api/telegram/webhook -H "Content-Type: application/json" -d '{}'
+curl -X POST http://192.168.1.14:9001/api/telegram/webhook -H "Content-Type: application/json" -d '{}'</code></pre>
+
+        <h3>8.4 Sincronizar Webhook</h3>
+        <table>
+            <tr><th>Entorno</th><th>URL</th></tr>
+            <tr><td>Producción</td><td><code>https://api.industriasgarend.com/api/telegram/webhook</code></td></tr>
+            <tr><td>Desarrollo</td><td><code>https://dev-api.industriasgarend.com/api/telegram/webhook</code></td></tr>
+        </table>
+
+        <hr>
+
+        <h2 id="mantenimiento">9. Mantenimiento</h2>
+
+        <h3>9.1 Renovación SSL</h3>
+        <pre><code>sudo certbot renew --dry-run</code></pre>
+
+        <h3>9.2 Logs</h3>
+        <pre><code># WireGuard
+sudo wg show
+
+# Nginx
+sudo tail -f /var/log/nginx/access.log
+sudo tail -f /var/log/nginx/error.log
+
+# IPsec
+sudo tail -f /var/log/ipsec.log</code></pre>
+
+        <h3>9.3 Reinicio de servicios</h3>
+        <pre><code># WireGuard
+sudo wg-quick down wg0 && sudo wg-quick up wg0
+
+# Nginx
+sudo systemctl reload nginx
+
+# IPsec
+sudo /usr/local/sbin/ipsec restart</code></pre>
+
+        <hr>
+
+        <h2 id="solucion">10. Solución de Problemas</h2>
+
+        <table>
+            <tr><th>Síntoma</th><th>Causa probable</th><th>Solución</th></tr>
+            <tr>
+                <td>Mensajes no llegan al bot</td>
+                <td>MTU incorrecto</td>
+                <td>Verificar <code>ip link show wg0 | grep mtu</code> → 1420</td>
+            </tr>
+            <tr>
+                <td>502 Bad Gateway</td>
+                <td>App no corriendo</td>
+                <td>Verificar <code>netstat -ano | findstr "9001 9003"</code></td>
+            </tr>
+            <tr>
+                <td>Celular no conecta WireGuard</td>
+                <td>IP no está en alias</td>
+                <td>Agregar <code>201.191.0.0/16</code> al alias Kolbi</td>
+            </tr>
+            <tr>
+                <td>VPN se cierra al cerrar app</td>
+                <td>Optimización de batería</td>
+                <td>Desactivar ahorro de batería para WireGuard</td>
+            </tr>
+            <tr>
+                <td>No conecta en WiFi empresa</td>
+                <td>AllowedIPs incorrecto</td>
+                <td>Usar <code>192.168.1.14/32</code> en vez de <code>0.0.0.0/0</code></td>
+            </tr>
+            <tr>
+                <td>IPsec no conecta</td>
+                <td>Puertos cerrados</td>
+                <td>Abrir UDP 500 y 4500 en WAN</td>
+            </tr>
+        </table>
+
+        <hr>
+
+        <h2>📊 Tabla de Credenciales</h2>
+        <table>
+            <tr><th>Componente</th><th>Dato</th></tr>
+            <tr><td>VPS IP Pública</td><td><code>3.149.24.87</code></td></tr>
+            <tr><td>VPS IP WireGuard</td><td><code>10.200.0.2</code></td></tr>
+            <tr><td>pfSense IP Pública (Liberty)</td><td><code>186.15.164.98</code></td></tr>
+            <tr><td>pfSense IP Pública (Telecable)</td><td><code>190.171.122.99</code></td></tr>
+            <tr><td>pfSense IP WireGuard</td><td><code>10.200.0.1</code></td></tr>
+            <tr><td>pfSense IP LAN</td><td><code>192.168.1.1</code></td></tr>
+            <tr><td>Servidor Local</td><td><code>192.168.1.14</code></td></tr>
+            <tr><td>Puerto Producción</td><td><code>9003</code></td></tr>
+            <tr><td>Puerto Desarrollo</td><td><code>9001</code></td></tr>
+            <tr><td>Dominio Producción</td><td><code>api.industriasgarend.com</code></td></tr>
+            <tr><td>Dominio Desarrollo</td><td><code>dev-api.industriasgarend.com</code></td></tr>
+            <tr><td>Dominio DDNS</td><td><code>sisgarend.mooo.com</code></td></tr>
+            <tr><td>Rango VPN celulares</td><td><code>10.200.0.10/28</code></td></tr>
+            <tr><td>Rango IPsec celulares</td><td><code>10.200.0.128/28</code></td></tr>
+        </table>
+
+        <h2>🔑 Claves WireGuard</h2>
+        <table>
+            <tr><th>Dispositivo</th><th>Clave Pública</th></tr>
+            <tr><td>VPS</td><td><code>GHOWqfmIkEmKH6FKID0JqzRPNhbKTDYBM1JS3nNoFVk=</code></td></tr>
+            <tr><td>pfSense</td><td><code>qFis1+c9eN5z/gzI++fUR0YUvkn0sYzUSJwEhtcSsWg=</code></td></tr>
+        </table>
+
+        <h2>🔐 Clave IPsec</h2>
+        <table>
+            <tr><td>PSK</td><td><code>GarendIPSEC2026!</code></td></tr>
+            <tr><td>Usuarios</td><td><code>celular1</code> a <code>celular16</code></td></tr>
+            <tr><td>Contraseña</td><td><code>Garend2026#01</code></td></tr>
+        </table>
+
+        <div class="warning-box" style="margin-top: 30px;">
+            Mantener el MTU 1420 en toda la cadena WireGuard. Verificar periódicamente los rangos de IPs de Kölbi/ICE para el firewall. Realizar copias de seguridad de pfSense y del VPS.
+        </div>
+
+        <p style="text-align: center; color: var(--muted); margin-top: 40px; font-size: 0.9em;">
+            Versión 3.0 · Agosto 2026 · Incluye WireGuard, IPsec, Split DNS y Failover
+        </p>
+
+    </div>
+
+    <script>
+        // Botón de copiar en cada bloque de código
+        document.querySelectorAll('pre').forEach(pre => {
+            const btn = document.createElement('button');
+            btn.className = 'copy-btn';
+            btn.textContent = '📋 Copiar';
+            btn.addEventListener('click', () => {
+                const code = pre.querySelector('code')?.innerText || pre.innerText;
+                navigator.clipboard.writeText(code).then(() => {
+                    btn.textContent = '✅ Copiado!';
+                    setTimeout(() => btn.textContent = '📋 Copiar', 2000);
+                });
+            });
+            pre.style.position = 'relative';
+            pre.appendChild(btn);
+        });
+    </script>
+</body>
+</html>

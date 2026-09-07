@@ -44,6 +44,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/modules/core/hooks/useAuth";
 import { useAuthorization } from "@/modules/core/hooks/useAuthorization";
 import { useMemo } from "react";
+import { isTestEnvironment } from "@/lib/utils";
 
 const navLinks: Tool[] = [
   {
@@ -93,7 +94,15 @@ const navLinks: Tool[] = [
     icon: FileSignature,
     bgColor: 'bg-teal-700',
   },
-   {
+  {
+    id: 'operaciones_chofer_web',
+    name: 'Portal Entregas Móvil',
+    description: 'Ruta activa, entregas y recolectas móviles.',
+    href: '/dashboard/operations/logistics/driver',
+    icon: Truck,
+    bgColor: 'bg-indigo-600',
+  },
+  {
     id: 'deliveries:customers',
     name: 'Clientes y Ubicaciones',
     description: 'Gestionar direcciones de entrega y geolocalizaciones.',
@@ -101,7 +110,7 @@ const navLinks: Tool[] = [
     icon: Users,
     bgColor: 'bg-indigo-600',
   },
-   {
+  {
     id: "it-tools:access",
     name: "Herramientas de TI",
     description: "Gestionar notas técnicas y documentación interna de TI.",
@@ -177,6 +186,7 @@ export function AppSidebar() {
   const { user: currentUser, companyData, isAuthReady } = useAuth();
   const { hasPermission } = useAuthorization();
   const { isMobile, setOpenMobile } = useSidebar();
+  const isTest = isTestEnvironment(companyData?.systemName);
 
   const handleLinkClick = () => {
     if (isMobile) {
@@ -196,7 +206,7 @@ export function AppSidebar() {
         return pathname === href;
     }
     if (href === '/dashboard/operations') {
-        return pathname === '/dashboard/operations' || pathname.startsWith('/dashboard/operations/');
+        return (pathname === '/dashboard/operations' || pathname.startsWith('/dashboard/operations/')) && !pathname.startsWith('/dashboard/operations/logistics/driver');
     }
     return pathname.startsWith(href);
   };
@@ -229,14 +239,23 @@ export function AppSidebar() {
   return (
       <Sidebar collapsible="icon" className="border-r z-20">
         <SidebarHeader className="flex flex-row items-center gap-2 p-2 group-data-[collapsible=icon]:justify-center">
-          <Button variant="ghost" size="icon" className="size-10 shrink-0" asChild>
+          <Button variant="ghost" size="icon" className={`size-10 shrink-0 ${isTest ? 'bg-rose-500/10 hover:bg-rose-500/20' : ''}`} asChild>
             <Link href="/dashboard" onClick={handleLinkClick}>
-              <Network className="text-primary" />
+              <Network className={isTest ? "text-rose-700 dark:text-rose-400" : "text-primary"} />
             </Link>
           </Button>
-          <h2 className="text-sm font-semibold tracking-tight text-sidebar-foreground truncate group-data-[collapsible=icon]:hidden">
-            {companyData?.systemName || 'Clic-Tools'}
-          </h2>
+          <div className="flex flex-col min-w-0 group-data-[collapsible=icon]:hidden">
+            <h2 className={`text-sm font-bold tracking-tight truncate ${
+              isTest ? 'text-rose-700 dark:text-rose-400' : 'text-sidebar-foreground'
+            }`}>
+              {companyData?.systemName || 'Clic-Tools'}
+            </h2>
+            {isTest && (
+              <span className="text-[9px] font-black tracking-wider uppercase text-rose-600 dark:text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded w-fit mt-0.5">
+                🧪 Ambiente de Pruebas
+              </span>
+            )}
+          </div>
         </SidebarHeader>
         <SidebarContent>
           <SidebarMenu>

@@ -55,20 +55,24 @@ export async function createNotificationForPermission(
         .filter(role => role.id === 'admin' || role.permissions.includes(permission))
         .map(role => role.id);
     
-    // Find all users who have one of the relevant roles.
+    // Find all active users with valid numeric IDs who have one of the relevant roles.
     const targetUsers = allUsers.filter((user: User) => 
-        relevantRoleIds.includes(user.role)
+        user && typeof user.id === 'number' && user.id > 0 && relevantRoleIds.includes(user.role)
     );
 
     for (const user of targetUsers) {
-        await dbCreateNotification({ 
-            userId: user.id, 
-            message, 
-            href,
-            entityId,
-            entityType,
-            taskType,
-        });
+        try {
+            await dbCreateNotification({ 
+                userId: user.id, 
+                message, 
+                href,
+                entityId,
+                entityType,
+                taskType,
+            });
+        } catch (e: any) {
+            logError("Failed to deliver notification to user", { userId: user.id, error: e.message });
+        }
     }
 }
 

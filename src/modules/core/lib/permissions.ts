@@ -4,7 +4,7 @@
  */
 
 export const permissionGroups = {
-    "Acceso General": ["dashboard:access"],
+    "Acceso General": ["dashboard:access", "admin:import:run", "users:edit:erp-alias"],
     "Cotizador": ["quotes:create", "quotes:generate", "quotes:drafts:create", "quotes:drafts:read", "quotes:drafts:delete"],
     "Facturación y XML": ["invoices:access", "invoices:reporter:access", "invoices:reporter:export"],
     "Solicitud de Compra": [
@@ -30,7 +30,11 @@ export const permissionGroups = {
         "consignments:boleta:cancel", "consignments:boleta:revert",
         "consignments:adjustments:create", "consignments:closures:create", "consignments:closures:annul"
     ],
-    "Centro de Operaciones y Trazabilidad (Nuevo)": ["operations:access", "operations:create", "operations:read:all", "operations:approve", "operations:sign", "deliveries:read", "deliveries:write", "deliveries:admin", "deliveries:collect", "deliveries:customers", "deliveries:route-sheets"],
+    "Centro de Operaciones y Trazabilidad (Nuevo)": [
+        "operations:access", "operaciones_chofer_web", "operations:create", "operations:read:all", "operations:approve", "operations:sign",
+        "deliveries:read", "deliveries:write", "deliveries:revert", "deliveries:admin", "deliveries:collect", "deliveries:customers",
+        "deliveries:route-sheets", "deliveries:gps:read", "deliveries:analytics:read", "deliveries:analytics:read:all", "deliveries:audit:read"
+    ],
     "Herramientas de TI (Nuevo)": [
         "it-tools:access", "it-tools:notes:read", "it-tools:notes:create", "it-tools:notes:update", "it-tools:notes:delete",
         "it-tools:assets:read", "it-tools:assets:write", "it-tools:assets:admin"
@@ -59,15 +63,20 @@ export const permissionGroups = {
         "admin:access",
         "admin:settings:general", "admin:settings:api", "admin:settings:planner", "admin:settings:requests", "admin:settings:warehouse", "admin:settings:stock", "admin:settings:cost-assistant", "admin:settings:analytics", "admin:settings:consignments",
         "admin:suggestions:read",
-        "admin:import:run", "admin:import:files", "admin:import:sql", "admin:import:sql-config",
+        "admin:import:files", "admin:import:sql", "admin:import:sql-config",
         "admin:logs:read", "admin:logs:clear",
         "admin:maintenance:backup", "admin:maintenance:restore", "admin:maintenance:reset",
         "admin:settings:automations"
     ],
+    "Asistente IA y Bot (Nuevo)": ["ai:access", "ai:audit:logs", "ai:analytics:query", "ai:financial:query"],
 };
 
 export const permissionTranslations = {
     "admin:access": "Acceso a Configuración",
+    "ai:access": "Asistente IA: Uso del Bot Conversacional y Guía",
+    "ai:audit:logs": "IA: Auditor de Logs y Soporte TI",
+    "ai:analytics:query": "Asistente IA: Consultar KPIs y Analítica Gerencial",
+    "ai:financial:query": "Asistente IA: Consultar Precios, Márgenes y Costos Financieros",
     "dashboard:access": "Acceso al Panel", "quotes:create": "Cotizador: Crear", "quotes:generate": "Cotizador: Generar PDF", "quotes:drafts:create": "Borradores: Crear", "quotes:drafts:read": "Borradores: Cargar", "quotes:drafts:delete": "Borradores: Eliminar",
     "invoices:access": "Facturas y XML: Acceso al Módulo",
     "invoices:reporter:access": "Reporteador Facturas: Acceso",
@@ -86,13 +95,18 @@ export const permissionTranslations = {
     "consignments:adjustments:create": "Consignación: Crear Ajustes",
     "consignments:closures:create": "Consignación: Crear Cierres",
     "consignments:closures:annul": "Consignación: Anular Cierres",
-    "operations:access": "Operaciones: Acceso General", "operations:create": "Operaciones: Crear Documentos", "operations:read:all": "Operaciones: Ver Todos", "operations:approve": "Operaciones: Aprobar Documentos", "operations:sign": "Operaciones: Firmar Entregas/Recibos",
+    "operations:access": "Operaciones: Acceso General", "operaciones_chofer_web": "Operaciones: Portal Entregas Móvil (Choferes)", "operations:create": "Operaciones: Crear Documentos", "operations:read:all": "Operaciones: Ver Todos", "operations:approve": "Operaciones: Aprobar Documentos", "operations:sign": "Operaciones: Firmar Entregas/Recibos",
     "deliveries:read": "Entregas: Ver Monitor y Dashboard",
     "deliveries:write": "Entregas: Registrar Entregas y Despachar",
+    "deliveries:revert": "Entregas: Revertir Estado de Entregas Procesadas",
     "deliveries:admin": "Entregas: Modificar Parámetros y Ajustes",
     "deliveries:collect": "Entregas: Crear y Gestionar Recolectas de Proveedores",
     "deliveries:customers": "Entregas: Gestionar Clientes y Geolocalización",
-    "deliveries:route-sheets": "Entregas: Ver Hojas de Ruta (Acceso Directo)",
+    "deliveries:route-sheets": "Entregas: Ver Hojas de Ruta y Boletas PDF",
+    "deliveries:gps:read": "Entregas: Ver Monitor de Estados GPS",
+    "deliveries:analytics:read": "Entregas: Ver Analítica Logística & KPIs",
+    "deliveries:analytics:read:all": "Entregas: Ver Analítica Gerencial Global y OTIF",
+    "deliveries:audit:read": "Entregas: Ver Auditoría y Evidencias 360°",
     "it-tools:access": "TI: Acceso General", "it-tools:notes:read": "TI: Ver Notas", "it-tools:notes:create": "TI: Crear Notas", "it-tools:notes:update": "TI: Editar Notas", "it-tools:notes:delete": "TI: Eliminar Notas",
     "it-tools:assets:read": "TI: Ver Activos y Licencias", "it-tools:assets:write": "TI: Gestionar Activos y Licencias", "it-tools:assets:admin": "TI: Administrar Catálogos y Sedes",
     "fleet:access": "Flota: Acceso General", "fleet:vehicles:read": "Flota: Ver Vehículos", "fleet:vehicles:create": "Flota: Registrar Vehículo", "fleet:vehicles:update": "Flota: Editar Vehículo", "fleet:vehicles:delete": "Flota: Eliminar Vehículo", "fleet:fuel:create": "Flota: Registrar Combustible", "fleet:fuel:sync": "Flota: Sincronizar con RECOPE", "fleet:fuel:delete": "Flota: Eliminar Repostaje", "fleet:maintenance:create": "Flota: Registrar Mantenimiento", "fleet:maintenance:delete": "Flota: Eliminar Mantenimiento", "fleet:settings:manage": "Flota: Gestionar Catálogos",
@@ -109,6 +123,7 @@ export const permissionTranslations = {
     "hacienda:query": "Hacienda: Realizar Consultas",
     "analytics:read": "Analíticas: Acceso", "analytics:purchase-suggestions:read": "Analíticas: Sugerencias Compra", "analytics:purchase-report:read": "Analíticas: Reporte Compras", "analytics:production-report:read": "Analíticas: Reporte Producción", "analytics:transits-report:read": "Analíticas: Reporte Tránsitos", "analytics:user-permissions:read": "Analíticas: Reporte Permisos", "analytics:physical-inventory-report:read": "Analíticas: Reporte Inv. Físico", "analytics:receiving-report:read": "Analíticas: Reporte Recepciones", "analytics:item-assignments-report:read": "Analíticas: Reporte Catálogo", "analytics:occupancy-report:read": "Analíticas: Reporte Ocupación", "analytics:consignments-report:read": "Analíticas: Reporte Consignación",
     "users:create": "Usuarios: Crear", "users:read": "Usuarios: Leer", "users:update": "Usuarios: Actualizar", "users:delete": "Usuarios: Eliminar",
+    "users:edit:erp-alias": "Perfil: Editar Alias de Usuario (ERP)",
     "roles:create": "Roles: Crear", "roles:read": "Roles: Leer", "roles:update": "Roles: Actualizar", "roles:delete": "Roles: Eliminar",
     "admin:settings:general": "Admin: Config. General", "admin:settings:api": "Admin: Config. de API", "admin:settings:planner": "Admin: Config. Planificador", "admin:settings:requests": "Admin: Config. Compras", "admin:settings:warehouse": "Admin: Config. Almacenes", "admin:settings:stock": "Admin: Config. Inventario", "admin:settings:cost-assistant": "Admin: Config. Asist. Costos", "admin:settings:analytics": "Admin: Config. Analíticas", "admin:settings:consignments": "Admin: Config. Consignación",
     "admin:suggestions:read": "Admin: Leer Sugerencias",
@@ -137,7 +152,9 @@ export const permissionTree: Partial<Record<AppPermission, AppPermission[]>> = {
         "admin:settings:stock", "admin:settings:cost-assistant", "admin:settings:analytics",
         "admin:settings:consignments", "admin:suggestions:read", "admin:import:run", 
         "admin:logs:read", "admin:maintenance:backup", "fleet:settings:manage",
-        "admin:settings:automations", "deliveries:admin"
+        "admin:settings:automations", "deliveries:admin", "deliveries:gps:read", "deliveries:audit:read",
+        "deliveries:route-sheets", "deliveries:analytics:read", "deliveries:analytics:read:all",
+        "ai:access", "ai:audit:logs", "ai:analytics:query", "ai:financial:query"
     ],
     
     // --- Users & Roles ---
@@ -145,6 +162,7 @@ export const permissionTree: Partial<Record<AppPermission, AppPermission[]>> = {
     "users:update": ["users:create"],
     "users:create": ["users:read"],
     "users:read": ["dashboard:access"],
+    "users:edit:erp-alias": ["dashboard:access"],
     
     "roles:delete": ["roles:update"],
     "roles:update": ["roles:create"],
@@ -152,7 +170,7 @@ export const permissionTree: Partial<Record<AppPermission, AppPermission[]>> = {
     "roles:read": ["dashboard:access"],
 
     // --- Admin Imports & Logs & Maintenance ---
-    "admin:import:run": ["admin:import:files", "admin:import:sql", "admin:import:sql-config"],
+    "admin:import:run": ["dashboard:access"],
     "admin:import:files": ["dashboard:access"],
     "admin:import:sql": ["dashboard:access"],
     "admin:import:sql-config": ["dashboard:access"],
@@ -187,6 +205,11 @@ export const permissionTree: Partial<Record<AppPermission, AppPermission[]>> = {
     "requests:create": ["requests:read"],
     "requests:read:all": ["requests:read"],
     "requests:notes:add": ["requests:read"],
+    "requests:reopen": ["requests:status:cancel"],
+    "requests:status:cancel": ["requests:read"],
+    "requests:status:revert-to-approved": ["requests:status:ordered"],
+    "requests:status:unapproval-request": ["requests:status:approve"],
+    "requests:status:unapproval-request:approve": ["requests:status:unapproval-request", "requests:edit:approved"],
     "requests:status:entered-erp": ["requests:status:received-in-warehouse"],
     "requests:status:received-in-warehouse": ["requests:status:ordered"],
     "requests:status:ordered": ["requests:status:approve"],
@@ -290,9 +313,17 @@ export const permissionTree: Partial<Record<AppPermission, AppPermission[]>> = {
     "tickets:read": ["dashboard:access"],
 
     // --- Operations & Logistics ---
-    "deliveries:admin": ["deliveries:write", "deliveries:customers"],
-    "deliveries:customers": ["deliveries:read"],
+    "deliveries:admin": [
+        "deliveries:write", "deliveries:revert", "deliveries:customers", 
+        "deliveries:gps:read", "deliveries:audit:read", "deliveries:route-sheets", 
+        "deliveries:analytics:read", "deliveries:analytics:read:all"
+    ],
+    "deliveries:customers": ["operations:access"],
     "deliveries:write": ["deliveries:read"],
+    "deliveries:gps:read": ["operations:access"],
+    "deliveries:audit:read": ["operations:access"],
+    "deliveries:analytics:read:all": ["deliveries:analytics:read"],
+    "deliveries:analytics:read": ["operations:access"],
     "deliveries:read": ["operations:access"],
     "deliveries:collect": ["operations:access"],
     "deliveries:route-sheets": ["operations:access"],

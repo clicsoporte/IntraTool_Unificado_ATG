@@ -2,32 +2,16 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { Truck, LayoutDashboard, CalendarRange, Settings, RefreshCw, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuthorization } from '@/modules/core/hooks/useAuthorization';
 
 export default function DeliveriesLayout({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
+    const searchParams = useSearchParams();
+    const isTvQuery = searchParams.get('tv') === 'true';
     const { isAuthorized, isLoading, hasPermission } = useAuthorization(['deliveries:read']);
-    const [isTvQuery, setIsTvQuery] = React.useState(false);
-
-    React.useEffect(() => {
-        const handleLocationChange = () => {
-            const params = new URLSearchParams(window.location.search);
-            setIsTvQuery(params.get('tv') === 'true');
-        };
-
-        handleLocationChange();
-
-        window.addEventListener('popstate', handleLocationChange);
-        window.addEventListener('locationchange', handleLocationChange);
-
-        return () => {
-            window.removeEventListener('popstate', handleLocationChange);
-            window.removeEventListener('locationchange', handleLocationChange);
-        };
-    }, []);
 
     const tabs = (isLoading || isTvQuery) ? [] : [
         {
@@ -85,7 +69,7 @@ export default function DeliveriesLayout({ children }: { children: React.ReactNo
     }
 
     return (
-        <main className={`flex-1 animate-in fade-in duration-500 ${isTvQuery ? 'p-2' : 'p-3 md:p-6 lg:p-8'}`}>
+        <main className={`flex-1 ${isTvQuery ? 'p-2' : 'animate-in fade-in duration-150 p-3 md:p-6 lg:p-8'}`}>
             <div className={`mx-auto space-y-6 ${isTvQuery ? 'max-w-none w-full px-2' : 'max-w-7xl'}`}>
                 {!isTvQuery && (
                     <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-muted">

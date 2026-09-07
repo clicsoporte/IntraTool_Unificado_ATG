@@ -1,6 +1,7 @@
 // /src/app/api/cron/delivery-cleanup/route.ts
 
 import { NextResponse } from 'next/server';
+import crypto from 'crypto';
 import { sweepActiveAssignments, getDeliverySettings } from '@/modules/operations/lib/actions';
 import { logError, logInfo } from '@/modules/core/lib/logger';
 import { revalidatePath } from 'next/cache';
@@ -24,8 +25,11 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: 'No autorizado: Falta cabecera de autorización.' }, { status: 401 });
         }
 
-        const token = authHeader.substring(7);
-        if (token !== cronSecret) {
+        const token = authHeader.substring(7).trim();
+        const tokenBuf = Buffer.from(token);
+        const secretBuf = Buffer.from(cronSecret.trim());
+
+        if (tokenBuf.length !== secretBuf.length || !crypto.timingSafeEqual(tokenBuf, secretBuf)) {
             logError('Delivery cleanup cron job access attempt with invalid secret key.');
             return NextResponse.json({ error: 'No autorizado: Clave secreta inválida.' }, { status: 403 });
         }

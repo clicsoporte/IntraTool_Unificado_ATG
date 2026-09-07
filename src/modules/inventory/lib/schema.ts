@@ -288,4 +288,34 @@ export async function initializeInventorySchema(db: Database) {
     } catch (e: any) {
         console.error("Error adding default_assignee_id to fleet_settings", e);
     }
+
+    // 9. Master Spare Part Brands Table
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS inv_part_brands (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT UNIQUE NOT NULL,
+            description TEXT,
+            created_at TEXT NOT NULL
+        )
+    `);
+
+    // 10. Spare Part Compatibility Matrix Table
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS inv_item_compatibilities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_id TEXT NOT NULL,
+            vehicle_brand TEXT,
+            vehicle_model TEXT,
+            vehicle_plate TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            created_by TEXT,
+            FOREIGN KEY (item_id) REFERENCES ${INVENTORY_TABLES.items}(id) ON DELETE CASCADE
+        )
+    `);
+
+    // Indexes for high performance searches
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_inv_item_compatibilities_item ON inv_item_compatibilities(item_id)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_inv_item_compatibilities_plate ON inv_item_compatibilities(vehicle_plate)`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_inv_item_compatibilities_brand ON inv_item_compatibilities(vehicle_brand)`);
 }

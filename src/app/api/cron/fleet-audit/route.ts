@@ -1,6 +1,7 @@
 // /src/app/api/cron/fleet-audit/route.ts
 
 import { NextResponse } from 'next/server';
+import crypto from 'crypto';
 import { runSystemAudits } from '@/modules/notifications/lib/scheduler';
 import { logError, logInfo } from '@/modules/core/lib/logger';
 import { revalidatePath } from 'next/cache';
@@ -25,9 +26,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'No autorizado: Falta cabecera de autorización.' }, { status: 401 });
     }
     
-    // 3. Extract and validate the token
-    const token = authHeader.substring(7, authHeader.length);
-    if (token !== cronSecret) {
+    // 3. Extract and validate the token using constant-time comparison
+    const token = authHeader.substring(7).trim();
+    const tokenBuf = Buffer.from(token);
+    const secretBuf = Buffer.from(cronSecret.trim());
+
+    if (tokenBuf.length !== secretBuf.length || !crypto.timingSafeEqual(tokenBuf, secretBuf)) {
       logError('Fleet audit cron job access attempt with invalid secret key.');
       return NextResponse.json({ error: 'No autorizado: Clave secreta inválida.' }, { status: 403 });
     }

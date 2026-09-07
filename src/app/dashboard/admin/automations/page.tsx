@@ -25,7 +25,7 @@ import {
     DialogClose 
 } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { PlusCircle, Trash2, Edit, BellRing, Clock, Send, Loader2, Mail, RefreshCw, Play, LayoutTemplate, Info, Save, ChevronRight, Eye, Bot, Smartphone, UserPlus, Link2, Unlink, CheckCircle2, AlertCircle, Key, Lock, User, UserCheck, Activity, Sparkles, Cpu, Server, CheckCircle, XCircle, Settings2, HelpCircle } from 'lucide-react';
+import { PlusCircle, Trash2, Edit, BellRing, Clock, Send, Loader2, Mail, RefreshCw, Play, LayoutTemplate, Info, Save, ChevronRight, Eye, Bot, Smartphone, UserPlus, Link2, Unlink, CheckCircle2, AlertCircle, Key, Lock, User, UserCheck, Activity, Sparkles, Cpu, Server, CheckCircle, XCircle, Settings2, HelpCircle, ShieldCheck, ShieldAlert, Database } from 'lucide-react';
 import { Textarea } from '@/components/ui/textarea';
 import type { NotificationRule, ScheduledTask, NotificationServiceConfig, EmailSettings, NotificationTemplate, AiSettings } from '@/modules/core/types';
 import { 
@@ -33,10 +33,10 @@ import {
     getAllScheduledTasks, saveScheduledTask, deleteScheduledTask,
     getNotificationServiceSettings, saveNotificationServiceSettings,
     testTelegram, fetchTelegramChatId, testNotificationRule,
-    getAllNotificationTemplates, saveNotificationTemplate
+    getAllNotificationTemplates, saveNotificationTemplate,
+    clearAiMemoryAction, getAiSettingsAction, saveAiSettingsAction
 } from '@/modules/notifications/lib/actions';
-import { getAiSettings, saveAiSettings } from '@/modules/core/lib/db';
-import { testAiConnection } from '@/modules/core/lib/ai-assistant-service';
+import { testAiConnection, fetchGeminiModels, type GeminiModelInfo } from '@/modules/core/lib/ai-assistant-service';
 import { Badge } from '@/components/ui/badge';
 import {
     generateActivationCodeAction,
@@ -75,6 +75,8 @@ const eventLabels: Record<string, string> = {
     onCollectUpdate: 'Actualización en Estado de Recolecta (Compras)',
     onDeliveryRetry: 'Boleta de Retorno / Devolución Total de Entrega (Logística)',
     onDeliveryPartial: 'Boleta de Entrega Incompleta / Faltante (Logística)',
+    onDeliveryArrivalGeofence: 'Notificación de Arribo a Instalaciones del Cliente (Logística)',
+    onDriverWaitingCustomer: '⏱️ Chofer en Espera de Atención en Cliente (Logística)',
 };
 
 const eventVariables: Record<string, string[]> = {
@@ -92,8 +94,10 @@ const eventVariables: Record<string, string[]> = {
     onAssetAssigned: ['assigneeName', 'assigneeId', 'category', 'brand', 'model', 'serialNumber', 'assignedDate', 'assignedBy', 'notes'],
     onCollectAssigned: ['consecutivo', 'proveedor', 'ordenCompra', 'factura', 'solicitanteNombre', 'choferNombre', 'rutaNombre', 'vehiculoPlaca', 'lugarEntrega', 'metodoPago', 'horarioProveedor', 'contactoNombre', 'contactoTelefono', 'whatsappLink'],
     onCollectUpdate: ['consecutivo', 'proveedor', 'ordenCompra', 'factura', 'solicitanteNombre', 'choferNombre', 'rutaNombre', 'vehiculoPlaca', 'lugarEntrega', 'metodoPago', 'horarioProveedor', 'contactoNombre', 'contactoTelefono', 'whatsappLink', 'estadoLabel', 'comentarioChofer'],
-    onDeliveryRetry: ['documento_numero', 'cliente_nombre', 'cliente_id', 'lugar_entrega', 'contacto_nombre', 'contacto_telefono', 'fecha', 'ruta_nombre', 'chofer_nombre', 'chofer_id', 'motivo_devolucion'],
-    onDeliveryPartial: ['documento_numero', 'cliente_nombre', 'cliente_id', 'lugar_entrega', 'contacto_nombre', 'contacto_telefono', 'fecha', 'ruta_nombre', 'chofer_nombre', 'chofer_id', 'motivo_incompleto'],
+    onDeliveryRetry: ['documento_numero', 'cliente_nombre', 'cliente_id', 'lugar_entrega', 'contacto_nombre', 'contacto_telefono', 'fecha', 'ruta_nombre', 'chofer_nombre', 'chofer_id', 'nombre_recibe', 'motivo_devolucion', 'firma_html', 'maps_link'],
+    onDeliveryPartial: ['documento_numero', 'cliente_nombre', 'cliente_id', 'lugar_entrega', 'contacto_nombre', 'contacto_telefono', 'fecha', 'ruta_nombre', 'chofer_nombre', 'chofer_id', 'nombre_recibe', 'motivo_incompleto', 'firma_html', 'maps_link'],
+    onDeliveryArrivalGeofence: ['docNumero', 'clienteNombre', 'clienteId', 'horaArribo', 'choferNombre', 'vehiculoPlaca', 'rutaNombre', 'lugarEntrega'],
+    onDriverWaitingCustomer: ['docNumero', 'clienteNombre', 'clienteId', 'lugarEntrega', 'choferNombre', 'vehiculoPlaca', 'rutaNombre', 'horaReporte', 'mapsLink', 'productosTable'],
 };
 
 function interpretCronExpression(cron: string): string {
@@ -302,6 +306,93 @@ export default function AutomationManagerPage() {
     const [isTestingAiConnection, setIsTestingAiConnection] = useState(false);
     const [aiConnectionStatus, setAiConnectionStatus] = useState<{ success: boolean; message: string } | null>(null);
     const [isSavingAi, setIsSavingAi] = useState(false);
+    const [geminiModelsList, setGeminiModelsList] = useState<GeminiModelInfo[]>([]);
+    const [isLoadingGeminiModels, setIsLoadingGeminiModels] = useState(false);
+
+    const handleFetchGeminiModels = async (keyOverride?: string) => {
+        const key = keyOverride !== undefined ? keyOverride : aiSettings?.geminiApiKey;
+        if (!key || !key.trim()) {
+            toast({
+                title: "API Key Requerida",
+                description: "Ingresa una Gemini API Key para consultar los modelos disponibles.",
+                variant: "destructive"
+            });
+            return;
+        }
+
+        setIsLoadingGeminiModels(true);
+        try {
+            const res = await fetchGeminiModels(key);
+            if (res.success && res.models) {
+                setGeminiModelsList(res.models);
+                toast({
+                    title: "Modelos de Gemini Cargados",
+                    description: `Se encontraron ${res.models.length} modelos compatibles con tu API Key.`,
+                });
+            } else {
+                toast({
+                    title: "Error al obtener modelos",
+                    description: res.message || "No se pudieron obtener los modelos.",
+                    variant: "destructive"
+                });
+            }
+        } catch (err: any) {
+            toast({
+                title: "Error inesperado",
+                description: err.message || "Error al conectar con la API de Google.",
+                variant: "destructive"
+            });
+        } finally {
+            setIsLoadingGeminiModels(false);
+        }
+    };
+
+    const [isClearingMemory, setIsClearingMemory] = useState(false);
+    const [newSynonymTerm, setNewSynonymTerm] = useState('');
+    const [newSynonymList, setNewSynonymList] = useState('');
+
+    const handleAddSynonym = () => {
+        if (!newSynonymTerm.trim() || !newSynonymList.trim() || !aiSettings) return;
+        let currentSynonyms: { term: string; synonyms: string[] }[] = [];
+        try {
+            currentSynonyms = JSON.parse(aiSettings.synonyms || '[]');
+        } catch {
+            currentSynonyms = [];
+        }
+
+        const synArray = newSynonymList.split(',').map(s => s.trim()).filter(Boolean);
+        const updated = [...currentSynonyms, { term: newSynonymTerm.trim(), synonyms: synArray }];
+        setAiSettings({ ...aiSettings, synonyms: JSON.stringify(updated) });
+        setNewSynonymTerm('');
+        setNewSynonymList('');
+        toast({ title: 'Sinónimo agregado', description: `Se añadió el mapeo para "${newSynonymTerm.trim()}". Guarda los cambios para aplicar.` });
+    };
+
+    const handleRemoveSynonym = (index: number) => {
+        if (!aiSettings) return;
+        try {
+            const currentSynonyms: { term: string; synonyms: string[] }[] = JSON.parse(aiSettings.synonyms || '[]');
+            currentSynonyms.splice(index, 1);
+            setAiSettings({ ...aiSettings, synonyms: JSON.stringify(currentSynonyms) });
+            toast({ title: 'Sinónimo eliminado', description: 'Mapeo removido. Guarda los cambios para aplicar.' });
+        } catch {}
+    };
+
+    const handleClearMemory = async () => {
+        if (!confirm('¿Estás seguro de que deseas borrar toda la memoria aprendida y contexto acumulado por la IA?')) return;
+        setIsClearingMemory(true);
+        try {
+            await clearAiMemoryAction();
+            if (aiSettings) {
+                setAiSettings({ ...aiSettings, aiMemory: '{}' });
+            }
+            toast({ title: 'Memoria Reiniciada', description: 'Se ha borrado el aprendizaje acumulado por la IA con éxito.' });
+        } catch (error: any) {
+            toast({ title: 'Error', description: 'No se pudo limpiar la memoria.', variant: 'destructive' });
+        } finally {
+            setIsClearingMemory(false);
+        }
+    };
 
     // States for Cron Visual Builder
     const [cronMode, setCronMode] = useState<'visual' | 'manual'>('visual');
@@ -443,7 +534,7 @@ export default function AutomationManagerPage() {
         setAiConnectionStatus(null);
     };
 
-    const handleAiSettingChange = (id: keyof AiSettings, value: string) => {
+    const handleAiSettingChange = <K extends keyof AiSettings>(id: K, value: AiSettings[K]) => {
         if (!aiSettings) return;
         setAiSettings({ ...aiSettings, [id]: value });
     };
@@ -478,7 +569,7 @@ export default function AutomationManagerPage() {
         if (!aiSettings) return;
         setIsSavingAi(true);
         try {
-            await saveAiSettings(aiSettings);
+            await saveAiSettingsAction(aiSettings);
             toast({
                 title: 'Configuración Guardada',
                 description: 'Los parámetros del Asistente de IA se han actualizado correctamente.',
@@ -528,13 +619,22 @@ export default function AutomationManagerPage() {
                 getAllScheduledTasks(),
                 getNotificationServiceSettings('telegram'),
                 getAllNotificationTemplates(),
-                getAiSettings()
+                getAiSettingsAction()
             ]);
             setRules(rulesData);
             setTasks(tasksData);
             setTemplates(templatesData);
             if (settings) setTelegramSettings(settings);
-            if (aiSettingsData) setAiSettings(aiSettingsData);
+            if (aiSettingsData) {
+                setAiSettings(aiSettingsData);
+                if (aiSettingsData.provider === 'gemini' && aiSettingsData.geminiApiKey) {
+                    fetchGeminiModels(aiSettingsData.geminiApiKey).then(res => {
+                        if (res.success && res.models) {
+                            setGeminiModelsList(res.models);
+                        }
+                    }).catch(() => {});
+                }
+            }
             
             // Sync telegram bot linkages and states
             await fetchTelegramBotData();
@@ -1673,25 +1773,79 @@ export default function AutomationManagerPage() {
                                                         <Key className="h-4 w-4 text-muted-foreground" />
                                                         Gemini API Key
                                                     </Label>
-                                                    <Input
-                                                        id="geminiApiKey"
-                                                        type="password"
-                                                        placeholder="AIzaSy..."
-                                                        value={aiSettings.geminiApiKey}
-                                                        onChange={(e) => handleAiSettingChange("geminiApiKey", e.target.value)}
-                                                    />
+                                                    <div className="flex gap-2">
+                                                        <Input
+                                                            id="geminiApiKey"
+                                                            type="password"
+                                                            placeholder="AIzaSy..."
+                                                            value={aiSettings.geminiApiKey}
+                                                            onChange={(e) => handleAiSettingChange("geminiApiKey", e.target.value)}
+                                                        />
+                                                        <Button
+                                                            type="button"
+                                                            variant="outline"
+                                                            size="sm"
+                                                            onClick={() => handleFetchGeminiModels()}
+                                                            disabled={isLoadingGeminiModels || !aiSettings.geminiApiKey}
+                                                            className="shrink-0 gap-1.5"
+                                                            title="Verificar API Key y cargar lista de modelos disponibles en tu cuenta"
+                                                        >
+                                                            {isLoadingGeminiModels ? (
+                                                                <Loader2 className="h-4 w-4 animate-spin" />
+                                                            ) : (
+                                                                <RefreshCw className="h-4 w-4" />
+                                                            )}
+                                                            <span className="hidden sm:inline">Validar / Cargar Modelos</span>
+                                                        </Button>
+                                                    </div>
+                                                    <p className="text-[11px] text-muted-foreground">
+                                                        Haz clic en &quot;Validar / Cargar Modelos&quot; para consultar en tiempo real las versiones activas de Gemini asociadas a tu clave.
+                                                    </p>
                                                 </div>
+
                                                 <div className="space-y-2">
                                                     <Label htmlFor="geminiModel" className="flex items-center gap-2 text-sm font-semibold">
                                                         <Bot className="h-4 w-4 text-muted-foreground" />
                                                         Modelo de Gemini
                                                     </Label>
-                                                    <Input
-                                                        id="geminiModel"
-                                                        placeholder="gemini-1.5-flash"
-                                                        value={aiSettings.geminiModel}
-                                                        onChange={(e) => handleAiSettingChange("geminiModel", e.target.value)}
-                                                    />
+                                                    {geminiModelsList.length > 0 ? (
+                                                        <div className="space-y-2">
+                                                            <Select
+                                                                value={aiSettings.geminiModel}
+                                                                onValueChange={(val) => handleAiSettingChange("geminiModel", val)}
+                                                            >
+                                                                <SelectTrigger id="geminiModelSelector">
+                                                                    <SelectValue placeholder="Selecciona un modelo..." />
+                                                                </SelectTrigger>
+                                                                <SelectContent className="max-h-60">
+                                                                    {geminiModelsList.map((m) => (
+                                                                        <SelectItem key={m.name} value={m.name}>
+                                                                            <div className="flex flex-col">
+                                                                                <span className="font-medium">{m.displayName}</span>
+                                                                                <span className="text-xs text-muted-foreground font-mono">{m.name}</span>
+                                                                            </div>
+                                                                        </SelectItem>
+                                                                    ))}
+                                                                </SelectContent>
+                                                            </Select>
+                                                            <div className="flex items-center gap-2 pt-1">
+                                                                <span className="text-xs text-muted-foreground">O escribe uno manualmente:</span>
+                                                                <Input
+                                                                    className="h-8 text-xs font-mono"
+                                                                    placeholder="gemini-1.5-flash"
+                                                                    value={aiSettings.geminiModel}
+                                                                    onChange={(e) => handleAiSettingChange("geminiModel", e.target.value)}
+                                                                />
+                                                            </div>
+                                                        </div>
+                                                    ) : (
+                                                        <Input
+                                                            id="geminiModel"
+                                                            placeholder="gemini-1.5-flash"
+                                                            value={aiSettings.geminiModel}
+                                                            onChange={(e) => handleAiSettingChange("geminiModel", e.target.value)}
+                                                        />
+                                                    )}
                                                 </div>
                                             </div>
                                         )}
@@ -1726,6 +1880,129 @@ export default function AutomationManagerPage() {
                                             </div>
                                         )}
                                     </CardContent>
+                                    <CardFooter className="flex justify-between border-t pt-4 bg-muted/20">
+                                        <Button 
+                                            type="button" 
+                                            variant="destructive" 
+                                            onClick={handleClearMemory} 
+                                            disabled={isClearingMemory}
+                                            className="h-9 gap-2"
+                                        >
+                                            {isClearingMemory ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
+                                            Limpiar Memoria IA
+                                        </Button>
+                                        <Button onClick={handleSaveAiSettings} disabled={isSavingAi} className="h-9">
+                                            {isSavingAi ? 'Guardando...' : 'Guardar Configuración'}
+                                        </Button>
+                                    </CardFooter>
+                                </Card>
+
+                                {/* Diccionario de Sinónimos del Negocio */}
+                                <Card className="shadow-sm">
+                                    <CardHeader>
+                                        <div className="flex items-center gap-3">
+                                            <Sparkles className="h-5 w-5 text-primary" />
+                                            <div>
+                                                <CardTitle className="text-md">Diccionario de Sinónimos del Negocio</CardTitle>
+                                                <CardDescription>
+                                                    Traducción automática de modismos y palabras coloquiales a términos oficiales del sistema.
+                                                </CardDescription>
+                                            </div>
+                                        </div>
+                                    </CardHeader>
+                                    <CardContent className="space-y-4 pt-2">
+                                        <div className="flex flex-col sm:flex-row gap-2">
+                                            <Input
+                                                placeholder="Término Sistema (ej. Combustible)"
+                                                value={newSynonymTerm}
+                                                onChange={(e) => setNewSynonymTerm(e.target.value)}
+                                                className="sm:w-1/3"
+                                            />
+                                            <Input
+                                                placeholder="Sinónimos (separados por coma: gas, diésel, gasolina)"
+                                                value={newSynonymList}
+                                                onChange={(e) => setNewSynonymList(e.target.value)}
+                                                className="sm:w-2/3"
+                                            />
+                                            <Button type="button" variant="secondary" onClick={handleAddSynonym} className="shrink-0 gap-1">
+                                                <PlusCircle className="h-4 w-4" /> Agregar
+                                            </Button>
+                                        </div>
+
+                                        <div className="border rounded-lg p-3 space-y-2 bg-muted/20 max-h-48 overflow-y-auto">
+                                            {(() => {
+                                                try {
+                                                    const list: { term: string; synonyms: string[] }[] = JSON.parse(aiSettings?.synonyms || '[]');
+                                                    if (list.length === 0) {
+                                                        return <p className="text-xs text-muted-foreground text-center py-2">No hay sinónimos registrados.</p>;
+                                                    }
+                                                    return list.map((item, idx) => (
+                                                        <div key={idx} className="flex items-center justify-between bg-background p-2 rounded border text-xs">
+                                                            <div>
+                                                                <span className="font-bold text-primary">{item.term}</span>:
+                                                                <span className="ml-2 text-muted-foreground">{(item.synonyms || []).join(', ')}</span>
+                                                            </div>
+                                                            <Button type="button" variant="ghost" size="sm" onClick={() => handleRemoveSynonym(idx)} className="h-6 w-6 p-0 text-red-500 hover:text-red-700">
+                                                                <Trash2 className="h-3.5 w-3.5" />
+                                                            </Button>
+                                                        </div>
+                                                    ));
+                                                } catch {
+                                                    return <p className="text-xs text-muted-foreground text-center py-2">Sin información.</p>;
+                                                }
+                                            })()}
+                                        </div>
+                                    </CardContent>
+                                    <CardFooter className="flex justify-end gap-3 border-t pt-4 bg-muted/20">
+                                        <Button onClick={handleSaveAiSettings} disabled={isSavingAi} className="h-9">
+                                            {isSavingAi ? 'Guardando...' : 'Guardar Configuración'}
+                                        </Button>
+                                    </CardFooter>
+                                </Card>
+
+                                {/* Opciones Avanzadas de Seguridad y Tono */}
+                                <Card className="shadow-sm">
+                                    <CardHeader>
+                                        <div className="flex items-center gap-3">
+                                            <Lock className="h-5 w-5 text-primary" />
+                                            <div>
+                                                <CardTitle className="text-md">Seguridad y Adaptación de Tono</CardTitle>
+                                                <CardDescription>Control de privacidad, prevención de inyección y nivel de lenguaje.</CardDescription>
+                                            </div>
+                                        </div>
+                                    </CardHeader>
+                                    <CardContent className="space-y-4 pt-2">
+                                        <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/10">
+                                            <div className="space-y-0.5">
+                                                <Label className="text-sm font-semibold">Adaptar lenguaje al usuario</Label>
+                                                <p className="text-xs text-muted-foreground">Si se activa, el bot responderá de forma simple a no técnicos y usará precisión técnica con expertos.</p>
+                                            </div>
+                                            <Switch
+                                                checked={aiSettings?.adaptTechnicalLevel !== 0}
+                                                onCheckedChange={(checked) => handleAiSettingChange("adaptTechnicalLevel", checked ? (1 as any) : (0 as any))}
+                                            />
+                                        </div>
+
+                                        <div className="flex items-center justify-between p-3 rounded-lg border bg-muted/10">
+                                            <div className="space-y-0.5">
+                                                <Label className="text-sm font-semibold">Protección Anti-Inyección y Resguardo de Prompt</Label>
+                                                <p className="text-xs text-muted-foreground">Impide que los usuarios fuercen a la IA a revelar sus instrucciones o cambiar sus reglas de negocio.</p>
+                                            </div>
+                                            <Switch
+                                                checked={aiSettings?.strictSafetyRules !== 0}
+                                                onCheckedChange={(checked) => handleAiSettingChange("strictSafetyRules", checked ? (1 as any) : (0 as any))}
+                                            />
+                                        </div>
+
+                                        <div className="p-3 rounded-lg border bg-blue-500/5 border-blue-500/20 text-xs text-muted-foreground space-y-1">
+                                            <p className="font-semibold text-primary flex items-center gap-1.5">
+                                                <ShieldCheck className="h-4 w-4" /> Vinculación con Roles Granulares (/dashboard/admin/roles)
+                                            </p>
+                                            <p>
+                                                La IA evalúa los permisos asignados al rol del usuario vinculado en Telegram antes de responder. Si un chofer no cuenta con permisos para consultar analítica (`ai:analytics:query`) o finanzas (`ai:financial:query`), la IA filtrará o denegará respetuosamente la solicitud.
+                                            </p>
+                                        </div>
+                                    </CardContent>
                                     <CardFooter className="flex justify-end gap-3 border-t pt-4 bg-muted/20">
                                         <Button onClick={handleSaveAiSettings} disabled={isSavingAi} className="h-9">
                                             {isSavingAi ? 'Guardando...' : 'Guardar Configuración'}
@@ -1738,15 +2015,15 @@ export default function AutomationManagerPage() {
                                         <div className="flex items-center gap-3">
                                             <HelpCircle className="h-5 w-5 text-primary" />
                                             <div>
-                                                <CardTitle className="text-md">Prompt de Sistema</CardTitle>
-                                                <CardDescription>Modifica las directivas de comportamiento y formato para el asistente conversacional.</CardDescription>
+                                                <CardTitle className="text-md">Prompt del Asistente Bot (Choferes / Operaciones)</CardTitle>
+                                                <CardDescription>Directivas de personalidad para el bot de Telegram y guía de comandos operativos.</CardDescription>
                                             </div>
                                         </div>
                                     </CardHeader>
                                     <CardContent className="pt-2">
                                         <Textarea
                                             id="systemPrompt"
-                                            rows={6}
+                                            rows={5}
                                             className="font-mono text-sm leading-relaxed"
                                             placeholder="Escribe las directivas de personalidad de la IA aquí..."
                                             value={aiSettings?.systemPrompt || ''}
@@ -1759,8 +2036,201 @@ export default function AutomationManagerPage() {
                                         </Button>
                                     </CardFooter>
                                 </Card>
-                            </div>
 
+                                {/* Tarjeta Exclusiva: IA Auditora de Logs y Soporte de TI */}
+                                <Card className="shadow-md border-purple-500/30 bg-purple-500/[0.02]">
+                                    <CardHeader className="bg-purple-500/10 pb-4 border-b border-purple-500/20">
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex items-center gap-3">
+                                                <ShieldAlert className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+                                                <div>
+                                                    <CardTitle className="text-lg text-purple-700 dark:text-purple-300 flex items-center gap-2">
+                                                        IA Auditora de Logs & Soporte TI
+                                                        <Badge variant="outline" className="text-[10px] font-bold border-purple-500/30 text-purple-600 dark:text-purple-300">
+                                                            Exclusivo TI (ai:audit:logs)
+                                                        </Badge>
+                                                    </CardTitle>
+                                                    <CardDescription>
+                                                        Configura el auditor forense que analiza bitácoras de errores, trazas y fallas de sincronización.
+                                                    </CardDescription>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </CardHeader>
+                                    <CardContent className="space-y-6 pt-6">
+                                        {/* Selector de Tablas SQLite Autorizadas */}
+                                        <div className="space-y-3">
+                                            <div className="flex items-center justify-between">
+                                                <div>
+                                                    <Label className="text-sm font-bold flex items-center gap-2">
+                                                        <Server className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                                                        Tablas de SQLite con Acceso Autorizado para Análisis
+                                                    </Label>
+                                                    <p className="text-xs text-muted-foreground">
+                                                        Selecciona cuáles tablas de la base de datos puede consultar la IA para diagnosticar problemas.
+                                                    </p>
+                                                </div>
+                                                <div className="flex gap-2">
+                                                    <Button
+                                                        type="button"
+                                                        variant="outline"
+                                                        size="sm"
+                                                        className="text-[11px] h-7"
+                                                        onClick={() => {
+                                                            const rec = ["core_logs", "ops_driver_logs", "fleet_telegram_bot_logs", "ops_delivery_queue", "it_assets", "it_asset_telemetry"];
+                                                            handleAiSettingChange("auditorAllowedTables", JSON.stringify(rec));
+                                                        }}
+                                                    >
+                                                        🌟 Recomendadas
+                                                    </Button>
+                                                </div>
+                                            </div>
+
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-72 overflow-y-auto p-3 rounded-lg border bg-background/50">
+                                                {[
+                                                    { name: "core_logs", cat: "Core / Sistema", desc: "Bitácora general de errores, advertencias y excepciones del servidor (INFO, WARN, ERROR)." },
+                                                    { name: "ops_driver_logs", cat: "Entregas / APK", desc: "Registros de telemetría de choferes en APK (carga de facturas, sockets, WireGuard, pausas y ruta)." },
+                                                    { name: "fleet_registered_devices", cat: "IT Tools / Mobile", desc: "Flota de celulares Android (/dashboard/it-tools/mobile): hardware ID, chofer, app versión, batería, señal, IP, bloqueos y fallos OTA." },
+                                                    { name: "ops_app_version_settings", cat: "IT Tools / Mobile", desc: "Versión objetivo del APK móvil (/dashboard/it-tools/mobile), changelog y pausa global de actualizaciones OTA." },
+                                                    { name: "it_assets", cat: "IT Tools / ITAM", desc: "Inventario de computadoras, servidores, seriales y salud de hardware." },
+                                                    { name: "it_asset_assignments", cat: "IT Tools / ITAM", desc: "Historial de custodias y asignaciones de equipos a colaboradores." },
+                                                    { name: "it_licenses_catalog", cat: "IT Tools / ITAM", desc: "Catálogo de software, suites ofimáticas y licencias disponibles." },
+                                                    { name: "it_asset_licenses", cat: "IT Tools / ITAM", desc: "Licencias asignadas a computadoras y fechas de vencimiento." },
+                                                    { name: "it_notes", cat: "IT Tools / ITAM", desc: "Base de conocimiento, procedimientos de soporte y credenciales de red." },
+                                                    { name: "it_branches", cat: "IT Tools / ITAM", desc: "Sedes, sucursales y ubicaciones físicas de la empresa." },
+                                                    { name: "it_asset_telemetry", cat: "IT Tools / Agente", desc: "Telemetría de Windows (RAM, CPU, discos, IPs y estado en línea)." },
+                                                    { name: "ops_delivery_queue", cat: "Entregas / Cola", desc: "Cola de facturas despachadas (estados, firmas táctiles, fotos de evidencia, GPS y rechazos)." },
+                                                    { name: "ops_delivery_assignments", cat: "Entregas / Asignaciones", desc: "Rutas activas del día abiertas a choferes con vehículos vinculados." },
+                                                    { name: "fleet_telegram_bot_logs", cat: "Flota / Bot", desc: "Trazas técnicas, mensajes entrantes y excepciones del Bot de Telegram." },
+                                                    { name: "fleet_vehicles", cat: "Flota / Vehículos", desc: "Vehículos, placas, marcas, odómetros y estado de mantenimiento." },
+                                                    { name: "fleet_fuel_logs", cat: "Flota / Combustible", desc: "Repostajes de combustible, sincronizaciones con RECOPE y anomalías de consumo." },
+                                                    { name: "core_users", cat: "Core / Usuarios", desc: "Usuarios del sistema, roles asignados y estados de cuenta." },
+                                                    { name: "core_erp_invoice_headers", cat: "ERP / Facturas", desc: "Cabeceras de facturas sincronizadas (rutas asignadas, clientes y montos)." },
+                                                ].map((tbl) => {
+                                                    let isChecked = false;
+                                                    try {
+                                                        const current = JSON.parse(aiSettings?.auditorAllowedTables || '[]');
+                                                        isChecked = current.includes(tbl.name);
+                                                    } catch {
+                                                        isChecked = false;
+                                                    }
+
+                                                    return (
+                                                        <div
+                                                            key={tbl.name}
+                                                            onClick={() => {
+                                                                let current: string[] = [];
+                                                                try {
+                                                                    current = JSON.parse(aiSettings?.auditorAllowedTables || '[]');
+                                                                } catch {
+                                                                    current = [];
+                                                                }
+                                                                const updated = isChecked
+                                                                    ? current.filter((c: string) => c !== tbl.name)
+                                                                    : [...current, tbl.name];
+                                                                handleAiSettingChange("auditorAllowedTables", JSON.stringify(updated));
+                                                            }}
+                                                            className={`p-2.5 rounded-lg border cursor-pointer transition-all flex flex-col justify-between space-y-1.5 ${isChecked ? 'bg-purple-500/10 border-purple-500/40 text-purple-950 dark:text-purple-100' : 'bg-muted/20 border-border hover:bg-muted/40 opacity-75'}`}
+                                                        >
+                                                            <div className="flex items-center justify-between">
+                                                                <div className="flex items-center gap-2">
+                                                                    <input
+                                                                        type="checkbox"
+                                                                        checked={isChecked}
+                                                                        onChange={() => {}} // Manejado por el onClick del contenedor
+                                                                        className="h-4 w-4 rounded border-purple-400 text-purple-600 focus:ring-purple-500 pointer-events-none"
+                                                                    />
+                                                                    <span className="font-mono text-xs font-bold">{tbl.name}</span>
+                                                                </div>
+                                                                <Badge variant="outline" className="text-[9px] font-semibold py-0 px-1.5">
+                                                                    {tbl.cat}
+                                                                </Badge>
+                                                            </div>
+                                                            <p className="text-[11px] text-muted-foreground leading-snug pl-6">
+                                                                {tbl.desc}
+                                                            </p>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+
+                                        {/* Fila de Parámetros Operativos: Timeout y Límite de Filas */}
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-muted/20 p-4 rounded-xl border border-border/60">
+                                            <div className="space-y-1.5">
+                                                <Label htmlFor="auditorTimeoutSeconds" className="text-xs font-bold flex items-center gap-1.5">
+                                                    <Clock className="h-3.5 w-3.5 text-purple-600 dark:text-purple-400" />
+                                                    Tiempo de Espera de la IA (Timeout en Segundos)
+                                                </Label>
+                                                <p className="text-[11px] text-muted-foreground">
+                                                    Tiempo máximo que esperará la respuesta del modelo antes de abortar (ej: 45s para análisis forense).
+                                                </p>
+                                                <div className="flex items-center gap-2 pt-1">
+                                                    <Input
+                                                        id="auditorTimeoutSeconds"
+                                                        type="number"
+                                                        min={10}
+                                                        max={180}
+                                                        className="h-9 w-32 font-mono text-xs bg-background"
+                                                        value={aiSettings?.auditorTimeoutSeconds ?? 45}
+                                                        onChange={(e) => handleAiSettingChange("auditorTimeoutSeconds", parseInt(e.target.value) || 45)}
+                                                    />
+                                                    <span className="text-xs font-semibold text-muted-foreground">segundos</span>
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-1.5">
+                                                <Label htmlFor="auditorMaxRowsPerQuery" className="text-xs font-bold flex items-center gap-1.5">
+                                                    <Database className="h-3.5 w-3.5 text-purple-600 dark:text-purple-400" />
+                                                    Límite de Muestreo de Filas por Tabla
+                                                </Label>
+                                                <p className="text-[11px] text-muted-foreground">
+                                                    Cantidad máxima de registros recientes por tabla que se inyectan en el contexto.
+                                                </p>
+                                                <div className="flex items-center gap-2 pt-1">
+                                                    <Input
+                                                        id="auditorMaxRowsPerQuery"
+                                                        type="number"
+                                                        min={10}
+                                                        max={300}
+                                                        className="h-9 w-32 font-mono text-xs bg-background"
+                                                        value={aiSettings?.auditorMaxRowsPerQuery ?? 100}
+                                                        onChange={(e) => handleAiSettingChange("auditorMaxRowsPerQuery", parseInt(e.target.value) || 100)}
+                                                    />
+                                                    <span className="text-xs font-semibold text-muted-foreground">filas</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* Editor de Master Prompt en Caliente */}
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <Label htmlFor="auditorMasterPrompt" className="text-sm font-bold flex items-center gap-2">
+                                                    <Bot className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                                                    Master Prompt del Auditor de TI (Personalidad & Reglas Forenses)
+                                                </Label>
+                                                <span className="text-[10px] text-muted-foreground font-mono">Modificable en caliente sin tocar código</span>
+                                            </div>
+                                            <Textarea
+                                                id="auditorMasterPrompt"
+                                                rows={6}
+                                                className="font-mono text-xs leading-relaxed bg-background"
+                                                placeholder="Directivas maestras para el auditor de TI..."
+                                                value={aiSettings?.auditorMasterPrompt || ''}
+                                                onChange={(e) => handleAiSettingChange("auditorMasterPrompt", e.target.value)}
+                                            />
+                                        </div>
+                                    </CardContent>
+                                    <CardFooter className="flex justify-between items-center border-t border-purple-500/20 pt-4 bg-purple-500/5">
+                                        <span className="text-xs text-muted-foreground">
+                                            💡 Cualquier cambio se aplica inmediatamente a la consola en <code>/dashboard/it-tools/ai-auditor</code>.
+                                        </span>
+                                        <Button onClick={handleSaveAiSettings} disabled={isSavingAi} className="h-9 bg-purple-600 hover:bg-purple-700 text-white">
+                                            {isSavingAi ? 'Guardando...' : 'Guardar Configuración de TI'}
+                                        </Button>
+                                    </CardFooter>
+                                </Card>
+                            </div>
                             <div className="space-y-6">
                                 <Card className="shadow-sm border-secondary/50">
                                     <CardHeader className="pb-3 border-b bg-secondary/5">

@@ -35,7 +35,8 @@ export default async function FleetSettingsPage() {
         { id: 'brand', name: 'Marcas de Vehículo', permission: 'fleet:settings:brands' },
         { id: 'fuel_type', name: 'Tipos de Combustible', permission: 'fleet:settings:fuel' },
         { id: 'permit_type', name: 'Tipos de Permisos Especiales', permission: 'fleet:settings:permits' },
-        { id: 'maintenance_type', name: 'Tipos de Mantenimiento', permission: 'fleet:settings:maintenance' }
+        { id: 'maintenance_type', name: 'Tipos de Mantenimiento', permission: 'fleet:settings:maintenance' },
+        { id: 'breakdown_type', name: 'Tipos de Averías de Vehículo', permission: 'fleet:settings:breakdowns' }
     ];
 
     // Check permissions for each category

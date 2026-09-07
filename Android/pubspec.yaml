@@ -1,0 +1,37 @@
+name: clic_driver
+description: App Nativa 100% Flutter para choferes y entregas de Clic-Tools (Sincronización Offline, Impresión ESC/POS Bluetooth, Cámara y Firma Digital).
+publish_to: 'none'
+version: 1.2.37+56
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  http: ^1.2.2
+  sqflite: ^2.3.3+1
+  path: ^1.9.0
+  image: ^4.2.0
+  image_picker: ^1.1.2
+  print_bluetooth_thermal: ^1.1.4
+  esc_pos_utils_plus: ^2.0.4
+  permission_handler: ^13.0.1
+  shared_preferences: ^2.3.2
+  package_info_plus: ^10.2.1
+  signature: ^6.4.0
+  url_launcher: ^6.3.0
+  local_auth: ^3.0.2
+  flutter_secure_storage: ^11.0.0
+  device_info_plus: ^13.2.0
+  geolocator: ^14.0.3
+  flutter_background_service: ^5.0.10
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

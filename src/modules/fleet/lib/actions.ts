@@ -214,15 +214,16 @@ export async function saveFuelLogAction(formData: FormData, userName: string) {
         try {
             const vehicle = await getVehicleById(vehicleId);
             if (vehicle) {
-                const mileageSinceLast = mileageBefore - (vehicle.lastOilChangeMileage || 0);
-                const progress = (mileageSinceLast / vehicle.oilChangeInterval) * 100;
+                const mileageSinceLast = Math.max(0, mileageBefore - (vehicle.lastOilChangeMileage || 0));
+                const interval = (vehicle.oilChangeInterval && vehicle.oilChangeInterval > 0) ? vehicle.oilChangeInterval : 5000;
+                const progress = (mileageSinceLast / interval) * 100;
                 
                 if (progress >= 90) {
                     await triggerNotificationEvent('onFleetMaintenanceDue', {
                         ...vehicle,
                         currentMileage: mileageBefore,
                         progress: progress.toFixed(0),
-                        remaining: Math.max(0, vehicle.oilChangeInterval - mileageSinceLast),
+                        remaining: Math.max(0, interval - mileageSinceLast),
                         odometerUnit: vehicle.odometerUnit || 'km'
                     });
                 }

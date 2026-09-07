@@ -25,7 +25,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useRouter } from "next/navigation";
-import { Loader2, Network, UserPlus, AlertTriangle } from "lucide-react";
+import { Loader2, Network, UserPlus, AlertTriangle, Smartphone } from "lucide-react";
 import React, { useState, useEffect } from "react";
 import type { User } from "@/modules/core/types";
 import { useToast } from "@/modules/core/hooks/use-toast";
@@ -38,6 +38,7 @@ import { logInfo, logWarn, logError } from "@/modules/core/lib/logger";
 import { useAuth } from "@/modules/core/hooks/useAuth";
 import { SetupWizard } from "./setup-wizard";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { isTestEnvironment } from "@/lib/utils";
 
 interface AuthFormProps {
     initialHasUsers: boolean;
@@ -218,19 +219,45 @@ export function AuthForm({ initialHasUsers, initialCompanyName, initialSystemVer
     }
   };
 
+  const isTest = isTestEnvironment(initialCompanyName);
+
   return (
     <>
       <CardHeader className="text-center">
-        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary text-primary-foreground">{getHeaderIcon()}</div>
-        <CardTitle className="text-3xl font-bold">{getHeaderTitle()}</CardTitle>
-        <CardDescription>{getHeaderDescription()}</CardDescription>
+        <div className={`mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full ${
+          isTest ? 'bg-rose-700 text-white shadow-md shadow-rose-900/30' : 'bg-primary text-primary-foreground'
+        }`}>
+          {getHeaderIcon()}
+        </div>
+        <CardTitle className={`text-3xl font-extrabold ${
+          isTest ? 'text-rose-700 dark:text-rose-400' : ''
+        }`}>
+          {getHeaderTitle()}
+        </CardTitle>
+        {isTest && (
+          <div className="pt-1">
+            <span className="inline-flex items-center gap-1 text-[11px] font-black tracking-wider uppercase text-rose-700 dark:text-rose-300 bg-rose-500/15 border border-rose-500/30 px-3 py-1 rounded-full shadow-sm">
+              🧪 AMBIENTE DE PRUEBAS
+            </span>
+          </div>
+        )}
+        <CardDescription className="pt-1">{getHeaderDescription()}</CardDescription>
       </CardHeader>
       <CardContent>{renderContent()}</CardContent>
-      {initialSystemVersion && (
-        <div className="p-6 pt-0 text-center text-xs text-muted-foreground">
-            Versión {initialSystemVersion}
-        </div>
-      )}
+      <div className="p-6 pt-0 flex flex-col items-center justify-center gap-1.5 text-xs text-muted-foreground">
+        {initialSystemVersion && (
+          <span>Versión {initialSystemVersion}</span>
+        )}
+        <a
+          href="/downloads/apk/ClicDriver.apk"
+          download="ClicDriver.apk"
+          title="Descargar ClicDriver APK para Android"
+          className="inline-flex items-center gap-1.5 text-[11px] font-medium text-slate-500 hover:text-emerald-600 dark:text-zinc-400 dark:hover:text-emerald-400 transition-colors py-1 px-2.5 rounded-full hover:bg-emerald-500/10 border border-transparent hover:border-emerald-500/20 mt-1"
+        >
+          <Smartphone className="w-3.5 h-3.5 text-emerald-500" />
+          <span>Descargar App Android (APK)</span>
+        </a>
+      </div>
     </>
   );
 }

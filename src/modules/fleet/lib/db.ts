@@ -35,6 +35,17 @@ function archiveDeletedRecordSync(db: any, params: {
 export async function getFleetSettings() {
     const db = await getDb();
     try {
+        const count = db.prepare(`SELECT COUNT(*) as count FROM ${FLEET_TABLES.settings} WHERE category = 'breakdown_type'`).get() as { count: number };
+        if (!count || count.count === 0) {
+            const defaultBreakdowns = [
+                'Mecánica', 'Eléctrica', 'Llantas / Neumáticos', 'Frenos',
+                'Transmisión', 'Motor', 'Fuga de Aceite', 'Accidente / Colisión', 'Climatización / AC', 'Otro'
+            ];
+            const insertStmt = db.prepare(`INSERT OR IGNORE INTO ${FLEET_TABLES.settings} (category, value) VALUES ('breakdown_type', ?)`);
+            for (const b of defaultBreakdowns) {
+                insertStmt.run(b);
+            }
+        }
         const rows = db.prepare(`SELECT * FROM ${FLEET_TABLES.settings} ORDER BY category, value`).all() as any[];
         return JSON.parse(JSON.stringify(rows));
     } catch (error) {
@@ -48,6 +59,7 @@ const CATEGORY_PERMISSIONS: Record<string, any> = {
     'fuel_type': 'fleet:settings:fuel',
     'permit_type': 'fleet:settings:permits',
     'maintenance_type': 'fleet:settings:maintenance',
+    'breakdown_type': 'fleet:settings:breakdowns',
     'notification_email': 'fleet:settings:notifications',
     'driver': 'fleet:settings:drivers'
 };
@@ -363,6 +375,14 @@ export async function updateVehicleMileageAndCheckAlerts(
     }
 }
 
+// --- Helpers & Metrics ---
+
+export function checkIsOilChange(type?: string | null, description?: string | null): boolean {
+    const t = String(type || '').toLowerCase();
+    const d = String(description || '').toLowerCase();
+    return t.includes('aceite') || t.includes('oil') || d.includes('aceite') || d.includes('oil') || t.includes('lubricant') || d.includes('lubricant');
+}
+
 // --- Logs (Fuel & Maintenance) ---
 
 export async function saveFuelLog(log: any) {
@@ -375,13 +395,11 @@ export async function saveFuelLog(log: any) {
                 VALUES (@vehicleId, @date, @mileageBefore, @liters, @cost, @driverId, @fuelTypeId, @notes, @createdBy)
             `).run(data);
 
-            // Update current mileage using central function inside the transaction
-            // Note: Since central function runs inline SQL, we execute it directly
             const vehicle = db.prepare(`SELECT * FROM ${FLEET_TABLES.vehicles} WHERE id = ?`).get(data.vehicleId) as any;
             if (vehicle) {
                 db.prepare(`
                     UPDATE ${FLEET_TABLES.vehicles} 
-                    SET currentMileage = MAX(currentMileage, ?) 
+                    SET currentMileage = MAX(COALESCE(currentMileage, 0), ?) 
                     WHERE id = ?
                 `).run(data.mileageBefore, data.vehicleId);
             }
@@ -423,7 +441,7 @@ export async function saveMaintenanceLog(log: any) {
             }
 
             // Determine if it is oil change or other for maintenance type if applicable
-            const isOilChange = String(data.type).toLowerCase().includes('aceite');
+            const isOilChange = checkIsOilChange(data.type, data.description);
             const maintenanceType = isOilChange ? 'preventive' : 'corrective';
 
             // 3. Insert completed ticket into repair_tickets
@@ -460,13 +478,13 @@ export async function saveMaintenanceLog(log: any) {
             if (isOilChange) {
                 db.prepare(`
                     UPDATE ${FLEET_TABLES.vehicles} 
-                    SET lastOilChangeMileage = ?, currentMileage = MAX(currentMileage, ?), lastOilChangeAlertThreshold = 0
+                    SET lastOilChangeMileage = ?, currentMileage = MAX(COALESCE(currentMileage, 0), ?), lastOilChangeAlertThreshold = 0
                     WHERE id = ?
                 `).run(data.mileage, data.mileage, data.vehicleId);
             } else {
                 db.prepare(`
                     UPDATE ${FLEET_TABLES.vehicles} 
-                    SET currentMileage = MAX(currentMileage, ?)
+                    SET currentMileage = MAX(COALESCE(currentMileage, 0), ?)
                     WHERE id = ?
                 `).run(data.mileage, data.vehicleId);
             }
@@ -486,6 +504,31 @@ export async function saveMaintenanceLog(log: any) {
     } catch (error) {
         console.error("Error saving maintenance log", error);
         throw error;
+    }
+}
+
+export async function recalculateFleetMetrics() {
+    const db = await getDb();
+    const vehicles = db.prepare(`SELECT id, currentMileage, lastOilChangeMileage FROM ${FLEET_TABLES.vehicles}`).all() as any[];
+
+    const updateStmt = db.prepare(`
+        UPDATE ${FLEET_TABLES.vehicles}
+        SET currentMileage = ?, lastOilChangeMileage = ?
+        WHERE id = ?
+    `);
+
+    for (const vehicle of vehicles) {
+        const maxFuel = db.prepare(`SELECT MAX(mileageBefore) as maxM FROM ${FLEET_TABLES.fuelLogs} WHERE vehicleId = ?`).get(vehicle.id) as { maxM: number | null } | undefined;
+        const maxMaint = db.prepare(`SELECT MAX(mileage) as maxM FROM ${FLEET_TABLES.maintenanceLogs} WHERE vehicleId = ?`).get(vehicle.id) as { maxM: number | null } | undefined;
+
+        const maxM = Math.max(maxFuel?.maxM || 0, maxMaint?.maxM || 0, vehicle.currentMileage || 0);
+
+        const allMaints = db.prepare(`SELECT mileage, type, description FROM ${FLEET_TABLES.maintenanceLogs} WHERE vehicleId = ? ORDER BY date DESC`).all(vehicle.id) as any[];
+        
+        const lastOilLog = allMaints.find(m => checkIsOilChange(m.type, m.description));
+        const lastOilM = lastOilLog ? lastOilLog.mileage : (vehicle.lastOilChangeMileage || 0);
+
+        updateStmt.run(maxM, lastOilM, vehicle.id);
     }
 }
 
@@ -783,7 +826,30 @@ export async function getDeletedVehicles() {
             WHERE logType = 'vehicle' 
             ORDER BY deletedAt DESC
         `).all() as any[];
-        return JSON.parse(JSON.stringify(rows));
+        
+        const cleanRows = rows.map(r => {
+            let parsedPayload = null;
+            if (r.payload) {
+                try {
+                    parsedPayload = typeof r.payload === 'string' ? JSON.parse(r.payload) : r.payload;
+                } catch {
+                    parsedPayload = null;
+                }
+            }
+            return {
+                id: Number(r.id),
+                originalId: r.originalId ? Number(r.originalId) : null,
+                vehicleId: r.vehicleId ? Number(r.vehicleId) : null,
+                logType: String(r.logType || ''),
+                date: String(r.date || ''),
+                amount: r.amount ? Number(r.amount) : null,
+                deletedBy: String(r.deletedBy || ''),
+                deletedAt: String(r.deletedAt || ''),
+                payload: parsedPayload
+            };
+        });
+
+        return JSON.parse(JSON.stringify(cleanRows));
     } catch (error) {
         console.error("Error getting deleted vehicles", error);
         return [];

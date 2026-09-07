@@ -59,6 +59,23 @@ export async function saveNotificationServiceSettings(service: string, config: a
     revalidatePath('/dashboard/admin/automations');
 }
 
+export async function clearAiMemoryAction() {
+    const { clearAiMemory } = await import('@/modules/core/lib/db');
+    await clearAiMemory();
+    revalidatePath('/dashboard/admin/automations');
+}
+
+export async function getAiSettingsAction() {
+    const { getAiSettings } = await import('@/modules/core/lib/db');
+    return getAiSettings();
+}
+
+export async function saveAiSettingsAction(settings: any) {
+    const { saveAiSettings } = await import('@/modules/core/lib/db');
+    await saveAiSettings(settings);
+    revalidatePath('/dashboard/admin/automations');
+}
+
 export async function testTelegram(chatId: string) {
     try {
         await sendTelegramMessage("🤖 *Prueba de Sistema*\n\nConexión establecida correctamente con Clic-Tools.", chatId);

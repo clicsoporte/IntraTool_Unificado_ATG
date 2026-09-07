@@ -368,11 +368,16 @@ export async function cleanupExportFile(fileName: string): Promise<void> {
         throw new Error("Filename is required");
     }
     const exportDir = path.join(process.cwd(), 'temp_files', 'exports');
-    const filePath = path.join(exportDir, fileName);
+    const safeFilename = path.basename(fileName);
+    const resolvedPath = path.resolve(exportDir, safeFilename);
 
-    if (fs.existsSync(filePath)) {
+    if (!resolvedPath.startsWith(path.resolve(exportDir))) {
+        throw new Error("Ruta de archivo no autorizada.");
+    }
+
+    if (fs.existsSync(resolvedPath)) {
         try {
-            fs.unlinkSync(filePath);
+            fs.unlinkSync(resolvedPath);
         } catch (error: any) {
             logError("Failed to delete temporary export file", { error: error.message, file: fileName });
             throw new Error("Error del servidor al limpiar el archivo temporal.");

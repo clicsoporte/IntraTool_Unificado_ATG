@@ -26,7 +26,7 @@ import { format, parseISO, differenceInCalendarDays } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { useAuth } from '@/modules/core/hooks/useAuth';
 import { useDebounce } from 'use-debounce';
-import { getDaysRemaining as getSimpleDaysRemaining } from '@/modules/core/lib/time-utils';
+import { getDaysRemaining as getSimpleDaysRemaining, getLocalDateStr } from '@/modules/core/lib/time-utils';
 import { generateDocument } from '@/modules/core/lib/pdf-generator';
 import type { RowInput } from 'jspdf-autotable';
 import { addNoteToOrder as addNoteServer } from '@/modules/planner/lib/actions';
@@ -358,7 +358,7 @@ export const usePlanner = () => {
                 toast({ title: "Orden Creada" });
                 updateState({
                     isNewOrderDialogOpen: false,
-                    newOrder: { ...emptyOrder, deliveryDate: new Date().toISOString().split('T')[0] },
+                    newOrder: { ...emptyOrder, deliveryDate: getLocalDateStr() },
                     customerSearchTerm: '',
                     productSearchTerm: '',
                     activeOrdersForSelectedProduct: [],

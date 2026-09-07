@@ -926,36 +926,6 @@ export async function sendTicketEmailNotification(ticketId: number, eventId: 'on
 
         const { triggerNotificationEvent } = await import('@/modules/notifications/lib/notifications-engine');
         await triggerNotificationEvent(eventId, payload);
-
-        const template = db.prepare('SELECT subject, body FROM notification_templates WHERE eventId = ?').get(eventId) as { subject: string, body: string } | undefined;
-        if (template) {
-            const applyTemplateStr = (tmpl: string) => {
-                let processed = tmpl.replace(/\{\{#if (\w+)\}\}([\s\S]*?)\{\{\/if\}\}/g, (match, field, content) => {
-                    return !!(payload as any)[field] ? content : '';
-                });
-                return processed.replace(/\{\{(\w+)\}\}/g, (match, key) => {
-                    const val = (payload as any)[key];
-                    return (val !== undefined && val !== null) ? String(val) : match;
-                });
-            };
-
-            const finalSubject = applyTemplateStr(template.subject);
-            const finalBody = applyTemplateStr(template.body);
-
-            const recs = new Set<string>();
-            if (creatorEmail) recs.add(creatorEmail);
-            if (requesterEmail) recs.add(requesterEmail);
-            
-            if (recs.size > 0) {
-                const { sendEmail } = await import('@/modules/core/lib/email-service');
-                await sendEmail({
-                    to: Array.from(recs),
-                    subject: finalSubject,
-                    html: finalBody
-                });
-                await logInfo(`Sent ticket email notification directly to users`, { ticketId, eventId, recipients: Array.from(recs) });
-            }
-        }
     } catch (error: any) {
         await logError('sendTicketEmailNotification failed', { ticketId, eventId, error: error.message });
     }
@@ -1439,6 +1409,221 @@ export async function getTicketConsumables(ticketId: number) {
     } catch (error: any) {
         logError('getTicketConsumables failed', { ticketId, error: error.message });
         return [];
+    }
+}
+
+/**
+ * Acciones para Marcas Maestras de Repuestos (inv_part_brands)
+ */
+export async function getPartBrandsAction() {
+    await authorizeSession();
+    try {
+        const db = await getDb();
+        const rows = db.prepare(`SELECT * FROM inv_part_brands ORDER BY name ASC`).all();
+        return JSON.parse(JSON.stringify(rows)) as { id: number; name: string; description: string | null; created_at: string }[];
+    } catch (error: any) {
+        logError('getPartBrandsAction failed', { error: error.message });
+        return [];
+    }
+}
+
+export async function addPartBrandAction(name: string, description?: string) {
+    await authorizeSession();
+    try {
+        const db = await getDb();
+        const cleanName = String(name || '').trim();
+        if (!cleanName) return { success: false, error: 'El nombre de la marca es requerido.' };
+        
+        const now = new Date().toISOString();
+        db.prepare(`INSERT INTO inv_part_brands (name, description, created_at) VALUES (?, ?, ?)`).run(cleanName, description || null, now);
+        
+        revalidatePath('/dashboard/admin/inventory');
+        revalidatePath('/dashboard/inventory');
+        return { success: true };
+    } catch (error: any) {
+        logError('addPartBrandAction failed', { name, error: error.message });
+        return { success: false, error: error.message.includes('UNIQUE') ? 'La marca ya existe en el catálogo.' : error.message };
+    }
+}
+
+export async function deletePartBrandAction(id: number) {
+    await authorizeSession();
+    try {
+        const db = await getDb();
+        db.prepare(`DELETE FROM inv_part_brands WHERE id = ?`).run(id);
+        
+        revalidatePath('/dashboard/admin/inventory');
+        revalidatePath('/dashboard/inventory');
+        return { success: true };
+    } catch (error: any) {
+        logError('deletePartBrandAction failed', { id, error: error.message });
+        return { success: false, error: error.message };
+    }
+}
+
+/**
+ * Acciones para la Matriz de Compatibilidad de Repuestos (inv_item_compatibilities)
+ */
+export async function getItemCompatibilitiesAction(itemId: string) {
+    await authorizeSession();
+    try {
+        const db = await getDb();
+        const rows = db.prepare(`
+            SELECT c.*, v.name as vehicle_name
+            FROM inv_item_compatibilities c
+            LEFT JOIN fleet_vehicles v ON UPPER(c.vehicle_plate) = UPPER(v.plate)
+            WHERE c.item_id = ?
+            ORDER BY c.created_at DESC
+        `).all(itemId);
+        return JSON.parse(JSON.stringify(rows)) as any[];
+    } catch (error: any) {
+        logError('getItemCompatibilitiesAction failed', { itemId, error: error.message });
+        return [];
+    }
+}
+
+export async function addCompatibilityAction(payload: {
+    itemId: string;
+    vehicleBrand?: string;
+    vehicleModel?: string;
+    vehiclePlate?: string;
+    notes?: string;
+}) {
+    const userSession = await authorizeSession();
+    try {
+        const db = await getDb();
+        const { itemId, vehicleBrand, vehicleModel, vehiclePlate, notes } = payload;
+        
+        if (!itemId) return { success: false, error: 'El ID del repuesto es requerido.' };
+        if (!vehicleBrand && !vehicleModel && !vehiclePlate) {
+            return { success: false, error: 'Debe especificar al menos una Marca, Modelo o Placa de vehículo.' };
+        }
+
+        const now = new Date().toISOString();
+        const userName = userSession ? (userSession.name || userSession.email) : 'Sistema';
+
+        db.prepare(`
+            INSERT INTO inv_item_compatibilities (item_id, vehicle_brand, vehicle_model, vehicle_plate, notes, created_at, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            itemId,
+            vehicleBrand?.trim() || null,
+            vehicleModel?.trim() || null,
+            vehiclePlate?.trim()?.toUpperCase() || null,
+            notes?.trim() || null,
+            now,
+            userName
+        );
+
+        revalidatePath('/dashboard/inventory');
+        revalidatePath('/dashboard/tickets');
+        return { success: true };
+    } catch (error: any) {
+        logError('addCompatibilityAction failed', { payload, error: error.message });
+        return { success: false, error: error.message };
+    }
+}
+
+export async function deleteCompatibilityAction(id: number) {
+    await authorizeSession();
+    try {
+        const db = await getDb();
+        db.prepare(`DELETE FROM inv_item_compatibilities WHERE id = ?`).run(id);
+        
+        revalidatePath('/dashboard/inventory');
+        revalidatePath('/dashboard/tickets');
+        return { success: true };
+    } catch (error: any) {
+        logError('deleteCompatibilityAction failed', { id, error: error.message });
+        return { success: false, error: error.message };
+    }
+}
+
+export async function getFleetVehiclesCatalogAction() {
+    await authorizeSession();
+    try {
+        const db = await getDb();
+        const rows = db.prepare(`
+            SELECT id, plate, brand, model, bodyType as type
+            FROM fleet_vehicles
+            ORDER BY plate ASC
+        `).all() as any[];
+
+        const formatted = rows.map(r => ({
+            id: r.id,
+            plate: r.plate,
+            name: `${r.brand || ''} ${r.model || ''}`.trim() || r.plate,
+            brand: r.brand || null,
+            model: r.model || null,
+            type: r.type || null
+        }));
+
+        return JSON.parse(JSON.stringify(formatted)) as { id: number; plate: string; name: string; brand: string | null; model: string | null; type: string | null }[];
+    } catch (error: any) {
+        logError('getFleetVehiclesCatalogAction failed', { error: error.message });
+        return [];
+    }
+}
+
+/**
+ * Consulta de Repuestos Compatibles para un Vehículo / Camión
+ */
+export async function searchCompatibleItemsForVehicleAction(filters: {
+    vehiclePlate?: string;
+    vehicleBrand?: string;
+    vehicleModel?: string;
+    departmentId?: number;
+    search?: string;
+}) {
+    await authorizeSession();
+    try {
+        const db = await getDb();
+        const { vehiclePlate, vehicleBrand, vehicleModel, departmentId, search } = filters;
+
+        let sql = `
+            SELECT DISTINCT i.*, c.vehicle_brand as comp_brand, c.vehicle_model as comp_model, c.vehicle_plate as comp_plate, c.notes as comp_notes
+            FROM inv_items i
+            JOIN inv_item_compatibilities c ON i.id = c.item_id
+            WHERE i.status = 'active'
+        `;
+        const params: any[] = [];
+
+        if (departmentId) {
+            sql += ` AND i.department_id = ?`;
+            params.push(departmentId);
+        }
+
+        const conditions: string[] = [];
+        if (vehiclePlate) {
+            conditions.push(`UPPER(c.vehicle_plate) = ?`);
+            params.push(vehiclePlate.trim().toUpperCase());
+        }
+        if (vehicleBrand) {
+            conditions.push(`UPPER(c.vehicle_brand) = ?`);
+            params.push(vehicleBrand.trim().toUpperCase());
+        }
+        if (vehicleModel) {
+            conditions.push(`UPPER(c.vehicle_model) = ?`);
+            params.push(vehicleModel.trim().toUpperCase());
+        }
+
+        if (conditions.length > 0) {
+            sql += ` AND (${conditions.join(' OR ')})`;
+        }
+
+        if (search) {
+            const term = `%${search.trim().toUpperCase()}%`;
+            sql += ` AND (UPPER(i.name) LIKE ? OR UPPER(i.part_number) LIKE ? OR UPPER(i.brand) LIKE ? OR UPPER(i.id) LIKE ?)`;
+            params.push(term, term, term, term);
+        }
+
+        sql += ` ORDER BY i.name ASC`;
+
+        const rows = db.prepare(sql).all(...params);
+        return { success: true, data: JSON.parse(JSON.stringify(rows)) };
+    } catch (error: any) {
+        logError('searchCompatibleItemsForVehicleAction failed', { filters, error: error.message });
+        return { success: false, data: [], error: error.message };
     }
 }
 

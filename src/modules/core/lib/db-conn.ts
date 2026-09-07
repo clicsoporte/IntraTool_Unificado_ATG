@@ -105,6 +105,44 @@ export async function initializeAllModuleSchemas(db: Database.Database) {
         } catch (e: any) {
             console.error("[DB Self-Healing] Failed to ensure timeZone column:", e.message);
         }
+
+        try {
+            const tableInfo = db.prepare("PRAGMA table_info('core_users')").all();
+            const cols = tableInfo.map((col: any) => col.name);
+            if (!cols.includes('telegramChatId')) db.exec(`ALTER TABLE core_users ADD COLUMN telegramChatId TEXT;`);
+            if (!cols.includes('employeeId')) db.exec(`ALTER TABLE core_users ADD COLUMN employeeId TEXT;`);
+            if (!cols.includes('salespersonId')) db.exec(`ALTER TABLE core_users ADD COLUMN salespersonId TEXT;`);
+        } catch (e: any) {
+            console.error("[DB Self-Healing] Failed to ensure core_users columns:", e.message);
+        }
+
+        try {
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS core_customer_shipment_addresses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cliente_id TEXT NOT NULL,
+                    direccion_id TEXT NOT NULL,
+                    detalle_direccion TEXT,
+                    descripcion TEXT,
+                    latitude REAL,
+                    longitude REAL,
+                    email_notificacion TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(cliente_id, direccion_id)
+                );
+            `);
+            const addrTableInfo = db.prepare("PRAGMA table_info('core_customer_shipment_addresses')").all();
+            const addrCols = addrTableInfo.map((col: any) => col.name);
+            if (!addrCols.includes('email_notificacion')) {
+                db.exec(`ALTER TABLE core_customer_shipment_addresses ADD COLUMN email_notificacion TEXT;`);
+                console.log("[DB Self-Healing] Added missing 'email_notificacion' to 'core_customer_shipment_addresses'.");
+            }
+            if (!addrCols.includes('latitude')) db.exec(`ALTER TABLE core_customer_shipment_addresses ADD COLUMN latitude REAL;`);
+            if (!addrCols.includes('longitude')) db.exec(`ALTER TABLE core_customer_shipment_addresses ADD COLUMN longitude REAL;`);
+        } catch (e: any) {
+            console.error("[DB Self-Healing] Failed to ensure core_customer_shipment_addresses schema:", e.message);
+        }
         
         autoLinkEmployeesAndUsers(db);
 
@@ -176,7 +214,10 @@ export async function getDb(): Promise<Database.Database> {
             db.pragma('synchronous = NORMAL');
             db.pragma('foreign_keys = ON');
             db.pragma('busy_timeout = 10000');
-            db.pragma('journal_size_limit = 67108864');
+            db.pragma('temp_store = MEMORY');
+            db.pragma('mmap_size = 268435456');
+            db.pragma('journal_size_limit = 268435456');
+            db.pragma('wal_autocheckpoint = 1000');
 
             try {
                 const check = db.pragma('integrity_check(1)') as any[];
@@ -235,6 +276,10 @@ export function getDbSync(): Database.Database {
         unifiedDbInstance.pragma('synchronous = NORMAL');
         unifiedDbInstance.pragma('foreign_keys = ON');
         unifiedDbInstance.pragma('busy_timeout = 10000');
+        unifiedDbInstance.pragma('temp_store = MEMORY');
+        unifiedDbInstance.pragma('mmap_size = 268435456');
+        unifiedDbInstance.pragma('journal_size_limit = 268435456');
+        unifiedDbInstance.pragma('wal_autocheckpoint = 1000');
     }
     return unifiedDbInstance;
 }

@@ -278,10 +278,26 @@ export async function clearLogs(clearedBy: string, type: 'operational' | 'system
     }
 };
 
+function ensureApiSettingsColumns(db: any) {
+    try {
+        const tableInfo = db.prepare("PRAGMA table_info('core_api_settings')").all();
+        const cols = tableInfo.map((c: any) => c.name);
+        if (!cols.includes('recopeApi')) db.exec(`ALTER TABLE core_api_settings ADD COLUMN recopeApi TEXT DEFAULT '';`);
+        if (!cols.includes('navixyBaseUrl')) db.exec(`ALTER TABLE core_api_settings ADD COLUMN navixyBaseUrl TEXT DEFAULT 'https://fleets.geotracking.co.cr/api-v2';`);
+        if (!cols.includes('navixyApiKey')) db.exec(`ALTER TABLE core_api_settings ADD COLUMN navixyApiKey TEXT DEFAULT '';`);
+        if (!cols.includes('cartoApiKey')) db.exec(`ALTER TABLE core_api_settings ADD COLUMN cartoApiKey TEXT DEFAULT '';`);
+        if (!cols.includes('googleMapsApiKey')) db.exec(`ALTER TABLE core_api_settings ADD COLUMN googleMapsApiKey TEXT DEFAULT '';`);
+    } catch (e: any) {
+        console.warn("[ApiSettings] Warning checking columns:", e.message);
+    }
+}
+
 export async function getApiSettings(): Promise<ApiSettings | null> {
     const db = await getDb();
     try {
-        return db.prepare('SELECT * FROM core_api_settings WHERE id = 1').get() as ApiSettings | null;
+        ensureApiSettingsColumns(db);
+        const settings = db.prepare('SELECT * FROM core_api_settings WHERE id = 1').get() as ApiSettings | null;
+        return settings ? JSON.parse(JSON.stringify(settings)) : null;
     } catch (error) {
         console.error("Failed to get api settings:", error);
         return null;
@@ -291,16 +307,61 @@ export async function getApiSettings(): Promise<ApiSettings | null> {
 export async function saveApiSettings(settings: ApiSettings): Promise<void> {
     const db = await getDb();
     try {
-        db.prepare(`UPDATE core_api_settings SET exchangeRateApi = @exchangeRateApi, haciendaExemptionApi = @haciendaExemptionApi, haciendaTributariaApi = @haciendaTributariaApi, recopeApi = @recopeApi WHERE id = 1`).run(settings);
+        ensureApiSettingsColumns(db);
+        // Asegurar que exista la fila id=1
+        db.prepare(`INSERT OR IGNORE INTO core_api_settings (id) VALUES (1)`).run();
+        
+        const sanitizedSettings = {
+            exchangeRateApi: settings.exchangeRateApi || '',
+            haciendaExemptionApi: settings.haciendaExemptionApi || '',
+            haciendaTributariaApi: settings.haciendaTributariaApi || '',
+            recopeApi: settings.recopeApi || '',
+            navixyBaseUrl: settings.navixyBaseUrl || '',
+            navixyApiKey: settings.navixyApiKey || '',
+            cartoApiKey: settings.cartoApiKey || '',
+            googleMapsApiKey: settings.googleMapsApiKey || ''
+        };
+        db.prepare(`
+            UPDATE core_api_settings 
+            SET exchangeRateApi = @exchangeRateApi, 
+                haciendaExemptionApi = @haciendaExemptionApi, 
+                haciendaTributariaApi = @haciendaTributariaApi, 
+                recopeApi = @recopeApi, 
+                navixyBaseUrl = @navixyBaseUrl, 
+                navixyApiKey = @navixyApiKey,
+                cartoApiKey = @cartoApiKey,
+                googleMapsApiKey = @googleMapsApiKey
+            WHERE id = 1
+        `).run(sanitizedSettings);
     } catch (error) {
         console.error("Failed to save api settings:", error);
+        throw error;
+    }
+}
+
+function ensureAiSettingsColumns(db: any) {
+    try {
+        const tableInfo = db.prepare("PRAGMA table_info('core_ai_settings')").all();
+        const cols = tableInfo.map((c: any) => c.name);
+        if (!cols.includes('synonyms')) db.exec(`ALTER TABLE core_ai_settings ADD COLUMN synonyms TEXT DEFAULT '[]';`);
+        if (!cols.includes('aiMemory')) db.exec(`ALTER TABLE core_ai_settings ADD COLUMN aiMemory TEXT DEFAULT '{}';`);
+        if (!cols.includes('adaptTechnicalLevel')) db.exec(`ALTER TABLE core_ai_settings ADD COLUMN adaptTechnicalLevel INTEGER DEFAULT 1;`);
+        if (!cols.includes('strictSafetyRules')) db.exec(`ALTER TABLE core_ai_settings ADD COLUMN strictSafetyRules INTEGER DEFAULT 1;`);
+        if (!cols.includes('auditorMasterPrompt')) db.exec(`ALTER TABLE core_ai_settings ADD COLUMN auditorMasterPrompt TEXT DEFAULT 'Eres un Auditor Senior de Sistemas e Infraestructura para Clic-Tools. Analiza los logs, identifica causas raíz, diagnostica fallas de red/sockets/base de datos y sugiere soluciones claras y preventivas.';`);
+        if (!cols.includes('auditorAllowedTables')) db.exec(`ALTER TABLE core_ai_settings ADD COLUMN auditorAllowedTables TEXT DEFAULT '["core_logs","ops_driver_logs","fleet_telegram_bot_logs","ops_delivery_queue","fleet_vehicles","it_assets","it_asset_telemetry"]';`);
+        if (!cols.includes('auditorMaxRowsPerQuery')) db.exec(`ALTER TABLE core_ai_settings ADD COLUMN auditorMaxRowsPerQuery INTEGER DEFAULT 100;`);
+        if (!cols.includes('auditorTimeoutSeconds')) db.exec(`ALTER TABLE core_ai_settings ADD COLUMN auditorTimeoutSeconds INTEGER DEFAULT 45;`);
+    } catch (e: any) {
+        console.warn("[AiSettings] Warning checking columns:", e.message);
     }
 }
 
 export async function getAiSettings(): Promise<AiSettings | null> {
     const db = await getDb();
     try {
-        return db.prepare('SELECT * FROM core_ai_settings WHERE id = 1').get() as AiSettings | null;
+        ensureAiSettingsColumns(db);
+        const settings = db.prepare('SELECT * FROM core_ai_settings WHERE id = 1').get() as AiSettings | null;
+        return settings ? JSON.parse(JSON.stringify(settings)) : null;
     } catch (error) {
         console.error("Failed to get ai settings:", error);
         return null;
@@ -310,6 +371,7 @@ export async function getAiSettings(): Promise<AiSettings | null> {
 export async function saveAiSettings(settings: AiSettings): Promise<void> {
     const db = await getDb();
     try {
+        ensureAiSettingsColumns(db);
         db.prepare(`
             UPDATE core_ai_settings SET 
                 aiEnabled = @aiEnabled, 
@@ -320,11 +382,29 @@ export async function saveAiSettings(settings: AiSettings): Promise<void> {
                 geminiModel = @geminiModel, 
                 deepseekApiKey = @deepseekApiKey, 
                 deepseekModel = @deepseekModel, 
-                systemPrompt = @systemPrompt 
+                systemPrompt = @systemPrompt,
+                synonyms = COALESCE(@synonyms, '[]'),
+                aiMemory = COALESCE(@aiMemory, '{}'),
+                adaptTechnicalLevel = COALESCE(@adaptTechnicalLevel, 1),
+                strictSafetyRules = COALESCE(@strictSafetyRules, 1),
+                auditorMasterPrompt = COALESCE(@auditorMasterPrompt, 'Eres un Auditor Senior de Sistemas e Infraestructura para Clic-Tools. Analiza los logs, identifica causas raíz, diagnostica fallas de red/sockets/base de datos y sugiere soluciones claras y preventivas.'),
+                auditorAllowedTables = COALESCE(@auditorAllowedTables, '["core_logs","ops_driver_logs","fleet_telegram_bot_logs","ops_delivery_queue","fleet_vehicles","it_assets","it_asset_telemetry"]'),
+                auditorMaxRowsPerQuery = COALESCE(@auditorMaxRowsPerQuery, 100),
+                auditorTimeoutSeconds = COALESCE(@auditorTimeoutSeconds, 45)
             WHERE id = 1
         `).run(settings);
     } catch (error) {
         console.error("Failed to save ai settings:", error);
+        throw error;
+    }
+}
+
+export async function clearAiMemory(): Promise<void> {
+    const db = await getDb();
+    try {
+        db.prepare(`UPDATE core_ai_settings SET aiMemory = '{}' WHERE id = 1`).run();
+    } catch (error) {
+        console.error("Failed to clear AI memory:", error);
     }
 }
 
@@ -363,7 +443,8 @@ export async function saveAnalyticsSettings(settings: AnalyticsSettings): Promis
 export async function getExemptionLaws(): Promise<ExemptionLaw[]> {
     const db = await getDb();
     try {
-        return db.prepare('SELECT * FROM core_exemption_laws').all() as ExemptionLaw[];
+        const laws = db.prepare('SELECT * FROM core_exemption_laws').all() as ExemptionLaw[];
+        return JSON.parse(JSON.stringify(laws));
     } catch (error) {
         console.error("Failed to get exemption laws:", error);
         return [];
@@ -390,7 +471,8 @@ export async function saveExemptionLaws(laws: ExemptionLaw[]): Promise<void> {
 export async function getAllCustomers(): Promise<Customer[]> {
     const db = await getDb();
     try {
-        return db.prepare('SELECT * FROM core_customers').all() as Customer[];
+        const customers = db.prepare('SELECT * FROM core_customers').all() as Customer[];
+        return JSON.parse(JSON.stringify(customers));
     } catch (error) {
         console.error("Failed to get all customers:", error);
         return [];
@@ -458,22 +540,35 @@ export async function saveAllProducts(products: Product[]): Promise<void> {
 export async function getAllSuppliers(): Promise<Supplier[]> {
     const db = await getDb();
     try {
-        return db.prepare('SELECT * FROM core_suppliers').all() as Supplier[];
+        const suppliers = db.prepare('SELECT * FROM core_suppliers').all() as Supplier[];
+        return JSON.parse(JSON.stringify(suppliers));
     } catch (error) {
         console.error("Failed to get all suppliers:", error);
         return [];
     }
 }
 
-export async function saveAllSuppliers(suppliers: Supplier[]): Promise<void> {
+export async function saveAllSuppliers(suppliers: any[]): Promise<void> {
     const db = await getDb();
-    const insert = db.prepare('INSERT INTO core_suppliers (id, name, alias, email, phone) VALUES (@id, @name, @alias, @email, @phone)');
-    const transaction = db.transaction((suppliersToSave: Supplier[]) => {
-        db.prepare('DELETE FROM core_suppliers').run();
+    const insert = db.prepare(`
+        INSERT INTO core_suppliers (id, name, alias, email, phone, address) 
+        VALUES (@id, @name, @alias, @email, @phone, @address)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            alias = excluded.alias,
+            email = excluded.email,
+            phone = excluded.phone,
+            address = excluded.address
+    `);
+    const transaction = db.transaction((suppliersToSave: any[]) => {
         for(const supplier of suppliersToSave) {
             insert.run({
-                ...supplier,
-                id: supplier.id.toUpperCase()
+                id: (supplier.id || '').toUpperCase(),
+                name: supplier.name || '',
+                alias: supplier.alias || '',
+                email: supplier.email || '',
+                phone: supplier.phone || '',
+                address: supplier.address || ''
             });
         }
     });
@@ -481,6 +576,24 @@ export async function saveAllSuppliers(suppliers: Supplier[]): Promise<void> {
         transaction(suppliers);
     } catch (error) {
         console.error("Failed to save all suppliers:", error);
+        throw error;
+    }
+}
+
+export async function updateSupplierCoordinates(
+    supplierId: string,
+    latitude: number | null,
+    longitude: number | null
+): Promise<void> {
+    const db = await getDb();
+    try {
+        db.prepare(`
+            UPDATE core_suppliers 
+            SET latitude = ?, longitude = ? 
+            WHERE id = ?
+        `).run(latitude, longitude, supplierId.toUpperCase());
+    } catch (error) {
+        console.error(`Failed to update supplier coordinates for ${supplierId}:`, error);
         throw error;
     }
 }
@@ -701,7 +814,7 @@ const createHeaderMapping = (type: ImportQuery['type']): Record<string, string> 
         case 'stock': return {'ARTICULO': 'itemId', 'BODEGA': 'warehouseId', 'CANT_DISPONIBLE': 'stock'};
         case 'locations': return {'CODIGO': 'itemId', 'P. HORIZONTAL': 'hPos', 'P. VERTICAL': 'vPos', 'RACK': 'rack', 'CLIENTE': 'client', 'DESCRIPCION': 'description'};
         case 'cabys': return {'CODIGO': 'code', 'DESCRIPCION': 'description', 'IMPUESTO': 'taxRate'};
-        case 'suppliers': return {'PROVEEDOR': 'id', 'NOMBRE': 'name', 'ALIAS': 'alias', 'E_MAIL': 'email', 'TELEFONO1': 'phone'};
+        case 'suppliers': return {'PROVEEDOR': 'id', 'NOMBRE': 'name', 'ALIAS': 'alias', 'E_MAIL': 'email', 'TELEFONO1': 'phone', 'DIRECCION': 'address'};
         case 'erp_order_headers': return {'PEDIDO': 'PEDIDO', 'ESTADO': 'ESTADO', 'CLIENTE': 'CLIENTE', 'FECHA_PEDIDO': 'FECHA_PEDIDO', 'FECHA_PROMETIDA': 'FECHA_PROMETIDA', 'ORDEN_COMPRA': 'ORDEN_COMPRA', 'TOTAL_UNIDADES': 'TOTAL_UNIDADES', 'MONEDA_PEDIDO': 'MONEDA_PEDIDO', 'USUARIO': 'USUARIO'};
         case 'erp_order_lines': return {'PEDIDO': 'PEDIDO', 'PEDIDO_LINEA': 'PEDIDO_LINEA', 'ARTICULO': 'ARTICULO', 'CANTIDAD_PEDIDA': 'CANTIDAD_PEDIDA', 'PRECIO_UNITARIO': 'PRECIO_UNITARIO'};
         case 'erp_purchase_order_headers': return { 'ORDEN_COMPRA': 'ORDEN_COMPRA', 'PROVEEDOR': 'PROVEEDOR', 'FECHA_HORA': 'FECHA_HORA', 'ESTADO': 'ESTADO', 'CREATEDBY': 'CreatedBy' };
@@ -968,7 +1081,8 @@ export async function saveSqlConfig(config: SqlConfig): Promise<void> {
 export async function getImportQueries(): Promise<ImportQuery[]> {
     const db = await getDb();
     try {
-        return db.prepare('SELECT * FROM core_import_queries').all() as ImportQuery[];
+        const queries = db.prepare('SELECT * FROM core_import_queries').all() as ImportQuery[];
+        return JSON.parse(JSON.stringify(queries));
     } catch (error) {
         console.error("Failed to get import queries:", error);
         return [];
@@ -992,7 +1106,8 @@ export async function testSqlConnection(): Promise<void> {
 
 export async function getCabysCatalog(): Promise<{ code: string; description: string; taxRate: number; }[]> {
     const db = await getDb();
-    return db.prepare('SELECT * FROM core_cabys_catalog').all() as { code: string; description: string; taxRate: number; }[];
+    const catalog = db.prepare('SELECT * FROM core_cabys_catalog').all() as { code: string; description: string; taxRate: number; }[];
+    return JSON.parse(JSON.stringify(catalog));
 }
 
 export async function getSuggestions(): Promise<Suggestion[]> {
@@ -1337,7 +1452,8 @@ export async function factoryReset(moduleId: string): Promise<void> {
                     'ops_types', 'ops_documents', 'ops_lines', 'ops_history',
                     'ops_delivery_settings', 'ops_delivery_routes', 'ops_delivery_assignments',
                     'ops_delivery_queue', 'ops_delivery_lines', 'ops_delivery_release_codes',
-                    'ops_delivery_notifications'
+                    'ops_delivery_notifications', 'ops_delivery_gps_logs', 'ops_client_emails',
+                    'ops_delivery_discards', 'ops_app_version_settings', '_ops_migrations'
                 ];
                 for (const table of tables) {
                     try { db.prepare(`DELETE FROM ${table}`).run(); } catch(e){}
@@ -1569,6 +1685,20 @@ export async function saveAllEmployees(data: any[]): Promise<void> {
         }
     });
     transaction(data);
+
+    // Sincronización: desactivar usuarios del sistema vinculados a empleados
+    // que el ERP marcó como inactivos (dados de baja). Solo se desactiva (nunca
+    // se reactiva); la reactivación se realiza manualmente en /dashboard/admin/users.
+    db.prepare(`
+        UPDATE core_users
+        SET is_active = 0
+        WHERE employeeId IS NOT NULL
+          AND is_active = 1
+          AND EXISTS (
+            SELECT 1 FROM core_employees e
+            WHERE e.EMPLEADO = core_users.employeeId AND e.ACTIVO = 'N'
+          )
+    `).run();
 }
 
 
@@ -1626,7 +1756,8 @@ export async function getAllErpPurchaseOrderHeaders(): Promise<ErpPurchaseOrderH
 export async function getAllErpPurchaseOrderLines(): Promise<ErpPurchaseOrderLine[]> {
     const db = await getDb();
     try {
-        return db.prepare('SELECT * FROM core_erp_purchase_order_lines').all() as ErpPurchaseOrderLine[];
+        const lines = db.prepare('SELECT * FROM core_erp_purchase_order_lines').all() as ErpPurchaseOrderLine[];
+        return JSON.parse(JSON.stringify(lines));
     } catch (error) {
         console.error("Failed to get all ERP purchase order lines:", error);
         return [];
@@ -1823,6 +1954,43 @@ export async function getPaginatedCustomers(search?: string, activeOnly?: boolea
     }
 }
 
+export async function getPaginatedSuppliers(search?: string, page = 1, pageSize = 20, hasLocationOnly?: boolean): Promise<{ suppliers: any[]; totalCount: number; totalPages: number }> {
+    const db = await getDb();
+    try {
+        let whereClauses: string[] = [];
+        const params: any[] = [];
+
+        if (search) {
+            whereClauses.push('(id LIKE ? OR name LIKE ? OR alias LIKE ? OR email LIKE ?)');
+            const s = `%${search}%`;
+            params.push(s, s, s, s);
+        }
+
+        if (hasLocationOnly) {
+            whereClauses.push("latitude IS NOT NULL AND longitude IS NOT NULL");
+        }
+
+        const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+        
+        const countRow = db.prepare(`SELECT COUNT(*) as count FROM core_suppliers ${whereSql}`).get(...params) as { count: number } | undefined;
+        const totalCount = countRow?.count || 0;
+        const totalPages = Math.ceil(totalCount / pageSize) || 1;
+
+        const offset = (page - 1) * pageSize;
+        const suppliers = db.prepare(`
+            SELECT * FROM core_suppliers 
+            ${whereSql} 
+            ORDER BY name ASC 
+            LIMIT ? OFFSET ?
+        `).all(...params, pageSize, offset) as any[];
+
+        return { suppliers, totalCount, totalPages };
+    } catch (error) {
+        console.error("Failed to fetch paginated suppliers:", error);
+        return { suppliers: [], totalCount: 0, totalPages: 0 };
+    }
+}
+
 export async function getCustomerShipmentAddresses(clienteId: string): Promise<any[]> {
     const db = await getDb();
     try {
@@ -1838,20 +2006,27 @@ export async function getCustomerShipmentAddresses(clienteId: string): Promise<a
     }
 }
 
-export async function updateShipmentAddressCoordinates(clienteId: string, direccionId: string, latitude: number | null, longitude: number | null): Promise<void> {
+export async function updateShipmentAddressCoordinates(
+    clienteId: string, 
+    direccionId: string, 
+    latitude: number | null, 
+    longitude: number | null,
+    emailNotificacion?: string | null
+): Promise<void> {
     const db = await getDb();
     try {
         db.prepare(`
             INSERT INTO core_customer_shipment_addresses (
-                cliente_id, direccion_id, latitude, longitude
+                cliente_id, direccion_id, latitude, longitude, email_notificacion
             ) VALUES (
-                ?, ?, ?, ?
+                ?, ?, ?, ?, ?
             ) ON CONFLICT(cliente_id, direccion_id) DO UPDATE SET
                 latitude = excluded.latitude,
-                longitude = excluded.longitude
-        `).run(clienteId, direccionId, latitude, longitude);
+                longitude = excluded.longitude,
+                email_notificacion = excluded.email_notificacion
+        `).run(clienteId, direccionId, latitude, longitude, emailNotificacion || null);
     } catch (error) {
-        console.error(`Failed to update shipment address coordinates for customer ${clienteId} address ${direccionId}:`, error);
+        console.error(`Failed to update shipment address for customer ${clienteId} address ${direccionId}:`, error);
         throw error;
     }
 }

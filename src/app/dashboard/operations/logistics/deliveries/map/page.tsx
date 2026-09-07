@@ -9,8 +9,9 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { useToast } from '@/modules/core/hooks/use-toast';
 import { getDeliveryGPSData } from '@/modules/operations/lib/actions';
+import { getApiSettings } from '@/modules/core/lib/db';
+import { getLocalDateStr } from '@/modules/core/lib/time-utils';
 import { RefreshCw, MapPin, Truck, ArrowLeft, Loader2, Compass, Activity, Navigation, CheckCircle, Calendar } from 'lucide-react';
-import { useLoading } from '@/modules/core/hooks/useLoading';
 
 interface GPSData {
   activeTrucks: any[];
@@ -35,15 +36,10 @@ const MapTracker = dynamic(
 
 export default function DeliveryMapPage() {
   const { toast } = useToast();
-  const { showLoading, hideLoading } = useLoading();
 
-  // Utility for local calendar date without UTC offset issues
-  const getLocalDateString = () => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  };
-
-  const [selectedDate, setSelectedDate] = useState<string>(getLocalDateString());
+  const [selectedDate, setSelectedDate] = useState<string>(getLocalDateStr());
+  const [cartoApiKey, setCartoApiKey] = useState<string>('');
+  const [googleMapsApiKey, setGoogleMapsApiKey] = useState<string>('');
   const [gpsData, setGpsData] = useState<GPSData>({
     activeTrucks: [],
     gpsPaths: {},
@@ -54,17 +50,15 @@ export default function DeliveryMapPage() {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
-    if (loading) {
-      showLoading("Estableciendo enlace y descargando trazas satelitales...");
-    } else if (refreshing) {
-      showLoading("Actualizando coordenadas de la flota en tiempo real...");
-    } else {
-      hideLoading();
-    }
-    return () => {
-      hideLoading();
-    };
-  }, [loading, refreshing, showLoading, hideLoading]);
+    getApiSettings().then(settings => {
+      if (settings?.cartoApiKey) {
+        setCartoApiKey(settings.cartoApiKey);
+      }
+      if (settings?.googleMapsApiKey) {
+        setGoogleMapsApiKey(settings.googleMapsApiKey);
+      }
+    }).catch(() => {});
+  }, []);
 
   const fetchGPSData = useCallback(async (isManual = false, targetDate?: string) => {
     if (isManual) {
@@ -242,6 +236,8 @@ export default function DeliveryMapPage() {
               activeTrucks={gpsData.activeTrucks}
               gpsPaths={gpsData.gpsPaths}
               deliveryMarkers={gpsData.deliveryMarkers}
+              cartoApiKey={cartoApiKey}
+              googleMapsApiKey={googleMapsApiKey}
             />
 
             {/* Floating Control Center HUD */}

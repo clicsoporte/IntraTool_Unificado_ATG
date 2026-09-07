@@ -49,7 +49,7 @@ export const MASTER_SCHEMA: Record<string, string[]> = {
     core_user_preferences: ['userId', 'key', 'value'],
     core_notifications: ['id', 'userId', 'message', 'href', 'isRead', 'timestamp', 'entityId', 'entityType', 'taskType'],
     core_email_settings: ['key', 'value'],
-    core_suppliers: ['id', 'name', 'alias', 'email', 'phone'],
+    core_suppliers: ['id', 'name', 'alias', 'email', 'phone', 'address', 'latitude', 'longitude'],
     core_erp_order_headers: [
         'PEDIDO', 'ESTADO', 'CLIENTE', 'FECHA_PEDIDO', 'FECHA_PROMETIDA', 
         'ORDEN_COMPRA', 'TOTAL_UNIDADES', 'MONEDA_PEDIDO', 'USUARIO'
@@ -133,6 +133,10 @@ export const MASTER_SCHEMA: Record<string, string[]> = {
     ops_delivery_discards: [
         'id', 'documento_numero', 'motivo_descarte', 'usuario_descarte', 'fecha_descarte'
     ],
+    ops_app_version_settings: [
+        'id', 'version_name', 'version_code', 'apk_url', 'release_notes', 
+        'global_ota_paused', 'force_update', 'server_url_primary', 'server_url_fallback', 'updated_at'
+    ],
 
 
     // --- PLANNER MODULE ---
@@ -199,7 +203,9 @@ export const MASTER_SCHEMA: Record<string, string[]> = {
     it_assets: [
         'id', 'item_id', 'category', 'brand', 'model', 'serial_number', 'status', 
         'purchase_date', 'purchase_cost', 'currency', 'exchange_rate', 'warranty_expiration', 
-        'invoice_url', 'warranty_cert_url', 'branch_id', 'notes', 'created_at'
+        'invoice_url', 'warranty_cert_url', 'branch_id', 'notes', 'created_at',
+        'imei', 'phone_number', 'telephony_provider', 'data_plan_start', 'data_plan_end', 'data_plan_renewal',
+        'processor', 'ram_memory', 'storage_capacity', 'bitlocker_id', 'bitlocker_key', 'standard_accessories_json'
     ],
     it_asset_assignments: [
         'id', 'asset_id', 'assignee_type', 'user_id', 'employee_code', 
@@ -208,6 +214,40 @@ export const MASTER_SCHEMA: Record<string, string[]> = {
     it_licenses_catalog: ['id', 'name', 'description', 'created_at'],
     it_asset_licenses: ['id', 'asset_id', 'license_catalog_id', 'license_key', 'expiration_date', 'status'],
     it_asset_components: ['id', 'parent_asset_id', 'component_name', 'brand', 'model', 'serial_number', 'status'],
+    it_asset_documents: ['id', 'asset_id', 'document_type', 'title', 'file_name', 'file_url', 'file_size', 'uploaded_by', 'uploaded_at'],
+    it_asset_telemetry: [
+        'asset_id', 'hostname', 'os_version', 'os_build', 'logged_in_user', 'domain', 
+        'cpu_name', 'cpu_usage', 'ram_total_gb', 'ram_used_percent', 'disk_primary_free_gb', 
+        'disk_primary_total_gb', 'disk_smart_status', 'battery_percent', 'is_charging', 
+        'is_laptop', 'bitlocker_status', 'antivirus_status', 'ip_address_local', 
+        'ip_address_public', 'mac_address', 'monitors_json', 'agent_version', 'last_seen'
+    ],
+    it_agent_commands: [
+        'id', 'asset_id', 'command_type', 'payload_json', 'priority', 'status', 
+        'created_by', 'created_at', 'executed_at', 'result_output'
+    ],
+    it_asset_installed_software: [
+        'id', 'asset_id', 'name', 'version', 'publisher', 'install_date', 'last_scanned_at'
+    ],
+    it_agent_ota_versions: [
+        'id', 'version_name', 'version_code', 'file_url', 'file_size', 'sha256_hash', 
+        'release_notes', 'is_active', 'created_at'
+    ],
+    fleet_registered_devices: [
+        'hardware_id', 'device_name', 'last_user_id', 'last_driver_name', 'driver_phone', 
+        'printer_mac', 'paper_size', 'server_url_override', 'custom_config_json', 'asset_id', 
+        'last_seen', 'current_app_version', 'current_version_code', 'battery_level', 
+        'ota_paused', 'install_failed_count', 'last_install_error', 'current_lat', 
+        'current_lng', 'installed_apps_json', 'storage_free_mb', 'storage_total_mb', 
+        'ram_free_mb', 'ram_total_mb', 'battery_temp_c', 'is_charging', 'network_type', 
+        'sim_carrier', 'os_version', 'device_model', 'shutdown_lat', 'shutdown_lng', 
+        'shutdown_at', 'is_device_owner', 'serial_number', 'imei',
+        'mdm_force_gps', 'mdm_disallow_airplane_mode', 'mdm_disallow_mobile_data_off',
+        'mdm_disallow_battery_saver', 'mdm_block_uninstall', 'mdm_disallow_settings',
+        'mdm_disallow_tethering', 'mdm_disallow_install_apps', 'mdm_disallow_play_store_install',
+        'mdm_whitelisted_packages', 'mdm_pinned_apps', 'mdm_pending_uninstalls', 'mdm_pending_reboot',
+        'battery_voltage', 'battery_health', 'battery_tech'
+    ],
 
     // --- COST ASSISTANT MODULE ---
     cost_drafts: ['id', 'userId', 'name', 'createdAt', 'data'],

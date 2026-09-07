@@ -12,7 +12,13 @@ import {
     getInventoryTransactions,
     InventoryItem,
     InventoryTransaction,
-    uploadInventoryFileAction
+    uploadInventoryFileAction,
+    getPartBrandsAction,
+    getItemCompatibilitiesAction,
+    addCompatibilityAction,
+    deleteCompatibilityAction,
+    getFleetVehiclesCatalogAction,
+    searchCompatibleItemsForVehicleAction
 } from '@/modules/inventory/lib/actions';
 import { 
     Card, CardContent, CardDescription, CardHeader, CardTitle 
@@ -29,7 +35,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { 
-    Search, Plus, ArrowUpDown, History, ShieldAlert, FileText, ArrowUpRight, ArrowDownLeft, SlidersHorizontal, Eye, Warehouse, Wrench, Upload, Loader2
+    Search, Plus, ArrowUpDown, History, ShieldAlert, FileText, ArrowUpRight, ArrowDownLeft, SlidersHorizontal, Eye, Warehouse, Wrench, Upload, Loader2, Trash2
 } from 'lucide-react';
 
 interface Department {
@@ -92,6 +98,134 @@ export default function InventoryDashboardPage() {
     const [errorMsg, setErrorMsg] = useState('');
     const [successMsg, setSuccessMsg] = useState('');
     const [uploadingFile, setUploadingFile] = useState(false);
+
+    // Part Brands & Fleet Vehicles State
+    const [partBrands, setPartBrands] = useState<{ id: number; name: string }[]>([]);
+    const [fleetVehicles, setFleetVehicles] = useState<{ id: number; plate: string; name: string; brand: string | null; model: string | null }[]>([]);
+
+    // Workshop Assistant Modal State
+    const [isWorkshopAssistantOpen, setIsWorkshopAssistantOpen] = useState(false);
+    const [selectedVehiclePlate, setSelectedVehiclePlate] = useState('');
+    const [selectedVehicleBrand, setSelectedVehicleBrand] = useState('');
+    const [selectedVehicleModel, setSelectedVehicleModel] = useState('');
+    const [workshopSearchText, setWorkshopSearchText] = useState('');
+    const [workshopSearchResults, setWorkshopSearchResults] = useState<any[]>([]);
+    const [loadingWorkshopResults, setLoadingWorkshopResults] = useState(false);
+
+    // Item Compatibility Manager Modal State
+    const [isCompatModalOpen, setIsCompatModalOpen] = useState(false);
+    const [compatItem, setCompatItem] = useState<InventoryItem | null>(null);
+    const [compatibilitiesList, setCompatibilitiesList] = useState<any[]>([]);
+    const [loadingCompats, setLoadingCompats] = useState(false);
+
+    // New compatibility form
+    const [newCompatForm, setNewCompatForm] = useState({
+        vehicleBrand: '',
+        vehicleModel: '',
+        vehiclePlate: '',
+        notes: ''
+    });
+    const [savingCompat, setSavingCompat] = useState(false);
+
+    // Load Part Brands & Fleet Vehicles
+    const loadCatalogs = useCallback(async () => {
+        try {
+            const brands = await getPartBrandsAction();
+            setPartBrands(brands);
+            const vehicles = await getFleetVehiclesCatalogAction();
+            setFleetVehicles(vehicles);
+        } catch (e) {
+            console.error("Error loading inventory catalogs:", e);
+        }
+    }, []);
+
+    useEffect(() => {
+        loadCatalogs();
+    }, [loadCatalogs]);
+
+    // Handle Item Compatibility Manager Open
+    const handleOpenCompatibilities = async (item: InventoryItem) => {
+        setCompatItem(item);
+        setIsCompatModalOpen(true);
+        setLoadingCompats(true);
+        try {
+            const list = await getItemCompatibilitiesAction(item.id);
+            setCompatibilitiesList(list);
+        } catch (e) {
+            console.error("Error loading item compatibilities:", e);
+        } finally {
+            setLoadingCompats(false);
+        }
+    };
+
+    const handleAddCompatibility = async () => {
+        if (!compatItem) return;
+        if (!newCompatForm.vehicleBrand && !newCompatForm.vehicleModel && !newCompatForm.vehiclePlate) {
+            setErrorMsg('Especifique al menos Marca, Modelo o Placa de vehículo.');
+            return;
+        }
+        setSavingCompat(true);
+        setErrorMsg('');
+        try {
+            const res = await addCompatibilityAction({
+                itemId: compatItem.id,
+                vehicleBrand: newCompatForm.vehicleBrand,
+                vehicleModel: newCompatForm.vehicleModel,
+                vehiclePlate: newCompatForm.vehiclePlate,
+                notes: newCompatForm.notes
+            });
+            if (res.success) {
+                setNewCompatForm({ vehicleBrand: '', vehicleModel: '', vehiclePlate: '', notes: '' });
+                const updated = await getItemCompatibilitiesAction(compatItem.id);
+                setCompatibilitiesList(updated);
+            } else {
+                setErrorMsg(res.error || 'No se pudo guardar la compatibilidad.');
+            }
+        } catch (e: any) {
+            setErrorMsg(e.message);
+        } finally {
+            setSavingCompat(false);
+        }
+    };
+
+    const handleDeleteCompatibility = async (id: number) => {
+        if (!compatItem) return;
+        try {
+            const res = await deleteCompatibilityAction(id);
+            if (res.success) {
+                const updated = await getItemCompatibilitiesAction(compatItem.id);
+                setCompatibilitiesList(updated);
+            }
+        } catch (e: any) {
+            console.error("Error deleting compatibility:", e);
+        }
+    };
+
+    // Workshop Assistant Query Handler
+    const handleExecuteWorkshopSearch = async (
+        plate = selectedVehiclePlate,
+        brand = selectedVehicleBrand,
+        model = selectedVehicleModel,
+        text = workshopSearchText
+    ) => {
+        setLoadingWorkshopResults(true);
+        try {
+            const res = await searchCompatibleItemsForVehicleAction({
+                vehiclePlate: plate,
+                vehicleBrand: brand,
+                vehicleModel: model,
+                search: text,
+                departmentId: selectedDeptId
+            });
+            if (res.success) {
+                setWorkshopSearchResults(res.data || []);
+            }
+        } catch (e) {
+            console.error("Error searching workshop items:", e);
+        } finally {
+            setLoadingWorkshopResults(false);
+        }
+    };
 
     const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -275,6 +409,8 @@ export default function InventoryDashboardPage() {
     const totalInventoryValue = items.reduce((acc, item) => acc + (item.quantity * item.price), 0);
 
     const categories = Array.from(new Set(items.map(item => item.category).filter(Boolean))) as string[];
+    const selectedDeptObj = departments.find(d => d.id === selectedDeptId);
+    const isFleetWorkshopDept = selectedDeptId === 1 || (selectedDeptObj?.name || '').toLowerCase().includes('flota') || (selectedDeptObj?.name || '').toLowerCase().includes('taller');
 
     if (!isAuthReady || loadingDepts) {
         return (
@@ -287,7 +423,7 @@ export default function InventoryDashboardPage() {
     }
 
     return (
-        <div className="p-4 md:p-6 space-y-6 animate-in fade-in duration-500">
+        <div className="p-4 md:p-6 space-y-6 animate-in fade-in duration-150">
             {/* Header section with department selector */}
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
                 <div className="flex items-center gap-4">
@@ -313,6 +449,19 @@ export default function InventoryDashboardPage() {
                             <option key={dept.id} value={dept.id}>{dept.name}</option>
                         ))}
                     </select>
+
+                    {selectedDeptId && isFleetWorkshopDept && (
+                        <Button 
+                            onClick={() => {
+                                setIsWorkshopAssistantOpen(true);
+                                handleExecuteWorkshopSearch();
+                            }}
+                            variant="outline"
+                            className="border-indigo-500 text-indigo-700 dark:text-indigo-300 font-bold bg-indigo-50/50 hover:bg-indigo-100 shadow-sm gap-1.5 shrink-0"
+                        >
+                            <Wrench className="w-4 h-4 text-indigo-600" /> 🔍 Asistente Taller & Flota
+                        </Button>
+                    )}
 
                     <Button 
                         onClick={() => setIsAddOpen(true)} 
@@ -480,12 +629,15 @@ export default function InventoryDashboardPage() {
                                                 <TableCell className="text-right font-mono font-bold text-sm">
                                                     ₡{item.price.toLocaleString('es-CR', { minimumFractionDigits: 2 })}
                                                 </TableCell>
-                                                <TableCell className="text-center space-x-2">
+                                                <TableCell className="text-center space-x-1 flex items-center justify-center">
                                                     <Button size="sm" variant="outline" onClick={() => {
                                                         setSelectedItem(item);
                                                         setIsAdjustOpen(true);
-                                                    }} className="h-8 hover:bg-slate-100 font-semibold">
+                                                    }} className="h-8 hover:bg-slate-100 font-semibold text-xs">
                                                         Ajustar Stock
+                                                    </Button>
+                                                    <Button size="icon" variant="ghost" onClick={() => handleOpenCompatibilities(item)} title="Matriz de Compatibilidad con Flota" className="h-8 w-8 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50">
+                                                        <Wrench className="w-4 h-4" />
                                                     </Button>
                                                     <Button size="icon" variant="ghost" onClick={() => showHistory(item)} title="Ver Historial" className="h-8 w-8 text-muted-foreground hover:text-slate-900">
                                                         <History className="w-4 h-4" />
@@ -532,13 +684,19 @@ export default function InventoryDashboardPage() {
                             />
                         </div>
                         <div className="space-y-2">
-                            <Label htmlFor="item-brand">Marca</Label>
+                            <Label htmlFor="item-brand">Marca de Repuesto / Fabricante</Label>
                             <Input
                                 id="item-brand"
-                                placeholder="Ej: Bosch"
+                                list="part-brands-list"
+                                placeholder="Ej: Donaldson, Fleetguard, Mobil..."
                                 value={newItem.brand}
                                 onChange={(e) => setNewItem({...newItem, brand: e.target.value})}
                             />
+                            <datalist id="part-brands-list">
+                                {partBrands.map((b) => (
+                                    <option key={b.id} value={b.name} />
+                                ))}
+                            </datalist>
                         </div>
                         <div className="space-y-2">
                             <Label htmlFor="item-model">Modelo</Label>
@@ -818,6 +976,307 @@ export default function InventoryDashboardPage() {
                     )}
                     <DialogFooter className="pt-4">
                         <Button type="button" variant="outline" onClick={() => setIsHistoryOpen(false)}>Cerrar</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* MODAL 1: ASISTENTE DE COMPATIBILIDAD TALLER & FLOTA */}
+            <Dialog open={isWorkshopAssistantOpen} onOpenChange={setIsWorkshopAssistantOpen}>
+                <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-950">
+                    <DialogHeader>
+                        <DialogTitle className="text-xl font-bold flex items-center gap-2 text-indigo-900 dark:text-indigo-300">
+                            <Wrench className="w-6 h-6 text-indigo-600" />
+                            🔍 Asistente de Compatibilidad Taller & Flota
+                        </DialogTitle>
+                        <DialogDescription className="text-xs">
+                            Identifique de inmediato qué repuestos, filtros o aceites en stock sirven para un vehículo específico (por Placa / ID de camión, Marca o Modelo).
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-4 py-3">
+                        {/* Filter Bar */}
+                        <div className="p-4 bg-indigo-50/40 dark:bg-indigo-950/20 rounded-2xl border border-indigo-200/60 dark:border-indigo-800 space-y-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                {/* Fleet vehicle selector */}
+                                <div className="space-y-1">
+                                    <Label className="text-xs font-bold text-muted-foreground uppercase">Seleccionar Vehículo de Flota</Label>
+                                    <select
+                                        value={selectedVehiclePlate}
+                                        onChange={(e) => {
+                                            const plate = e.target.value;
+                                            setSelectedVehiclePlate(plate);
+                                            const found = fleetVehicles.find(v => v.plate.toUpperCase() === plate.toUpperCase());
+                                            const brand = found?.brand || '';
+                                            const model = found?.model || '';
+                                            setSelectedVehicleBrand(brand);
+                                            setSelectedVehicleModel(model);
+                                            handleExecuteWorkshopSearch(plate, brand, model, workshopSearchText);
+                                        }}
+                                        className="w-full h-9 rounded-lg border bg-background px-3 py-1 text-xs font-bold shadow-sm"
+                                    >
+                                        <option value="">-- Todos los Vehículos --</option>
+                                        {fleetVehicles.map((v) => (
+                                            <option key={v.id} value={v.plate}>
+                                                🚚 {v.plate} - {v.name} ({v.brand || 'S/M'} {v.model || ''})
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {/* Manual Brand/Model inputs */}
+                                <div className="space-y-1">
+                                    <Label className="text-xs font-bold text-muted-foreground uppercase">Marca del Vehículo</Label>
+                                    <Input
+                                        placeholder="Ej: Freightliner, Isuzu, Hino..."
+                                        value={selectedVehicleBrand}
+                                        onChange={(e) => {
+                                            setSelectedVehicleBrand(e.target.value);
+                                            handleExecuteWorkshopSearch(selectedVehiclePlate, e.target.value, selectedVehicleModel, workshopSearchText);
+                                        }}
+                                        className="h-9 text-xs font-bold"
+                                    />
+                                </div>
+
+                                <div className="space-y-1">
+                                    <Label className="text-xs font-bold text-muted-foreground uppercase">Modelo del Vehículo</Label>
+                                    <Input
+                                        placeholder="Ej: M2 106, NPR, Hilux..."
+                                        value={selectedVehicleModel}
+                                        onChange={(e) => {
+                                            setSelectedVehicleModel(e.target.value);
+                                            handleExecuteWorkshopSearch(selectedVehiclePlate, selectedVehicleBrand, e.target.value, workshopSearchText);
+                                        }}
+                                        className="h-9 text-xs font-bold"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="flex gap-2 pt-1">
+                                <div className="relative flex-1">
+                                    <Search className="w-4 h-4 absolute left-3 top-2.5 text-muted-foreground" />
+                                    <Input
+                                        placeholder="Buscar por SKU, Nombre de Filtro/Aceite o Marca de Repuesto..."
+                                        value={workshopSearchText}
+                                        onChange={(e) => {
+                                            setWorkshopSearchText(e.target.value);
+                                            handleExecuteWorkshopSearch(selectedVehiclePlate, selectedVehicleBrand, selectedVehicleModel, e.target.value);
+                                        }}
+                                        className="h-9 pl-9 text-xs font-bold bg-background"
+                                    />
+                                </div>
+                                <Button
+                                    onClick={() => handleExecuteWorkshopSearch()}
+                                    disabled={loadingWorkshopResults}
+                                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-4 h-9 gap-1.5 shadow-sm"
+                                >
+                                    {loadingWorkshopResults ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+                                    Consultar
+                                </Button>
+                            </div>
+                        </div>
+
+                        {/* Search Results Table */}
+                        {loadingWorkshopResults ? (
+                            <Skeleton className="h-48 w-full rounded-xl" />
+                        ) : workshopSearchResults.length === 0 ? (
+                            <div className="text-center py-10 border border-dashed rounded-xl p-6 bg-slate-50 dark:bg-slate-900/30 space-y-2">
+                                <div className="w-10 h-10 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center mx-auto font-bold text-lg">🔧</div>
+                                <h3 className="text-sm font-bold">No se encontraron repuestos registrados para esta consulta</h3>
+                                <p className="text-xs text-muted-foreground max-w-md mx-auto">
+                                    Seleccione un camión o vehículo de la lista arriba o vincule la compatibilidad en el catálogo de inventario.
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="border rounded-xl overflow-hidden shadow-sm">
+                                <Table className="text-xs">
+                                    <TableHeader className="bg-indigo-50/50 dark:bg-indigo-950/40">
+                                        <TableRow>
+                                            <TableHead className="font-bold">Código / SKU</TableHead>
+                                            <TableHead className="font-bold">Repuesto / Consumible</TableHead>
+                                            <TableHead className="font-bold">Marca Repuesto</TableHead>
+                                            <TableHead className="font-bold text-center">Disponible</TableHead>
+                                            <TableHead className="font-bold">Ubicación</TableHead>
+                                            <TableHead className="font-bold">Coincidencia Compatibilidad</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {workshopSearchResults.map((item) => (
+                                            <TableRow key={item.id} className="hover:bg-muted/40">
+                                                <TableCell className="font-mono font-bold text-foreground">
+                                                    {item.part_number || item.id}
+                                                </TableCell>
+                                                <TableCell className="font-bold text-indigo-900 dark:text-indigo-300">
+                                                    {item.name}
+                                                </TableCell>
+                                                <TableCell className="font-semibold">
+                                                    {item.brand || '-'}
+                                                </TableCell>
+                                                <TableCell className="text-center">
+                                                    <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 font-extrabold px-2.5 py-0.5">
+                                                        {item.quantity} {item.unit}
+                                                    </Badge>
+                                                </TableCell>
+                                                <TableCell className="font-mono font-semibold">
+                                                    {item.location || 'Bodega'}
+                                                </TableCell>
+                                                <TableCell className="text-[11px] font-medium text-muted-foreground">
+                                                    {item.comp_plate ? (
+                                                        <span className="font-bold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded border border-emerald-200">
+                                                            🚚 Camión {item.comp_plate}
+                                                        </span>
+                                                    ) : item.comp_brand ? (
+                                                        <span className="font-bold text-blue-600 bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded border border-blue-200">
+                                                            Marca: {item.comp_brand} {item.comp_model || ''}
+                                                        </span>
+                                                    ) : 'General'}
+                                                    {item.comp_notes && <span className="block text-[10px] text-slate-500 italic mt-0.5">{item.comp_notes}</span>}
+                                                </TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        )}
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setIsWorkshopAssistantOpen(false)}>Cerrar Asistente</Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* MODAL 2: MATRIZ DE COMPATIBILIDAD POR REPUESTO */}
+            <Dialog open={isCompatModalOpen} onOpenChange={setIsCompatModalOpen}>
+                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto bg-white dark:bg-slate-950">
+                    <DialogHeader>
+                        <DialogTitle className="text-lg font-bold flex items-center gap-2 text-indigo-900 dark:text-indigo-300">
+                            <Wrench className="w-5 h-5 text-indigo-600" />
+                            Matriz de Compatibilidad: {compatItem?.name}
+                        </DialogTitle>
+                        <DialogDescription className="text-xs">
+                            Vincule este repuesto (SKU: {compatItem?.part_number || compatItem?.id}) con marcas, modelos o placas de camiones de la empresa.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-4 py-2">
+                        {/* List of current compatibilities */}
+                        <div className="space-y-2">
+                            <Label className="text-xs font-bold uppercase text-muted-foreground">Vehículos / Marcas Compatibles Registradas</Label>
+                            {loadingCompats ? (
+                                <Skeleton className="h-20 w-full" />
+                            ) : compatibilitiesList.length === 0 ? (
+                                <p className="text-xs text-muted-foreground italic p-3 border border-dashed rounded-xl bg-slate-50 dark:bg-slate-900">
+                                    No hay compatibilidades registradas para este repuesto. Agregue la primera abajo.
+                                </p>
+                            ) : (
+                                <div className="space-y-2 max-h-48 overflow-y-auto p-1">
+                                    {compatibilitiesList.map((c) => (
+                                        <div key={c.id} className="flex items-center justify-between p-3 bg-muted/40 rounded-xl border text-xs gap-3">
+                                            <div className="space-y-0.5">
+                                                <div className="font-bold text-foreground flex items-center gap-2">
+                                                    {c.vehicle_plate ? (
+                                                        <Badge className="bg-emerald-600 text-white font-mono text-[10px]">
+                                                            🚚 Camión Placa: {c.vehicle_plate}
+                                                        </Badge>
+                                                    ) : (
+                                                        <Badge variant="outline" className="font-bold text-blue-600 border-blue-300">
+                                                            {c.vehicle_brand || 'Todas las marcas'} {c.vehicle_model ? `/ ${c.vehicle_model}` : ''}
+                                                        </Badge>
+                                                    )}
+                                                    {c.vehicle_name && <span className="text-muted-foreground font-normal">({c.vehicle_name})</span>}
+                                                </div>
+                                                {c.notes && <p className="text-[11px] text-muted-foreground">{c.notes}</p>}
+                                            </div>
+                                            <Button
+                                                size="icon"
+                                                variant="ghost"
+                                                onClick={() => handleDeleteCompatibility(c.id)}
+                                                className="h-7 w-7 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-full shrink-0"
+                                            >
+                                                <Trash2 className="w-3.5 h-3.5" />
+                                            </Button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Add new compatibility form */}
+                        <div className="p-4 bg-indigo-50/30 dark:bg-indigo-950/20 rounded-2xl border border-indigo-200/60 space-y-3">
+                            <Label className="text-xs font-bold text-indigo-900 dark:text-indigo-300 block">
+                                ➕ Vincular Nueva Compatibilidad de Vehículo
+                            </Label>
+                            
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                <div className="space-y-1">
+                                    <Label className="text-[11px] font-bold text-muted-foreground">Placa / ID Camión Flota</Label>
+                                    <select
+                                        value={newCompatForm.vehiclePlate}
+                                        onChange={(e) => {
+                                            const plate = e.target.value;
+                                            const found = fleetVehicles.find(v => v.plate.toUpperCase() === plate.toUpperCase());
+                                            setNewCompatForm(prev => ({
+                                                ...prev,
+                                                vehiclePlate: plate,
+                                                vehicleBrand: found?.brand || prev.vehicleBrand,
+                                                vehicleModel: found?.model || prev.vehicleModel
+                                            }));
+                                        }}
+                                        className="w-full h-8 rounded-md border bg-background px-2 text-xs font-bold shadow-sm"
+                                    >
+                                        <option value="">-- Ninguno (Por Marca) --</option>
+                                        {fleetVehicles.map((v) => (
+                                            <option key={v.id} value={v.plate}>
+                                                🚚 {v.plate} ({v.brand || 'S/M'})
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div className="space-y-1">
+                                    <Label className="text-[11px] font-bold text-muted-foreground">Marca de Vehículo</Label>
+                                    <Input
+                                        placeholder="Ej: Freightliner, Hino..."
+                                        value={newCompatForm.vehicleBrand}
+                                        onChange={(e) => setNewCompatForm(prev => ({ ...prev, vehicleBrand: e.target.value }))}
+                                        className="h-8 text-xs font-bold"
+                                    />
+                                </div>
+
+                                <div className="space-y-1">
+                                    <Label className="text-[11px] font-bold text-muted-foreground">Modelo de Vehículo</Label>
+                                    <Input
+                                        placeholder="Ej: M2 106, NPR..."
+                                        value={newCompatForm.vehicleModel}
+                                        onChange={(e) => setNewCompatForm(prev => ({ ...prev, vehicleModel: e.target.value }))}
+                                        className="h-8 text-xs font-bold"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="space-y-1">
+                                <Label className="text-[11px] font-bold text-muted-foreground">Notas de Compatibilidad (Especificaciones)</Label>
+                                <Input
+                                    placeholder="Ej: Filtro de aceite primario para motores Cummins ISB 6.7L, capacidad 15L..."
+                                    value={newCompatForm.notes}
+                                    onChange={(e) => setNewCompatForm(prev => ({ ...prev, notes: e.target.value }))}
+                                    className="h-8 text-xs"
+                                />
+                            </div>
+
+                            <Button
+                                onClick={handleAddCompatibility}
+                                disabled={savingCompat}
+                                className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs h-9 gap-1.5 shadow-sm"
+                            >
+                                {savingCompat ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                                Agregar Vincular Compatibilidad
+                            </Button>
+                        </div>
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setIsCompatModalOpen(false)}>Cerrar</Button>
                     </DialogFooter>
                 </DialogContent>
             </Dialog>

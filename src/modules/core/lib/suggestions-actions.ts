@@ -68,13 +68,15 @@ export async function getUnreadSuggestionsCount(): Promise<number> {
  */
 export async function addSuggestion(content: string, userId: number | null | undefined, userName: string): Promise<void> {
     const db = await getDb();
-    let newSuggestionId;
+    let newSuggestionId: number | bigint | undefined;
+
+    const parsedUserId = (typeof userId === 'number' && !isNaN(userId) && userId > 0) ? userId : null;
+
     try {
-        const dbUserId = (userId && userId !== 0) ? userId : null;
         const info = db.prepare(`
             INSERT INTO core_suggestions (content, userId, userName, isRead, timestamp)
             VALUES (?, ?, ?, 0, ?)
-        `).run(content, dbUserId, userName, new Date().toISOString());
+        `).run(content, parsedUserId, userName, new Date().toISOString());
         newSuggestionId = info.lastInsertRowid;
         
         await logInfo('New suggestion submitted', { user: userName });
@@ -86,6 +88,7 @@ export async function addSuggestion(content: string, userId: number | null | und
         throw error;
     }
 
+    // Isolate notification dispatch: notification failure must never block or throw
     if (newSuggestionId) {
         try {
             await createNotificationForPermission(
@@ -97,7 +100,7 @@ export async function addSuggestion(content: string, userId: number | null | und
                 'new-suggestion'
             );
         } catch (notificationError: any) {
-            logError("Failed to create notification for new suggestion", { error: notificationError.message, suggestionId: newSuggestionId });
+            logError("Failed to create notification for new suggestion", { error: notificationError.message, suggestionId: Number(newSuggestionId) });
         }
     }
 }

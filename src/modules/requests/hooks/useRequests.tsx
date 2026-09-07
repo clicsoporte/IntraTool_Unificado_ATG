@@ -26,7 +26,7 @@ import { es } from 'date-fns/locale';
 import { useAuth } from '@/modules/core/hooks/useAuth';
 import { useDebounce } from 'use-debounce';
 import { generateDocument } from '@/modules/core/lib/pdf-generator';
-import { getDaysRemaining as getSimpleDaysRemaining } from '@/modules/core/lib/time-utils';
+import { getDaysRemaining as getSimpleDaysRemaining, getLocalDateStr, formatDateToLocal } from '@/modules/core/lib/time-utils';
 import { exportToExcel } from '@/modules/core/lib/excel-export';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { usePageTitle } from '@/modules/core/hooks/usePageTitle';
@@ -39,7 +39,7 @@ const normalizeText = (text: string | null | undefined): string => {
 };
 
 const emptyRequest: Omit<PurchaseRequest, 'id' | 'consecutive' | 'requestDate' | 'status' | 'reopened' | 'requestedBy' | 'deliveredQuantity' | 'receivedInWarehouseBy' | 'receivedDate' | 'previousStatus' | 'lastModifiedAt' | 'lastModifiedBy' | 'hasBeenModified' | 'approvedBy' | 'lastStatusUpdateBy' | 'lastStatusUpdateNotes'> = {
-    requiredDate: new Date().toISOString().split('T')[0],
+    requiredDate: getLocalDateStr(),
     clientId: '',
     clientName: '',
     clientTaxId: '',
@@ -349,7 +349,7 @@ export const useRequests = () => {
                         clientTaxId: customer?.taxId || '',
                         purchaseOrder: searchParams.get('purchaseOrder') || '',
                         notes: searchParams.get('notes') || '',
-                        requiredDate: searchParams.get('requiredDate') || new Date().toISOString().split('T')[0],
+                        requiredDate: searchParams.get('requiredDate') || getLocalDateStr(),
                     };
                     updateState({ newRequest: { ...emptyRequest, ...newRequestData }, isNewRequestDialogOpen: true });
                     // Clean URL
@@ -524,7 +524,7 @@ export const useRequests = () => {
 
             const requestWithFormattedDate = {
                 ...state.newRequest,
-                requiredDate: new Date(state.newRequest.requiredDate).toISOString().split('T')[0]
+                requiredDate: formatDateToLocal(state.newRequest.requiredDate)
             };
 
             updateState({ isSubmitting: true });
@@ -764,7 +764,7 @@ export const useRequests = () => {
             try {
                 for (const line of selectedLines) {
                     const requestPayload: Omit<PurchaseRequest, 'id'|'consecutive'|'requestDate'|'status'|'reopened'|'requestedBy'|'deliveredQuantity'|'receivedInWarehouseBy'|'receivedDate'|'previousStatus'|'lastModifiedAt'|'lastModifiedBy'|'hasBeenModified'|'approvedBy'|'lastStatusUpdateBy'|'lastStatusUpdateNotes'> = {
-                        requiredDate: new Date(erpHeader.FECHA_PROMETIDA).toISOString().split('T')[0],
+                        requiredDate: formatDateToLocal(erpHeader.FECHA_PROMETIDA),
                         clientId: erpHeader.CLIENTE,
                         clientName: client?.name || erpHeader.CLIENTE_NOMBRE || '',
                         clientTaxId: customers.find(c => c.id === erpHeader.CLIENTE)?.taxId || '',
@@ -969,7 +969,7 @@ export const useRequests = () => {
         setCurrentPage: (page: number | ((p: number) => number)) => updateState({ currentPage: typeof page === 'function' ? page(state.currentPage) : page }),
         setNewRequestDialogOpen: (isOpen: boolean) => updateState({ 
             isNewRequestDialogOpen: isOpen, 
-            newRequest: { ...emptyRequest, requiredDate: new Date().toISOString().split('T')[0], requiresCurrency: true }, 
+            newRequest: { ...emptyRequest, requiredDate: getLocalDateStr(), requiresCurrency: true }, 
             clientSearchTerm: '', 
             itemSearchTerm: '' 
         }),

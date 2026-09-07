@@ -194,6 +194,8 @@ export type ApiSettings = {
     haciendaExemptionApi: string;
     haciendaTributariaApi: string;
     recopeApi?: string;
+    navixyBaseUrl?: string;
+    navixyApiKey?: string;
 };
 
 /**
@@ -709,7 +711,7 @@ export type WizardSession = {
 export type Suggestion = {
   id: number;
   content: string;
-  userId: number;
+  userId: number | null;
   userName: string;
   isRead: 0 | 1;
   timestamp: string;

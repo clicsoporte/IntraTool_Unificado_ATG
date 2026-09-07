@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useToast } from '@/modules/core/hooks/use-toast';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,6 +25,13 @@ import {
     SelectTrigger,
     SelectValue
 } from '@/components/ui/select';
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogDescription,
+} from '@/components/ui/dialog';
 import { 
     RefreshCw, 
     Tv, 
@@ -40,57 +48,37 @@ import {
 } from '@/modules/operations/lib/actions';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useAuthorization } from '@/modules/core/hooks/useAuthorization';
+import { getLocalDateStr } from '@/modules/core/lib/time-utils';
 
 // Hooks
 import { useDeliveriesMonitor } from '@/modules/operations/hooks/useDeliveriesMonitor';
 
+import dynamic from 'next/dynamic';
+
 // Subcomponents
 import { EvidencePhotoViewer } from '@/modules/operations/components/EvidencePhotoViewer';
+import { IncompleteDeliveryModal, IncompleteDocData } from '@/modules/operations/components/IncompleteDeliveryModal';
 import { ContingencyReportDialog } from '@/modules/operations/components/ContingencyReportDialog';
 import { ActiveDeliveriesTab } from '@/modules/operations/components/ActiveDeliveriesTab';
-import { HistoricalDeliveriesTab } from '@/modules/operations/components/HistoricalDeliveriesTab';
-import { TelegramLogsTab } from '@/modules/operations/components/TelegramLogsTab';
-import { LogisticsMetricsTab } from '@/modules/operations/components/LogisticsMetricsTab';
 
-interface CountdownBadgeProps {
-    refreshIntervalSec: number;
-    silentRefresh: (includeCompleted: boolean) => Promise<void>;
-    showCompletedToday: boolean;
-    refreshing: boolean;
-}
+const HistoricalDeliveriesTab = dynamic(
+    () => import('@/modules/operations/components/HistoricalDeliveriesTab').then(m => m.HistoricalDeliveriesTab),
+    { ssr: false, loading: () => <div className="p-8 text-center text-xs font-semibold text-muted-foreground animate-pulse">Cargando Historial de Entregas...</div> }
+);
 
-function CountdownBadge({ refreshIntervalSec, silentRefresh, showCompletedToday, refreshing }: CountdownBadgeProps) {
-    const [secondsLeft, setSecondsLeft] = useState(refreshIntervalSec);
+const TelegramLogsTab = dynamic(
+    () => import('@/modules/operations/components/TelegramLogsTab').then(m => m.TelegramLogsTab),
+    { ssr: false, loading: () => <div className="p-8 text-center text-xs font-semibold text-muted-foreground animate-pulse">Cargando Auditoría Telegram...</div> }
+);
 
-    useEffect(() => {
-        if (refreshIntervalSec === 0) return;
-        setSecondsLeft(refreshIntervalSec);
-
-        const timer = setInterval(() => {
-            setSecondsLeft((prev) => {
-                if (prev <= 1) {
-                    silentRefresh(showCompletedToday);
-                    return refreshIntervalSec;
-                }
-                return prev - 1;
-            });
-        }, 1000);
-
-        return () => clearInterval(timer);
-    }, [refreshIntervalSec, silentRefresh, showCompletedToday]);
-
-    if (refreshIntervalSec === 0) {
-        return <span className="text-[10px] font-extrabold">Refresco</span>;
-    }
-
-    return (
-        <span className="text-[10px] text-emerald-500 font-extrabold animate-pulse">
-            🔴 EN VIVO ({secondsLeft}s)
-        </span>
-    );
-}
+const ApkLogsTab = dynamic(
+    () => import('@/modules/operations/components/ApkLogsTab').then(m => m.ApkLogsTab),
+    { ssr: false, loading: () => <div className="p-8 text-center text-xs font-semibold text-muted-foreground animate-pulse">Cargando Logs de APK...</div> }
+);
 
 export default function DeliveriesDashboardPage() {
+    const router = useRouter();
+    const isFirstRender = useRef(true);
     const { toast } = useToast();
     const { hasPermission } = useAuthorization(['deliveries:read']);
     const [tvMode, setTvMode] = useState(false);
@@ -105,6 +93,7 @@ export default function DeliveriesDashboardPage() {
         setRefreshIntervalSec,
         assignments,
         deliveries,
+        telemetryMap,
         settings,
         showCompletedToday,
         sortedAssignments,
@@ -112,14 +101,8 @@ export default function DeliveriesDashboardPage() {
         toggleShowCompletedToday
     } = useDeliveriesMonitor();
 
-    // Utility for local calendar date without UTC offset issues
-    const getLocalDateStr = () => {
-        const d = new Date();
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    };
-
     // Tabs and Historical State
-    const [activeTab, setActiveTab] = useState<'active' | 'history' | 'telegram' | 'metrics'>('active');
+    const [activeTab, setActiveTab] = useState<'active' | 'history' | 'telegram' | 'apk' | 'metrics'>('active');
     const [historyDate, setHistoryDate] = useState<string>(getLocalDateStr());
     const [historicalAssignments, setHistoricalAssignments] = useState<any[]>([]);
     const [historicalDeliveries, setHistoricalDeliveries] = useState<any[]>([]);
@@ -143,7 +126,9 @@ export default function DeliveriesDashboardPage() {
 
     // Contingency Modal & Evidence states
     const [modalOpen, setModalOpen] = useState(false);
-    const [selectedPhoto, setSelectedPhoto] = useState<{ url: string; title: string } | null>(null);
+    const [helpOpen, setHelpOpen] = useState(false);
+    const [selectedPhoto, setSelectedPhoto] = useState<import('@/modules/operations/components/EvidencePhotoViewer').SelectedPhoto | null>(null);
+    const [selectedIncompleteDoc, setSelectedIncompleteDoc] = useState<IncompleteDocData | null>(null);
     const [selectedDoc, setSelectedDoc] = useState<any>(null);
 
     // Load historical assignments & deliveries
@@ -172,17 +157,24 @@ export default function DeliveriesDashboardPage() {
         }
     }, []);
 
-    // Sync tvMode changes back to URL search parameters
+    // Sync tvMode changes back to URL search parameters only when user toggles it
     useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        if (tvMode) {
-            params.set('tv', 'true');
-        } else {
-            params.delete('tv');
+        if (isFirstRender.current) {
+            isFirstRender.current = false;
+            return;
         }
-        const newRelativePathQuery = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
-        window.history.replaceState(window.history.state, '', newRelativePathQuery);
-        window.dispatchEvent(new Event('locationchange'));
+        const params = new URLSearchParams(window.location.search);
+        const currentTvInUrl = params.get('tv') === 'true';
+        if (tvMode !== currentTvInUrl) {
+            if (tvMode) {
+                params.set('tv', 'true');
+            } else {
+                params.delete('tv');
+            }
+            const query = params.toString() ? `?${params.toString()}` : '';
+            const newUrl = `${window.location.pathname}${query}`;
+            window.history.replaceState(null, '', newUrl);
+        }
     }, [tvMode]);
 
     // Fetch history whenever date or history tab is selected
@@ -193,13 +185,13 @@ export default function DeliveriesDashboardPage() {
     }, [activeTab, historyDate, loadHistoryData]);
 
     // Helper to proceed with opening manual delivery contingency modal after confirmation
-    async function proceedWithManualDelivery(doc: any) {
+    const proceedWithManualDelivery = useCallback((doc: any) => {
         setSelectedDoc(doc);
         setModalOpen(true);
-    }
+    }, []);
 
     // Opens manual delivery contingency modal
-    async function handleOpenManualDelivery(doc: any) {
+    const handleOpenManualDelivery = useCallback(async (doc: any) => {
         const isLocked = doc.telegram_lock_at && (new Date().getTime() - new Date(doc.telegram_lock_at).getTime() < 5 * 60 * 1000);
         if (isLocked) {
             setConfirmConfig({
@@ -214,10 +206,10 @@ export default function DeliveriesDashboardPage() {
             return;
         }
 
-        await proceedWithManualDelivery(doc);
-    }
+        proceedWithManualDelivery(doc);
+    }, [proceedWithManualDelivery]);
 
-    async function handleRevertDelivery(doc: any) {
+    const handleRevertDelivery = useCallback(async (doc: any) => {
         setConfirmConfig({
             isOpen: true,
             title: '⚠️ ¿REVERTIR ENTREGA A PENDIENTE? ⚠️',
@@ -258,9 +250,9 @@ export default function DeliveriesDashboardPage() {
             cancelLabel: 'Cancelar',
             isDestructive: true
         });
-    }
+    }, [activeTab, historyDate, showCompletedToday, silentRefresh, toast]);
 
-    const handleConfirmManualReport = async (data: {
+    const handleConfirmManualReport = useCallback(async (data: {
         estado: 'completo' | 'incompleto' | 'rechazado';
         comentario: string;
         lines?: any[];
@@ -292,7 +284,7 @@ export default function DeliveriesDashboardPage() {
             });
             return false;
         }
-    };
+    }, [selectedDoc, showCompletedToday, silentRefresh, toast]);
 
     // UI filters
     const displayedDeliveries = useMemo(() => {
@@ -327,7 +319,7 @@ export default function DeliveriesDashboardPage() {
             bg: 'bg-slate-100 p-4 rounded-xl text-slate-800 border border-slate-200 shadow-md w-full',
             cardBg: 'bg-white border border-slate-200/85 shadow-sm',
             textTitle: 'text-slate-900',
-            textMuted: 'text-slate-505',
+            textMuted: 'text-slate-500',
             border: 'border-slate-200',
             controlBg: 'border-slate-200 bg-white text-slate-700',
             btnOutline: 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-slate-900',
@@ -337,25 +329,20 @@ export default function DeliveriesDashboardPage() {
 
     const themeStyles = tvMode ? themes[tvTheme] : null;
 
-    if (loading) {
-        return (
-            <div className="flex items-center justify-center p-12 bg-card rounded-2xl border border-muted animate-pulse">
-                <div className="text-center space-y-4">
-                    <RefreshCw className="w-8 h-8 animate-spin mx-auto text-blue-500" />
-                    <p className="text-muted-foreground font-medium">Cargando monitor en tiempo real...</p>
-                </div>
-            </div>
-        );
-    }
-
     return (
-        <div className={`space-y-6 ${tvMode ? `${themeStyles?.bg} transition-colors duration-300` : ''}`}>
+        <div className={`space-y-6 ${tvMode ? `${themeStyles?.bg}` : ''}`}>
             
             {/* Header controls */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                 <div className="space-y-1">
-                    <h2 className={`text-xl font-extrabold tracking-tight ${tvMode ? themeStyles?.textTitle : ''}`}>
+                    <h2 className={`text-xl font-extrabold tracking-tight flex items-center gap-2 ${tvMode ? themeStyles?.textTitle : ''}`}>
                         Trazabilidad Logística en Tiempo Real
+                        {loading && (
+                            <span className="inline-flex items-center gap-1.5 text-[10px] font-extrabold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800/60 px-2.5 py-0.5 rounded-full animate-pulse">
+                                <RefreshCw className="w-3 h-3 animate-spin text-blue-600 dark:text-blue-400" />
+                                Cargando en segundo plano...
+                            </span>
+                        )}
                     </h2>
                     <p className={`text-xs font-medium ${tvMode ? themeStyles?.textMuted : 'text-muted-foreground'}`}>
                         Monitoree la flota en ruta y resuelva incidencias o registre contingencias manuales.
@@ -410,13 +397,20 @@ export default function DeliveriesDashboardPage() {
                             : 'border-muted bg-background/50 backdrop-blur text-muted-foreground'
                     }`}>
                         <span className="flex items-center gap-1.5 shrink-0">
-                            <RefreshCw className={`w-3.5 h-3.5 ${refreshIntervalSec > 0 ? 'animate-spin text-emerald-500' : (tvMode ? (tvTheme === 'light' ? 'text-slate-500' : 'text-slate-400') : 'text-muted-foreground')}`} style={{ animationDuration: refreshIntervalSec > 0 ? '3s' : undefined }} />
-                            <CountdownBadge 
-                                refreshIntervalSec={refreshIntervalSec} 
-                                silentRefresh={silentRefresh} 
-                                showCompletedToday={showCompletedToday} 
-                                refreshing={refreshing} 
-                            />
+                            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin text-blue-500' : refreshIntervalSec > 0 ? 'text-emerald-500' : (tvMode ? (tvTheme === 'light' ? 'text-slate-500' : 'text-slate-400') : 'text-muted-foreground')}`} />
+                            {refreshing ? (
+                                <span className="text-[10px] text-blue-500 font-extrabold animate-pulse">
+                                    ↻ Actualizando...
+                                </span>
+                            ) : refreshIntervalSec > 0 ? (
+                                <span className="text-[10px] text-emerald-500 font-extrabold">
+                                    🔴 EN VIVO
+                                </span>
+                            ) : (
+                                <span className="text-[10px] text-muted-foreground font-extrabold">
+                                    ⏸ Pausado
+                                </span>
+                            )}
                         </span>
                         <Select 
                             value={String(refreshIntervalSec)} 
@@ -501,7 +495,7 @@ export default function DeliveriesDashboardPage() {
                         asChild
                         className="rounded-lg font-bold text-xs gap-1.5 border-blue-200 dark:border-blue-900/50 bg-blue-50 dark:bg-blue-950/20 text-blue-600 dark:text-blue-400 shadow-sm h-9 hover:bg-blue-100 dark:hover:bg-blue-950/40"
                     >
-                        <Link href="/dashboard/operations/logistics/deliveries/map">
+                        <Link href="/dashboard/operations/logistics/deliveries/map" prefetch={false}>
                             <MapPin className="w-3.5 h-3.5" />
                             Monitoreo Satelital 🗺️
                         </Link>
@@ -514,11 +508,113 @@ export default function DeliveriesDashboardPage() {
                         asChild
                         className="rounded-lg font-bold text-xs gap-1.5 border-purple-200 dark:border-purple-900/50 bg-purple-50 dark:bg-purple-950/20 text-purple-600 dark:text-purple-400 shadow-sm h-9 hover:bg-purple-100 dark:hover:bg-purple-950/40"
                     >
-                        <Link href="/dashboard/operations/logistics/deliveries/route-sheets">
+                        <Link href="/dashboard/operations/logistics/deliveries/route-sheets" prefetch={false}>
                             <FileText className="w-3.5 h-3.5" />
                             Hojas de Ruta 📋
                         </Link>
                     </Button>
+
+                    {/* Botón y Modal de Ayuda Operativa */}
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setHelpOpen(true)}
+                        className="rounded-lg font-bold text-xs gap-1.5 border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-950/20 text-amber-600 dark:text-amber-400 shadow-sm h-9 hover:bg-amber-100 dark:hover:bg-amber-950/40"
+                    >
+                        <HelpCircle className="w-3.5 h-3.5" />
+                        Ayuda ❓
+                    </Button>
+
+                    <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
+                        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto rounded-2xl p-6">
+                            <DialogHeader>
+                                <DialogTitle className="text-lg font-extrabold flex items-center gap-2 text-primary">
+                                    ❓ Guía Operativa de Tiempos y Optimización de Rutas
+                                </DialogTitle>
+                                <DialogDescription className="text-xs text-muted-foreground">
+                                    Manual rápido para la interpretación de estados GPS, cálculo de duraciones y gestión de entregas en tiempo real.
+                                </DialogDescription>
+                            </DialogHeader>
+
+                            <div className="space-y-4 text-xs pt-2">
+                                <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-900 dark:text-emerald-200 font-medium leading-relaxed">
+                                    🎯 <b>Objetivo de Optimización Logística:</b> Este monitor apoya a los equipos de transportes, despacho y bodega para coordinar la llegada de vehículos, agilizar la carga/descarga y brindar visibilidad en tiempo real del avance en ruta de las entregas.
+                                </div>
+
+                                <h4 className="font-extrabold text-sm text-foreground pt-1">⏱️ ¿Cómo se calcula y qué significa cada tiempo?</h4>
+
+                                <div className="space-y-3">
+                                    <div className="p-3 bg-card border-l-4 border-emerald-500 rounded-lg shadow-sm space-y-1">
+                                        <div className="flex items-center justify-between">
+                                            <b className="text-emerald-600 dark:text-emerald-400 text-xs uppercase tracking-wide">🟢 EN MOVIMIENTO</b>
+                                            <span className="text-[10px] text-muted-foreground">(En trayecto fuera de la empresa a &gt; 5 km/h)</span>
+                                        </div>
+                                        <p className="text-muted-foreground leading-relaxed">
+                                            • <b>¿Qué significa?</b> El camión se desplaza activamente hacia su destino o cliente.<br />
+                                            • <b>Cálculo del tiempo:</b> Tiempo continuo transcurrido desde que el vehículo inició el viaje actual (registro de cambio de estado en movimiento).
+                                        </p>
+                                    </div>
+
+                                    <div className="p-3 bg-card border-l-4 border-orange-500 rounded-lg shadow-sm space-y-1">
+                                        <div className="flex items-center justify-between">
+                                            <b className="text-orange-600 dark:text-orange-400 text-xs uppercase tracking-wide">🏢 EN LA EMPRESA</b>
+                                            <span className="text-[10px] text-muted-foreground">(En predio o parqueo principal)</span>
+                                        </div>
+                                        <p className="text-muted-foreground leading-relaxed">
+                                            • <b>¿Qué significa?</b> El camión está dentro del radio delimitado de la empresa en proceso de alistamiento, carga o retorno.<br />
+                                            • <b>Cálculo del tiempo:</b> Tiempo transcurrido desde que el vehículo ingresó al perímetro GPS configurado de la empresa.
+                                        </p>
+                                    </div>
+
+                                    <div className="p-3 bg-card border-l-4 border-yellow-500 rounded-lg shadow-sm space-y-1">
+                                        <div className="flex items-center justify-between">
+                                            <b className="text-yellow-600 dark:text-yellow-400 text-xs uppercase tracking-wide">🔑 DETENIDO (Motor ON / Ralentí)</b>
+                                            <span className="text-[10px] text-muted-foreground">(Detención temporal fuera de empresa)</span>
+                                        </div>
+                                        <p className="text-muted-foreground leading-relaxed">
+                                            • <b>¿Qué significa?</b> El vehículo está detenido (0 km/h) pero mantiene el motor encendido (atención en semáforo, maniobra o descarga corta).<br />
+                                            • <b>Cálculo del tiempo:</b> Minutos transcurridos desde que la velocidad bajó a 0 km/h manteniendo la ignición activada.
+                                        </p>
+                                    </div>
+
+                                    <div className="p-3 bg-card border-l-4 border-purple-500 rounded-lg shadow-sm space-y-1">
+                                        <div className="flex items-center justify-between">
+                                            <b className="text-purple-600 dark:text-purple-400 text-xs uppercase tracking-wide">🅿️ ESTACIONADO (Motor OFF)</b>
+                                            <span className="text-[10px] text-muted-foreground">(Atención a cliente o parqueo)</span>
+                                        </div>
+                                        <p className="text-muted-foreground leading-relaxed">
+                                            • <b>¿Qué significa?</b> El vehículo está parqueado fuera de la empresa con el motor apagado (entrega en cliente, almuerzo o fin de jornada).<br />
+                                            • <b>Cálculo del tiempo:</b> Diferencia exacta de tiempo desde que se registró el apagado de la llave del motor.
+                                        </p>
+                                    </div>
+
+                                    <div className="p-3 bg-card border-l-4 border-slate-400 rounded-lg shadow-sm space-y-1">
+                                        <div className="flex items-center justify-between">
+                                            <b className="text-slate-600 dark:text-slate-300 text-xs uppercase tracking-wide">📡 SIN SEÑAL GPS</b>
+                                            <span className="text-[10px] text-muted-foreground">(Sin cobertura temporal)</span>
+                                        </div>
+                                        <p className="text-muted-foreground leading-relaxed">
+                                            • <b>¿Qué significa?</b> El módem GPS perdió conexión celular o satelital temporalmente.<br />
+                                            • <b>Cálculo del tiempo:</b> Tiempo transcurrido desde la última transmisión válida recibida.
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <h4 className="font-extrabold text-sm text-foreground pt-2 border-t">📋 Elementos de Apoyo en Pantalla:</h4>
+                                <ul className="list-disc space-y-1.5 pl-5 text-muted-foreground">
+                                    <li><b>👤 Chofer &amp; 🛣️ Ruta:</b> Asignación operativa configurada para el día.</li>
+                                    <li><b>📅 Indicador de Asignación:</b> 🟢 <b>Hoy</b> (ruta al día) | ⚠️ <b>Desactualizada</b> (asignación previa pendiente de renovar).</li>
+                                    <li><b>⚡ Velocidad Instantánea:</b> Velocidad de avance reportada en tiempo real por el sensor Navixy.</li>
+                                </ul>
+
+                                <div className="pt-3 flex justify-end">
+                                    <Button onClick={() => setHelpOpen(false)} className="font-bold bg-emerald-600 hover:bg-emerald-700 text-white">
+                                        👍 Entendido
+                                    </Button>
+                                </div>
+                            </div>
+                        </DialogContent>
+                    </Dialog>
 
                     {/* TV Mode Toggle Button */}
                     <Button
@@ -575,30 +671,33 @@ export default function DeliveriesDashboardPage() {
                     Registros Bot Telegram
                 </button>
                 <button
-                    onClick={() => setActiveTab('metrics')}
+                    onClick={() => setActiveTab('apk')}
                     className={`pb-3 px-3 sm:px-6 text-xs sm:text-sm font-extrabold transition-all border-b-2 shrink-0 ${
-                        activeTab === 'metrics'
-                            ? 'border-blue-600 text-blue-600 dark:text-blue-400 dark:border-blue-400'
+                        activeTab === 'apk'
+                            ? 'border-purple-600 text-purple-600 dark:text-purple-400 dark:border-purple-400'
                             : `border-transparent ${tvMode ? (tvTheme === 'light' ? 'text-slate-500 hover:text-slate-800' : 'text-slate-400 hover:text-slate-200') : 'text-muted-foreground hover:text-foreground'}`
                     }`}
                 >
-                    📊 Rendimiento en Ruta
+                    📱 Registros APK
                 </button>
             </div>
 
             {/* Tab contents */}
             {activeTab === 'active' ? (
                 <ActiveDeliveriesTab 
+                    loading={loading}
                     assignments={assignments}
                     deliveries={deliveries}
                     displayedDeliveries={displayedDeliveries}
                     sortedAssignments={sortedAssignments}
+                    telemetryMap={telemetryMap}
                     tvMode={tvMode}
                     themeStyles={themeStyles}
                     hasPermission={hasPermission}
                     handleOpenManualDelivery={handleOpenManualDelivery}
                     handleRevertDelivery={handleRevertDelivery}
                     setSelectedPhoto={setSelectedPhoto}
+                    setSelectedIncompleteDoc={setSelectedIncompleteDoc}
                 />
             ) : activeTab === 'history' ? (
                 <HistoricalDeliveriesTab 
@@ -612,14 +711,12 @@ export default function DeliveriesDashboardPage() {
                     hasPermission={hasPermission}
                     handleRevertDelivery={handleRevertDelivery}
                     setSelectedPhoto={setSelectedPhoto}
+                    setSelectedIncompleteDoc={setSelectedIncompleteDoc}
                 />
             ) : activeTab === 'telegram' ? (
                 <TelegramLogsTab tvMode={tvMode} />
             ) : (
-                <LogisticsMetricsTab 
-                    assignments={assignments}
-                    deliveries={deliveries}
-                />
+                <ApkLogsTab tvMode={tvMode} />
             )}
 
             {/* Modals & Dialogs */}
@@ -634,6 +731,11 @@ export default function DeliveriesDashboardPage() {
             <EvidencePhotoViewer 
                 selectedPhoto={selectedPhoto}
                 onClose={() => setSelectedPhoto(null)}
+            />
+
+            <IncompleteDeliveryModal 
+                doc={selectedIncompleteDoc}
+                onClose={() => setSelectedIncompleteDoc(null)}
             />
 
             {/* Dynamic Confirmation Dialog (v4.1) */}

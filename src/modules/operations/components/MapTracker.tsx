@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
-import { Layers, Globe, Map, Moon, Eye, EyeOff, Route, Truck, MapPin } from 'lucide-react';
+import { Layers, Globe, Map, Moon, Eye, EyeOff, Route, Truck, MapPin, Compass } from 'lucide-react';
 
 // Keyframe animation injected dynamically for premium visual effects
 const INJECTED_STYLES = `
@@ -45,16 +45,18 @@ interface MapTrackerProps {
   gpsPaths: Record<number, any[]>;
   deliveryMarkers: any[];
   onMarkerClick?: (deliveryId: number) => void;
+  cartoApiKey?: string;
+  googleMapsApiKey?: string;
 }
 
-export default function MapTracker({ activeTrucks, gpsPaths, deliveryMarkers, onMarkerClick }: MapTrackerProps) {
+export default function MapTracker({ activeTrucks, gpsPaths, deliveryMarkers, onMarkerClick, cartoApiKey, googleMapsApiKey }: MapTrackerProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   const markersLayerRef = useRef<L.LayerGroup | null>(null);
 
   // Map settings state
-  const [mapType, setMapType] = useState<'dark' | 'satellite' | 'streets'>('dark');
+  const [mapType, setMapType] = useState<'dark' | 'satellite' | 'streets' | 'google'>('dark');
   const [showRoutes, setShowRoutes] = useState<boolean>(true);
   const [showDeliveries, setShowDeliveries] = useState<boolean>(true);
   const [showTrucks, setShowTrucks] = useState<boolean>(true);
@@ -101,20 +103,34 @@ export default function MapTracker({ activeTrucks, gpsPaths, deliveryMarkers, on
       tileLayerRef.current.remove();
     }
 
-    let url = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+    let url = cartoApiKey 
+      ? `https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png?key=${cartoApiKey}`
+      : 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
     let attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>';
-
+    let subdomains: string | string[] = 'abc';
     if (mapType === 'satellite') {
       url = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
       attribution = 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community';
+      subdomains = 'abc';
     } else if (mapType === 'streets') {
       url = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
       attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+      subdomains = 'abc';
+    } else if (mapType === 'google') {
+      url = googleMapsApiKey
+        ? `https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&key=${googleMapsApiKey}`
+        : 'https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}';
+      attribution = '&copy; <a href="https://www.google.com/maps">Google Maps</a>';
+      subdomains = ['mt0', 'mt1', 'mt2', 'mt3'];
+    } else {
+      // dark
+      subdomains = 'abcd';
     }
 
     tileLayerRef.current = L.tileLayer(url, {
       attribution,
-      maxZoom: 20
+      maxZoom: 20,
+      subdomains
     }).addTo(map);
 
     // Clear previous dynamic layers
@@ -146,7 +162,7 @@ export default function MapTracker({ activeTrucks, gpsPaths, deliveryMarkers, on
       deliveryMarkers.forEach(del => {
         const lat = del.latitud;
         const lng = del.longitud;
-        if (!lat || !lng) return;
+        if (!lat || !lng || !isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return;
         
         // Group using 5 decimal places (approx 1.1 meters precision)
         const key = `${lat.toFixed(5)},${lng.toFixed(5)}`;
@@ -160,6 +176,7 @@ export default function MapTracker({ activeTrucks, gpsPaths, deliveryMarkers, on
         const [latStr, lngStr] = coordsKey.split(',');
         const lat = parseFloat(latStr);
         const lng = parseFloat(lngStr);
+        if (!isFinite(lat) || !isFinite(lng)) return;
         const latLng = L.latLng(lat, lng);
         bounds.push(latLng);
 
@@ -207,7 +224,7 @@ export default function MapTracker({ activeTrucks, gpsPaths, deliveryMarkers, on
           if (del.estado === 'rechazado') itemStatusLabel = 'Rechazado 🔴';
 
           const formattedTime = del.fecha_entrega 
-            ? new Date(del.fecha_entrega).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+            ? new Date(del.fecha_entrega).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit', hour12: true }) 
             : '';
 
           popupContent += `
@@ -243,7 +260,7 @@ export default function MapTracker({ activeTrucks, gpsPaths, deliveryMarkers, on
       activeTrucks.forEach(truck => {
         const lat = truck.latitud;
         const lng = truck.longitud;
-        if (!lat || !lng) return;
+        if (!lat || !lng || !isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return;
 
         const latLng = L.latLng(lat, lng);
         bounds.push(latLng);
@@ -275,7 +292,7 @@ export default function MapTracker({ activeTrucks, gpsPaths, deliveryMarkers, on
             <div style="font-size: 11px; margin-bottom: 4px;"><b>Chofer:</b> ${truck.chofer_nombre}</div>
             <div style="font-size: 11px; margin-bottom: 4px;"><b>Placa:</b> ${truck.vehiculo_placa}</div>
             ${truck.siguiente_cliente ? `<div style="font-size: 11px; margin-bottom: 4px; color: #fbbf24;">📍 <b>Destino actual:</b> ${truck.siguiente_cliente}</div>` : ''}
-            <div style="font-size: 10px; color: #9ca3af; margin-top: 4px;">⏱️ Último reporte: ${new Date(truck.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+            <div style="font-size: 10px; color: #9ca3af; margin-top: 4px;">⏱️ Último reporte: ${new Date(truck.timestamp).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit', hour12: true })}</div>
           </div>
         `;
 
@@ -297,7 +314,7 @@ export default function MapTracker({ activeTrucks, gpsPaths, deliveryMarkers, on
       prevDataHashRef.current = currentDataHash;
     }
 
-  }, [activeTrucks, gpsPaths, deliveryMarkers, onMarkerClick, mapType, showRoutes, showDeliveries, showTrucks]);
+  }, [activeTrucks, gpsPaths, deliveryMarkers, onMarkerClick, mapType, showRoutes, showDeliveries, showTrucks, cartoApiKey, googleMapsApiKey]);
 
   // Clean up on unmount
   useEffect(() => {
@@ -338,7 +355,7 @@ export default function MapTracker({ activeTrucks, gpsPaths, deliveryMarkers, on
         {/* Base Map Selector */}
         <div className="space-y-1.5">
           <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider">Fondo del Mapa</span>
-          <div className="grid grid-cols-3 gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800/40">
+          <div className="grid grid-cols-4 gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800/40">
             <button
               onClick={() => setMapType('dark')}
               className={`flex flex-col items-center justify-center py-1 px-1 rounded-md transition-all ${
@@ -371,6 +388,17 @@ export default function MapTracker({ activeTrucks, gpsPaths, deliveryMarkers, on
             >
               <Map className="w-3.5 h-3.5 mb-0.5" />
               <span className="text-[9px] tracking-tight">Calles</span>
+            </button>
+            <button
+              onClick={() => setMapType('google')}
+              className={`flex flex-col items-center justify-center py-1 px-1 rounded-md transition-all ${
+                mapType === 'google' 
+                  ? 'bg-emerald-600 text-white font-bold shadow-md' 
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
+              }`}
+            >
+              <Compass className="w-3.5 h-3.5 mb-0.5" />
+              <span className="text-[9px] tracking-tight">Google</span>
             </button>
           </div>
         </div>

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import Image from 'next/image';
 import { useAuth } from '@/modules/core/hooks/useAuth';
 import { usePageTitle } from '@/modules/core/hooks/usePageTitle';
 import { 
@@ -104,6 +105,7 @@ export default function SupportTicketsPage() {
     const [searchItem, setSearchItem] = useState('');
     const [selectedItemId, setSelectedItemId] = useState('');
     const [consumeQty, setConsumeQty] = useState(1);
+    const [onlyCompatibleParts, setOnlyCompatibleParts] = useState(true);
     
     // Dynamic Maintenance Types
     const [maintenanceTypes, setMaintenanceTypes] = useState<string[]>([]);
@@ -663,7 +665,7 @@ export default function SupportTicketsPage() {
     }
 
     return (
-        <div className="p-4 md:p-6 space-y-6 animate-in fade-in duration-500">
+        <div className="p-4 md:p-6 space-y-6 animate-in fade-in duration-150">
             {/* Header section */}
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
                 <div className="flex items-center gap-4">
@@ -1371,24 +1373,59 @@ export default function SupportTicketsPage() {
 
                                 {/* Part Consumption Section */}
                                 <div className="space-y-4">
-                                    <h3 className="font-bold text-base flex items-center gap-1.5"><HardDrive className="w-5 h-5 text-blue-600" /> Repuestos Consumidos en Reparación</h3>
+                                    <div className="flex items-center justify-between">
+                                        <h3 className="font-bold text-base flex items-center gap-1.5"><HardDrive className="w-5 h-5 text-blue-600" /> Repuestos Consumidos en Reparación</h3>
+                                        {selectedTicket.serial_number && (
+                                            <Badge className="bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 font-mono text-[11px] font-bold">
+                                                🚚 Vehículo: {selectedTicket.serial_number}
+                                            </Badge>
+                                        )}
+                                    </div>
                                     
                                     {selectedTicket.status !== 'completed' && selectedTicket.status !== 'canceled' && (
                                         <div className="p-4 border rounded-xl space-y-3 bg-white dark:bg-slate-900/50">
-                                            <Label className="font-bold text-xs">Vincular repuesto de bodega</Label>
+                                            <div className="flex items-center justify-between">
+                                                <Label className="font-bold text-xs">Vincular repuesto de bodega</Label>
+                                                <label className="flex items-center gap-1.5 text-xs font-semibold text-indigo-700 dark:text-indigo-300 cursor-pointer">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={onlyCompatibleParts}
+                                                        onChange={(e) => setOnlyCompatibleParts(e.target.checked)}
+                                                        className="rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500 h-3.5 w-3.5"
+                                                    />
+                                                    <span>🎯 Destacar / Filtrar Compatibles</span>
+                                                </label>
+                                            </div>
                                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                                                 <div className="sm:col-span-2">
                                                     <select
                                                         value={selectedItemId}
                                                         onChange={(e) => setSelectedItemId(e.target.value)}
-                                                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                                                        className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-semibold"
                                                     >
                                                         <option value="">Selecciona repuesto...</option>
-                                                        {invItems.map(item => (
-                                                            <option key={item.id} value={item.id} disabled={item.quantity <= 0}>
-                                                                {item.name} ({item.quantity} disponibles {item.unit}) - Lote: {item.batch_number || 'S/L'}
-                                                            </option>
-                                                        ))}
+                                                        {invItems
+                                                            .filter(item => {
+                                                                if (!onlyCompatibleParts) return true;
+                                                                const ticketPlate = (selectedTicket.serial_number || '').toUpperCase().trim();
+                                                                const ticketBrand = (selectedTicket.brand || '').toUpperCase().trim();
+                                                                const itemBrand = (item.brand || '').toUpperCase().trim();
+                                                                
+                                                                // If item brand matches vehicle brand or general filter
+                                                                if (itemBrand && ticketBrand && itemBrand.includes(ticketBrand)) return true;
+                                                                if (ticketPlate && item.name.toUpperCase().includes(ticketPlate)) return true;
+                                                                return true; // Keep list accessible
+                                                            })
+                                                            .map(item => {
+                                                                const ticketBrand = (selectedTicket.brand || '').toUpperCase().trim();
+                                                                const itemBrand = (item.brand || '').toUpperCase().trim();
+                                                                const isMatch = itemBrand && ticketBrand && itemBrand.includes(ticketBrand);
+                                                                return (
+                                                                    <option key={item.id} value={item.id} disabled={item.quantity <= 0}>
+                                                                        {isMatch ? '✅ ' : ''}{item.name} ({item.quantity} dispon. {item.unit}) - Marca: {item.brand || 'S/M'} - SKU: {item.part_number || item.id}
+                                                                    </option>
+                                                                );
+                                                            })}
                                                     </select>
                                                 </div>
                                                 <div className="flex gap-2">
@@ -1397,14 +1434,14 @@ export default function SupportTicketsPage() {
                                                         min="1"
                                                         value={consumeQty}
                                                         onChange={(e) => setConsumeQty(Number(e.target.value))}
-                                                        className="w-20"
+                                                        className="w-20 font-bold"
                                                     />
-                                                    <Button type="button" onClick={handleLinkPart} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs">
+                                                    <Button type="button" onClick={handleLinkPart} className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm">
                                                         Consumir
                                                     </Button>
                                                 </div>
+                                                {errorMsg && <p className="text-xs font-bold text-red-500 mt-1">{errorMsg}</p>}
                                             </div>
-                                            {errorMsg && <p className="text-xs font-bold text-red-500 mt-1">{errorMsg}</p>}
                                         </div>
                                     )}
 
@@ -1765,12 +1802,13 @@ export default function SupportTicketsPage() {
                         </div>
                     </DialogHeader>
                     {selectedPhoto && (
-                        <div className="relative w-full max-h-[80vh] flex items-center justify-center p-2 bg-slate-950">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img 
+                        <div className="relative w-full h-[60vh] flex items-center justify-center p-2 bg-slate-950">
+                            <Image 
                                 src={`/api/fleet/files/${selectedPhoto}`} 
                                 alt="Comprobante" 
-                                className="max-w-full max-h-[70vh] object-contain rounded-lg shadow-md border border-white/5 transition-all duration-300"
+                                fill
+                                className="object-contain rounded-lg shadow-md border border-white/5 transition-all duration-300"
+                                unoptimized
                             />
                         </div>
                     )}

@@ -101,6 +101,15 @@ export async function initializeFleetSchema(db: Database) {
     if (!existingFuelLogsColumns.includes('fuelTypeId')) {
         db.exec(`ALTER TABLE ${FLEET_TABLES.fuelLogs} ADD COLUMN fuelTypeId INTEGER`);
     }
+    if (!existingFuelLogsColumns.includes('odometro_manual')) {
+        try {
+            db.exec(`ALTER TABLE ${FLEET_TABLES.fuelLogs} ADD COLUMN odometro_manual REAL`);
+            db.exec(`ALTER TABLE ${FLEET_TABLES.fuelLogs} ADD COLUMN odometro_gps REAL`);
+            db.exec(`ALTER TABLE ${FLEET_TABLES.fuelLogs} ADD COLUMN discrepancia_odometro REAL`);
+        } catch (e: any) {
+            console.error('[Fleet Schema] Error adding odometer columns to fuel logs:', e.message);
+        }
+    }
 
     // 3. Maintenance Logs
     db.exec(`
@@ -127,6 +136,14 @@ export async function initializeFleetSchema(db: Database) {
             console.log('[Fleet Schema Seeder] Added ticket_id column to fleet_maintenance_logs successfully.');
         } catch (error) {
             console.error('[Fleet Schema Seeder] Error adding ticket_id column to fleet_maintenance_logs:', error);
+        }
+    }
+    if (!existingMaintLogsColumns.includes('odometro_manual')) {
+        try {
+            db.exec(`ALTER TABLE ${FLEET_TABLES.maintenanceLogs} ADD COLUMN odometro_manual REAL`);
+            db.exec(`ALTER TABLE ${FLEET_TABLES.maintenanceLogs} ADD COLUMN odometro_gps REAL`);
+        } catch (e: any) {
+            console.error('[Fleet Schema] Error adding odometer columns to maintenance logs:', e.message);
         }
     }
 

@@ -7,6 +7,7 @@
 'use client';
 
 import React, { createContext, useState, useContext, ReactNode, FC } from "react";
+import { usePathname } from "next/navigation";
 
 /**
  * Defines the shape of the context's value.
@@ -38,6 +39,13 @@ interface PageTitleProviderProps {
  */
 export const PageTitleProvider: FC<PageTitleProviderProps> = ({ children, initialTitle }) => {
   const [title, setTitle] = useState(initialTitle);
+  const pathname = usePathname();
+  const [prevPathname, setPrevPathname] = useState(pathname);
+
+  if (prevPathname !== pathname) {
+    setPrevPathname(pathname);
+    setTitle(initialTitle);
+  }
 
   return (
     <PageTitleContext.Provider value={{ title, setTitle }}>

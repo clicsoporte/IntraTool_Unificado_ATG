@@ -6,12 +6,13 @@ import {
     Calendar, Truck, Fuel, TrendingUp, DollarSign, Activity, SlidersHorizontal,
     Camera, Pin, Check
 } from 'lucide-react';
+import Image from 'next/image';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import * as XLSX from 'xlsx';
+import { exportToExcel } from '@/modules/core/lib/excel-export';
 import { cn } from '@/lib/utils';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { 
@@ -22,6 +23,7 @@ import {
   DialogTitle, 
 } from "@/components/ui/dialog";
 import { saveUserPreferenceAction } from '@/modules/core/lib/auth';
+import { getLocalDateStr } from '@/modules/core/lib/time-utils';
 import { useToast } from '@/modules/core/hooks/use-toast';
 
 const parseLogPhoto = (text: string | null | undefined) => {
@@ -35,21 +37,58 @@ const parseLogPhoto = (text: string | null | undefined) => {
     return { cleanText: text, photoFilename: null };
 };
 
+const formatLocalDate = (dateStr: string | null | undefined): string => {
+    if (!dateStr) return '';
+    const parts = dateStr.split('T')[0].split('-');
+    if (parts.length === 3) {
+        const [year, month, day] = parts;
+        return `${day}/${month}/${year}`;
+    }
+    return dateStr;
+};
+
+const parseInputDate = (dateStr: string, isEndOfDay: boolean = false): Date | null => {
+    if (!dateStr) return null;
+    const parts = dateStr.split('T')[0].split('-');
+    if (parts.length === 3) {
+        const year = parseInt(parts[0], 10);
+        const month = parseInt(parts[1], 10) - 1;
+        const day = parseInt(parts[2], 10);
+        if (isEndOfDay) {
+            return new Date(year, month, day, 23, 59, 59, 999);
+        } else {
+            return new Date(year, month, day, 0, 0, 0, 0);
+        }
+    }
+    return new Date(dateStr);
+};
+
+const parseLogDate = (dateStr: string | null | undefined): Date | null => {
+    if (!dateStr) return null;
+    const cleanStr = dateStr.replace(' ', 'T');
+    if (cleanStr.length === 10 && cleanStr.includes('-')) {
+        const parts = cleanStr.split('-');
+        if (parts.length === 3) {
+            return new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10), 0, 0, 0, 0);
+        }
+    }
+    return new Date(cleanStr);
+};
+
 const calculatePresetDates = (preset: string) => {
     const today = new Date();
-    const format = (d: Date) => d.toISOString().split('T')[0];
     
     if (preset === 'current_month') {
         const firstDay = new Date(today.getFullYear(), today.getMonth(), 1);
-        return { from: format(firstDay), to: format(today) };
+        return { from: getLocalDateStr(firstDay), to: getLocalDateStr(today) };
     } else if (preset === '3_months') {
         const dateFrom = new Date();
         dateFrom.setMonth(today.getMonth() - 3);
-        return { from: format(dateFrom), to: format(today) };
+        return { from: getLocalDateStr(dateFrom), to: getLocalDateStr(today) };
     } else if (preset === '6_months') {
         const dateFrom = new Date();
         dateFrom.setMonth(today.getMonth() - 6);
-        return { from: format(dateFrom), to: format(today) };
+        return { from: getLocalDateStr(dateFrom), to: getLocalDateStr(today) };
     } else if (preset === 'all') {
         return { from: '', to: '' };
     }
@@ -115,6 +154,9 @@ export default function FleetReportsClient({
     const brands = useMemo(() => Array.from(new Set(vehicles.map(v => v.brand).filter(Boolean))), [vehicles]);
 
     const filteredLogs = useMemo(() => {
+        const fromDate = parseInputDate(dateFrom, false);
+        const toDate = parseInputDate(dateTo, true);
+
         return fuelLogs.filter(log => {
             const vehicle = vehicles.find(v => v.id === log.vehicleId);
             if (!vehicle) return false;
@@ -122,9 +164,11 @@ export default function FleetReportsClient({
             const matchesPlate = filterPlate === 'all' || vehicle.plate === filterPlate;
             const matchesBrand = filterBrand === 'all' || vehicle.brand === filterBrand;
             
-            const logDate = new Date(log.date);
-            const matchesFrom = !dateFrom || logDate >= new Date(dateFrom);
-            const matchesTo = !dateTo || logDate <= new Date(dateTo);
+            const logDate = parseLogDate(log.date);
+            if (!logDate || isNaN(logDate.getTime())) return false;
+
+            const matchesFrom = !fromDate || logDate >= fromDate;
+            const matchesTo = !toDate || logDate <= toDate;
 
             return matchesPlate && matchesBrand && matchesFrom && matchesTo;
         });
@@ -133,13 +177,17 @@ export default function FleetReportsClient({
     const stats = useMemo(() => {
         const totalLiters = filteredLogs.reduce((acc, log) => acc + (log.liters || 0), 0);
         const totalCost = filteredLogs.reduce((acc, log) => acc + (log.cost || 0), 0);
-        const avgCostPerLiter = totalLiters > 0 ? totalCost / totalLiters : 0;
+        
+        const rawAvgCost = totalLiters > 0 ? totalCost / totalLiters : 0;
+        const avgCostPerLiter = (isNaN(rawAvgCost) || !isFinite(rawAvgCost)) ? 0 : rawAvgCost;
 
         // Efficiency calculation: Group by vehicle and find min/max mileage
         const vehicleGroups: Record<number, number[]> = {};
         filteredLogs.forEach(log => {
-            if (!vehicleGroups[log.vehicleId]) vehicleGroups[log.vehicleId] = [];
-            vehicleGroups[log.vehicleId].push(log.mileageBefore);
+            if (typeof log.mileageBefore === 'number' && !isNaN(log.mileageBefore)) {
+                if (!vehicleGroups[log.vehicleId]) vehicleGroups[log.vehicleId] = [];
+                vehicleGroups[log.vehicleId].push(log.mileageBefore);
+            }
         });
 
         let totalDistance = 0;
@@ -147,35 +195,41 @@ export default function FleetReportsClient({
             if (mileages.length > 1) {
                 const max = Math.max(...mileages);
                 const min = Math.min(...mileages);
-                totalDistance += (max - min);
+                if (!isNaN(max) && !isNaN(min) && max >= min) {
+                    totalDistance += (max - min);
+                }
             }
         });
 
-        const avgEfficiency = totalLiters > 0 ? totalDistance / totalLiters : 0;
+        const rawAvgEfficiency = totalLiters > 0 ? totalDistance / totalLiters : 0;
+        const avgEfficiency = (isNaN(rawAvgEfficiency) || !isFinite(rawAvgEfficiency)) ? 0 : rawAvgEfficiency;
 
         return { totalLiters, totalCost, avgCostPerLiter, avgEfficiency };
     }, [filteredLogs]);
 
-    const exportToExcel = () => {
+    const handleExportExcel = async () => {
+        const headers = ['Fecha', 'Placa', 'Marca', 'Modelo', 'Kilometraje (km)', 'Litros (L)', 'Costo Total (₡)', 'Conductor', 'Notas'];
         const data = filteredLogs.map(log => {
             const vehicle = vehicles.find(v => v.id === log.vehicleId);
-            return {
-                Fecha: log.date,
-                Placa: vehicle?.plate,
-                Marca: vehicle?.brand,
-                Modelo: vehicle?.model,
-                Kilometraje: log.mileageBefore,
-                Litros: log.liters,
-                Costo: log.cost,
-                Conductor: log.driverId,
-                Notas: log.notes
-            };
+            return [
+                formatLocalDate(log.date),
+                vehicle?.plate || '',
+                vehicle?.brand || '',
+                vehicle?.model || '',
+                log.mileageBefore || 0,
+                log.liters || 0,
+                log.cost || 0,
+                log.driverId || '',
+                log.notes || ''
+            ];
         });
 
-        const worksheet = XLSX.utils.json_to_sheet(data);
-        const workbook = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(workbook, worksheet, "Historial Combustible");
-        XLSX.writeFile(workbook, `Reporte_Combustible_${new Date().toISOString().split('T')[0]}.xlsx`);
+        exportToExcel({
+            fileName: 'Reporte_Combustible_Flota',
+            sheetName: 'Historial Combustible',
+            headers,
+            data
+        });
     };
 
     return (
@@ -281,7 +335,7 @@ export default function FleetReportsClient({
                     </div>
 
                     <div className="flex items-end">
-                        <Button onClick={exportToExcel} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white">
+                        <Button onClick={handleExportExcel} className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold">
                             <Download className="w-4 h-4 mr-2" /> Exportar Excel
                         </Button>
                     </div>
@@ -432,7 +486,7 @@ export default function FleetReportsClient({
                                     Aplicar Filtros
                                 </Button>
                                 <Button 
-                                    onClick={() => { exportToExcel(); setMobileFiltersOpen(false); }}
+                                    onClick={() => { handleExportExcel(); setMobileFiltersOpen(false); }}
                                     className="w-full h-12 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold flex items-center justify-center gap-2 shadow-lg"
                                 >
                                     <Download className="w-5 h-5" /> Exportar a Excel
@@ -530,7 +584,7 @@ export default function FleetReportsClient({
                                     const parsed = parseLogPhoto(log.notes);
                                     return (
                                         <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                                            <td className="px-5 py-4 whitespace-nowrap">{new Date(log.date).toLocaleDateString()}</td>
+                                            <td className="px-5 py-4 whitespace-nowrap">{formatLocalDate(log.date)}</td>
                                             <td className="px-5 py-4 font-bold text-slate-800">{vehicle?.plate}</td>
                                             <td className="px-5 py-4 text-muted-foreground">{vehicle?.brand} {vehicle?.model}</td>
                                             <td className="px-5 py-4 text-right font-medium text-slate-700">{log.mileageBefore.toLocaleString()}</td>
@@ -578,7 +632,7 @@ export default function FleetReportsClient({
                                             <h4 className="font-bold text-slate-800 mt-2 text-sm leading-snug">{vehicle?.brand} {vehicle?.model}</h4>
                                         </div>
                                         <span className="text-xs text-slate-400 font-medium whitespace-nowrap bg-slate-50 px-2 py-0.5 rounded border border-slate-200/50">
-                                            {new Date(log.date).toLocaleDateString()}
+                                            {formatLocalDate(log.date)}
                                         </span>
                                     </div>
                                     <div className="grid grid-cols-3 gap-2 border-t pt-3 mt-2 text-xs">
@@ -640,11 +694,12 @@ export default function FleetReportsClient({
                     </DialogHeader>
                     {selectedPhoto && (
                         <div className="relative mt-4 w-full h-[480px] bg-black/60 rounded-2xl overflow-hidden flex items-center justify-center border border-white/10 group">
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img 
+                            <Image 
                                 src={`/api/fleet/files/${selectedPhoto}`} 
                                 alt="Comprobante de repostaje" 
-                                className="max-w-full max-h-full object-contain transition-transform duration-300 group-hover:scale-105"
+                                fill
+                                className="object-contain transition-transform duration-300 group-hover:scale-105"
+                                unoptimized
                             />
                         </div>
                     )}

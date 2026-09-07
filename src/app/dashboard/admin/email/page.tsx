@@ -178,19 +178,74 @@ export default function EmailSettingsPage() {
                                     </Select>
                                 </div>
                                 <div className="space-y-2">
-                                    <Label htmlFor="smtpUser">Usuario (Correo)</Label>
-                                    <Input id="smtpUser" value={settings.smtpUser} onChange={handleChange} placeholder="notificaciones@ejemplo.com" />
+                                     <Label htmlFor="smtpUser">Usuario (Correo)</Label>
+                                     <Input id="smtpUser" value={settings.smtpUser} onChange={handleChange} placeholder="notificaciones@ejemplo.com" />
+                                 </div>
+                                 <div className="space-y-2">
+                                     <Label htmlFor="smtpPass">Contraseña</Label>
+                                     <Input id="smtpPass" type="password" value={settings.smtpPass} onChange={handleChange} placeholder="••••••••" />
+                                 </div>
+                            </div>
+
+                            {/* Sección de Contingencia / Fallback Automático */}
+                            <div className="pt-4 border-t space-y-4">
+                                <div>
+                                    <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                                        <span>🛡️ Puerto de Contingencia Automático (Fallback)</span>
+                                    </h3>
+                                    <p className="text-xs text-muted-foreground mt-0.5">
+                                        Si la conexión al puerto principal falla o sufre timeout por restricciones de red, el sistema conmutará automáticamente a este puerto secundario y lo registrará en los logs.
+                                    </p>
                                 </div>
-                                <div className="space-y-2">
-                                    <Label htmlFor="smtpPass">Contraseña</Label>
-                                    <Input id="smtpPass" type="password" value={settings.smtpPass} onChange={handleChange} placeholder="••••••••" />
+
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-end">
+                                    <div className="space-y-2">
+                                        <Label htmlFor="smtpFallbackPort">Puerto de Contingencia</Label>
+                                        <Input 
+                                            id="smtpFallbackPort" 
+                                            type="number" 
+                                            value={settings.smtpFallbackPort !== undefined ? settings.smtpFallbackPort : (settings.smtpPort === 465 ? 587 : 465)} 
+                                            onChange={handleNumberChange} 
+                                            placeholder="587" 
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label htmlFor="smtpFallbackSecure">Seguridad de Contingencia</Label>
+                                        <Select 
+                                            value={String(settings.smtpFallbackSecure !== undefined ? settings.smtpFallbackSecure : (settings.smtpPort === 465 ? false : true))} 
+                                            onValueChange={(val) => setSettings(prev => prev ? { ...prev, smtpFallbackSecure: val === 'true' } : null)}
+                                        >
+                                            <SelectTrigger><SelectValue /></SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="false">STARTTLS / Port 587 (Recomendado Fallback)</SelectItem>
+                                                <SelectItem value="true">SSL Directo / Port 465</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <Label htmlFor="smtpFallbackEnabled">Estado de Fallback</Label>
+                                        <Select 
+                                            value={String(settings.smtpFallbackEnabled !== false)} 
+                                            onValueChange={(val) => setSettings(prev => prev ? { ...prev, smtpFallbackEnabled: val === 'true' } : null)}
+                                        >
+                                            <SelectTrigger><SelectValue /></SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="true">✅ Activado (Conmutación Automática)</SelectItem>
+                                                <SelectItem value="false">❌ Desactivado</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
                                 </div>
                             </div>
                         </CardContent>
-                        <CardFooter>
+                        <CardFooter className="flex justify-between">
                             <Button type="button" variant="outline" onClick={handleTest} disabled={isTesting}>
                                 {isTesting ? <Loader2 className="mr-2 h-4 w-4 animate-spin"/> : <Send className="mr-2 h-4 w-4" />}
                                 Enviar Correo de Prueba
+                            </Button>
+                            <Button type="submit" className="gap-2">
+                                <Save className="w-4 h-4" />
+                                Guardar Ajustes SMTP
                             </Button>
                         </CardFooter>
                     </Card>

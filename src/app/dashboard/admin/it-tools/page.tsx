@@ -6,12 +6,15 @@ import { useAuthorization } from '@/modules/core/hooks/useAuthorization';
 import { 
     getItBranches, 
     saveItBranch, 
+    toggleItBranchStatus,
     deleteItBranch, 
     getItLicensesCatalog, 
     saveItLicenseCatalog, 
     deleteItLicenseCatalog,
     getItAssetCategories,
-    saveItAssetCategories
+    saveItAssetCategories,
+    getItStandardAccessories,
+    saveItStandardAccessories
 } from '@/modules/it-tools/lib/actions';
 import { useToast } from '@/modules/core/hooks/use-toast';
 import { Button } from '@/components/ui/button';
@@ -24,23 +27,35 @@ import {
     Pencil, 
     Trash2, 
     Loader2, 
-    Check, 
-    X,
-    FileLock
+    FileLock,
+    Package,
+    CheckSquare,
+    AlertTriangle
 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 
 export default function ItToolsAdminPage() {
     const { setTitle } = usePageTitle();
     const { isAuthorized } = useAuthorization();
     const { toast } = useToast();
-    const [activeTab, setActiveTab] = useState<'branches' | 'licenses' | 'categories'>('branches');
+    const [activeTab, setActiveTab] = useState<'branches' | 'licenses' | 'categories' | 'accessories'>('branches');
 
     // Loading & state
     const [loading, setLoading] = useState(true);
     const [branches, setBranches] = useState<any[]>([]);
     const [licenses, setLicenses] = useState<any[]>([]);
     const [categories, setCategories] = useState<string[]>([]);
+    const [accessories, setAccessories] = useState<string[]>([]);
 
     // Form states
     const [branchId, setBranchId] = useState<number | undefined>(undefined);
@@ -56,6 +71,22 @@ export default function ItToolsAdminPage() {
 
     const [saving, setSaving] = useState(false);
     const [newCategory, setNewCategory] = useState('');
+    const [newAccessory, setNewAccessory] = useState('');
+
+    // Custom system modal for delete confirmations
+    const [deleteModal, setDeleteModal] = useState<{
+        isOpen: boolean;
+        title: string;
+        description: string;
+        onConfirm: () => Promise<void>;
+        itemType: 'branch' | 'license' | 'category' | 'accessory';
+    }>({
+        isOpen: false,
+        title: '',
+        description: '',
+        onConfirm: async () => {},
+        itemType: 'branch'
+    });
 
     useEffect(() => {
         setTitle("Configuración de TI");
@@ -64,20 +95,22 @@ export default function ItToolsAdminPage() {
     const loadData = useCallback(async () => {
         setLoading(true);
         try {
-            const [branchesData, licensesData, categoriesData] = await Promise.all([
+            const [branchesData, licensesData, categoriesData, accessoriesData] = await Promise.all([
                 getItBranches(),
                 getItLicensesCatalog(),
-                getItAssetCategories()
+                getItAssetCategories(),
+                getItStandardAccessories()
             ]);
             setBranches(branchesData);
             setLicenses(licensesData);
             setCategories(categoriesData);
+            setAccessories(accessoriesData);
         } catch (error) {
             console.error("Error loading IT admin catalogs", error);
             toast({
                 variant: "destructive",
                 title: "Error al cargar datos",
-                description: "No se pudieron obtener las sucursales, el catálogo de licencias o las categorías."
+                description: "No se pudieron obtener las sucursales, licencias, categorías o accesorios."
             });
         } finally {
             setLoading(false);
@@ -105,9 +138,9 @@ export default function ItToolsAdminPage() {
         setSaving(true);
         try {
             await saveItBranch({
-                id: branchId,
-                name: branchName,
-                code: branchCode,
+                id: branchId ? Number(branchId) : undefined,
+                name: branchName.trim(),
+                code: branchCode.trim(),
                 is_active: branchActive ? 1 : 0
             });
             toast({
@@ -132,29 +165,36 @@ export default function ItToolsAdminPage() {
     };
 
     const handleEditBranch = (branch: any) => {
-        setBranchId(branch.id);
+        setBranchId(Number(branch.id));
         setBranchName(branch.name);
         setBranchCode(branch.code);
-        setBranchActive(branch.is_active === 1);
+        setBranchActive(branch.is_active === 1 || branch.is_active === '1' || branch.is_active === '1.0' || branch.is_active === true);
         setShowBranchForm(true);
     };
 
-    const handleDeleteBranch = async (id: number) => {
-        if (!confirm("¿Está seguro de que desea eliminar esta sucursal? Esta acción podría fallar si la sucursal tiene activos asociados.")) return;
-        try {
-            await deleteItBranch(id);
-            toast({
-                title: "Sucursal eliminada",
-                description: "La sede ha sido eliminada correctamente."
-            });
-            loadData();
-        } catch (error: any) {
-            toast({
-                variant: "destructive",
-                title: "Error al eliminar sucursal",
-                description: error.message || "Por favor, desasocie los activos vinculados a esta sede antes de eliminarla."
-            });
-        }
+    const handleDeleteBranch = (id: number, branchNameTarget: string) => {
+        setDeleteModal({
+            isOpen: true,
+            title: `¿Eliminar la sede "${branchNameTarget}"?`,
+            description: "Esta acción eliminará la sucursal del catálogo de sedes. Si tiene activos de TI asignados, deberá reasignarlos antes de poder eliminarla.",
+            itemType: 'branch',
+            onConfirm: async () => {
+                try {
+                    await deleteItBranch(id);
+                    toast({
+                        title: "Sucursal eliminada",
+                        description: `La sede "${branchNameTarget}" ha sido eliminada correctamente.`
+                    });
+                    loadData();
+                } catch (error: any) {
+                    toast({
+                        variant: "destructive",
+                        title: "No se pudo eliminar la sucursal",
+                        description: error.message || "Por favor, desasocie los activos vinculados a esta sede antes de eliminarla."
+                    });
+                }
+            }
+        });
     };
 
     // License catalog operations
@@ -203,22 +243,29 @@ export default function ItToolsAdminPage() {
         setShowLicenseForm(true);
     };
 
-    const handleDeleteLicense = async (id: number) => {
-        if (!confirm("¿Está seguro de que desea eliminar este tipo de licencia? Se desasociará de todos los equipos.")) return;
-        try {
-            await deleteItLicenseCatalog(id);
-            toast({
-                title: "Licencia eliminada",
-                description: "El tipo de licencia ha sido eliminado del catálogo."
-            });
-            loadData();
-        } catch (error: any) {
-            toast({
-                variant: "destructive",
-                title: "Error al eliminar licencia",
-                description: error.message || "Ocurrió un error inesperado."
-            });
-        }
+    const handleDeleteLicense = (id: number, licenseNameTarget: string) => {
+        setDeleteModal({
+            isOpen: true,
+            title: `¿Eliminar la licencia "${licenseNameTarget}"?`,
+            description: "Esta acción eliminará el tipo de software del catálogo y se desasociará de los equipos asignados.",
+            itemType: 'license',
+            onConfirm: async () => {
+                try {
+                    await deleteItLicenseCatalog(id);
+                    toast({
+                        title: "Licencia eliminada",
+                        description: `La licencia "${licenseNameTarget}" ha sido eliminada del catálogo.`
+                    });
+                    loadData();
+                } catch (error: any) {
+                    toast({
+                        variant: "destructive",
+                        title: "Error al eliminar licencia",
+                        description: error.message || "Ocurrió un error inesperado."
+                    });
+                }
+            }
+        });
     };
 
     const handleAddCategory = async () => {
@@ -252,26 +299,87 @@ export default function ItToolsAdminPage() {
         }
     };
 
-    const handleDeleteCategory = async (categoryToDelete: string) => {
-        if (!confirm(`¿Está seguro de que desea eliminar la categoría "${categoryToDelete}"?`)) return;
+    const handleDeleteCategory = (categoryToDelete: string) => {
+        setDeleteModal({
+            isOpen: true,
+            title: `¿Eliminar la categoría "${categoryToDelete}"?`,
+            description: "Esta categoría ya no estará disponible para nuevos registros de activos en el inventario TI.",
+            itemType: 'category',
+            onConfirm: async () => {
+                try {
+                    const updated = categories.filter(c => c !== categoryToDelete);
+                    await saveItAssetCategories(updated);
+                    setCategories(updated);
+                    toast({
+                        title: "Categoría eliminada",
+                        description: `La categoría "${categoryToDelete}" se eliminó exitosamente.`
+                    });
+                } catch (error: any) {
+                    toast({
+                        variant: "destructive",
+                        title: "Error al eliminar categoría",
+                        description: error.message || "Ocurrió un error inesperado."
+                    });
+                }
+            }
+        });
+    };
+
+    const handleAddAccessory = async () => {
+        if (!newAccessory.trim()) return;
+        if (accessories.includes(newAccessory.trim())) {
+            toast({
+                variant: "destructive",
+                title: "Accesorio ya existe",
+                description: "Ese accesorio estándar ya se encuentra registrado."
+            });
+            return;
+        }
         setSaving(true);
         try {
-            const updated = categories.filter(c => c !== categoryToDelete);
-            await saveItAssetCategories(updated);
-            setCategories(updated);
+            const updated = [...accessories, newAccessory.trim()];
+            await saveItStandardAccessories(updated);
+            setAccessories(updated);
+            setNewAccessory('');
             toast({
-                title: "Categoría eliminada",
-                description: "La categoría se eliminó exitosamente."
+                title: "Accesorio agregado",
+                description: "El accesorio estándar se guardó exitosamente."
             });
         } catch (error: any) {
             toast({
                 variant: "destructive",
-                title: "Error al eliminar categoría",
+                title: "Error al agregar accesorio",
                 description: error.message || "Ocurrió un error inesperado."
             });
         } finally {
             setSaving(false);
         }
+    };
+
+    const handleDeleteAccessory = (accessoryToDelete: string) => {
+        setDeleteModal({
+            isOpen: true,
+            title: `¿Eliminar el accesorio "${accessoryToDelete}"?`,
+            description: "El accesorio dejará de aparecer en la lista estándar para boletas de entrega y fichas de activos.",
+            itemType: 'accessory',
+            onConfirm: async () => {
+                try {
+                    const updated = accessories.filter(a => a !== accessoryToDelete);
+                    await saveItStandardAccessories(updated);
+                    setAccessories(updated);
+                    toast({
+                        title: "Accesorio eliminado",
+                        description: `El accesorio "${accessoryToDelete}" se eliminó exitosamente del catálogo.`
+                    });
+                } catch (error: any) {
+                    toast({
+                        variant: "destructive",
+                        title: "Error al eliminar accesorio",
+                        description: error.message || "Ocurrió un error inesperado."
+                    });
+                }
+            }
+        });
     };
 
     if (loading) {
@@ -319,6 +427,15 @@ export default function ItToolsAdminPage() {
                         <Tag className="h-4 w-4" />
                         Categorías de Activos
                     </button>
+                    <button
+                        onClick={() => setActiveTab('accessories')}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-md font-medium text-sm transition ${
+                            activeTab === 'accessories' ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'
+                        }`}
+                    >
+                        <Package className="h-4 w-4" />
+                        Accesorios Estándar
+                    </button>
                 </div>
             </div>
 
@@ -354,14 +471,33 @@ export default function ItToolsAdminPage() {
                                                 <div>
                                                     <div className="flex items-center gap-2">
                                                         <span className="font-bold text-sm bg-muted px-2 py-0.5 rounded text-muted-foreground">
-                                                            {branch.code}
+                                                             {branch.code}
                                                         </span>
                                                         <span className="font-semibold text-foreground">{branch.name}</span>
-                                                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium ${
-                                                            branch.is_active === 1 ? 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400' : 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
-                                                        }`}>
-                                                            {branch.is_active === 1 ? 'Activa' : 'Inactiva'}
-                                                        </span>
+                                                        <button 
+                                                            onClick={async () => {
+                                                                try {
+                                                                    const isCurrentlyActive = branch.is_active === 1 || branch.is_active === '1' || branch.is_active === '1.0' || branch.is_active === true;
+                                                                    const nextState = isCurrentlyActive ? 0 : 1;
+                                                                    await toggleItBranchStatus(branch.id, nextState);
+                                                                    toast({
+                                                                        title: nextState === 1 ? "Sede Activada" : "Sede Desactivada",
+                                                                        description: `La sede ${branch.name} ahora está ${nextState === 1 ? 'activa' : 'inactiva'}.`
+                                                                    });
+                                                                    loadData();
+                                                                } catch (err: any) {
+                                                                    toast({ variant: 'destructive', title: 'Error', description: err.message });
+                                                                }
+                                                            }}
+                                                            title="Clic para cambiar estado (Activa / Inactiva)"
+                                                            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold cursor-pointer transition hover:opacity-80 shadow-sm ${
+                                                                (branch.is_active === 1 || branch.is_active === '1' || branch.is_active === '1.0' || branch.is_active === true)
+                                                                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700' 
+                                                                    : 'bg-rose-100 text-rose-800 dark:bg-rose-950/40 dark:text-rose-300 border border-rose-300 dark:border-rose-700'
+                                                            }`}
+                                                        >
+                                                            {(branch.is_active === 1 || branch.is_active === '1' || branch.is_active === '1.0' || branch.is_active === true) ? '🟢 Activa' : '🔴 Inactiva'}
+                                                        </button>
                                                     </div>
                                                     <span className="text-xs text-muted-foreground mt-1 block">
                                                         Creado el: {new Date(branch.created_at).toLocaleDateString()}
@@ -372,7 +508,7 @@ export default function ItToolsAdminPage() {
                                                     <Button size="icon" variant="ghost" className="h-8 w-8 text-blue-600" onClick={() => handleEditBranch(branch)}>
                                                         <Pencil className="h-4 w-4" />
                                                     </Button>
-                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-red-600" onClick={() => handleDeleteBranch(branch.id)}>
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-red-600" onClick={() => handleDeleteBranch(branch.id, branch.name)}>
                                                         <Trash2 className="h-4 w-4" />
                                                     </Button>
                                                 </div>
@@ -481,7 +617,7 @@ export default function ItToolsAdminPage() {
                                                     <Button size="icon" variant="ghost" className="h-8 w-8 text-blue-600" onClick={() => handleEditLicense(lic)}>
                                                         <Pencil className="h-4 w-4" />
                                                     </Button>
-                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-red-600" onClick={() => handleDeleteLicense(lic.id)}>
+                                                    <Button size="icon" variant="ghost" className="h-8 w-8 text-red-600" onClick={() => handleDeleteLicense(lic.id, lic.name)}>
                                                         <Trash2 className="h-4 w-4" />
                                                     </Button>
                                                 </div>
@@ -588,6 +724,120 @@ export default function ItToolsAdminPage() {
                     </div>
                 </div>
             )}
+            {activeTab === 'accessories' && (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    {/* List of standard accessories */}
+                    <div className="lg:col-span-2 space-y-4">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <h2 className="text-xl font-bold tracking-tight">Accesorios Estándar Entregables</h2>
+                                <p className="text-xs text-muted-foreground">Opciones rápidas que aparecerán como checkboxes en la ficha de cada activo y en la Boleta de Entrega.</p>
+                            </div>
+                            <div className="flex gap-2">
+                                <Input 
+                                    value={newAccessory} 
+                                    onChange={(e) => setNewAccessory(e.target.value)} 
+                                    placeholder="Nuevo accesorio (ej: Hub USB, Base Ergonómica)" 
+                                    className="max-w-xs"
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                            e.preventDefault();
+                                            handleAddAccessory();
+                                        }
+                                    }}
+                                />
+                                <Button onClick={handleAddAccessory} disabled={saving} className="bg-indigo-600 hover:bg-indigo-700">
+                                    <Plus className="h-4 w-4 mr-2" /> Agregar
+                                </Button>
+                            </div>
+                        </div>
+
+                        <Card>
+                            <CardContent className="p-0">
+                                <div className="divide-y">
+                                    {accessories.length === 0 ? (
+                                        <div className="p-6 text-center text-muted-foreground">
+                                            No hay accesorios estándar registrados en el catálogo.
+                                        </div>
+                                    ) : (
+                                        accessories.map((acc, idx) => (
+                                            <div key={idx} className="flex items-center justify-between p-4 hover:bg-muted/50 transition">
+                                                <div className="flex items-center gap-3">
+                                                    <CheckSquare className="h-4 w-4 text-emerald-500" />
+                                                    <span className="font-semibold text-foreground">{acc}</span>
+                                                </div>
+                                                <Button 
+                                                    size="icon" 
+                                                    variant="ghost" 
+                                                    className="h-8 w-8 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20" 
+                                                    onClick={() => handleDeleteAccessory(acc)}
+                                                    disabled={saving}
+                                                    title="Eliminar del catálogo estándar"
+                                                >
+                                                    <Trash2 className="h-4 w-4" />
+                                                </Button>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </CardContent>
+                        </Card>
+                    </div>
+
+                    {/* Information card */}
+                    <div className="space-y-4">
+                        <Card className="bg-indigo-50/50 dark:bg-indigo-950/20 border-indigo-200 dark:border-indigo-900">
+                            <CardHeader className="pb-2">
+                                <CardTitle className="text-sm font-bold text-indigo-900 dark:text-indigo-200 flex items-center gap-2">
+                                    <Package className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+                                    ¿Cómo funciona este catálogo?
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent className="text-xs text-indigo-800 dark:text-indigo-300 space-y-2">
+                                <p>
+                                    Cualquier accesorio o periférico agregado aquí se reflejará inmediatamente como un checklist seleccionable en la ficha <strong>Modificar Activo</strong> de <code className="font-mono bg-white/60 dark:bg-black/40 px-1 py-0.5 rounded">/dashboard/it-tools/assets</code>.
+                                </p>
+                                <p>
+                                    Además, los que marques como entregados en un equipo saldrán marcados automáticamente con <strong>[X]</strong> en su <strong>Boleta Oficial de Entrega de Equipos (R-INFO-002)</strong>.
+                                </p>
+                            </CardContent>
+                        </Card>
+                    </div>
+                </div>
+            )}
+
+            {/* Custom System Confirmation Modal (AGENTS.MD Compliance) */}
+            <AlertDialog open={deleteModal.isOpen} onOpenChange={(open) => setDeleteModal(prev => ({ ...prev, isOpen: open }))}>
+                <AlertDialogContent className="max-w-md">
+                    <AlertDialogHeader>
+                        <div className="flex items-center gap-3 text-rose-600 mb-1">
+                            <div className="p-2 rounded-full bg-rose-100 dark:bg-rose-950/50">
+                                <AlertTriangle className="h-5 w-5" />
+                            </div>
+                            <AlertDialogTitle className="text-lg font-bold text-foreground">
+                                {deleteModal.title}
+                            </AlertDialogTitle>
+                        </div>
+                        <AlertDialogDescription className="text-xs text-muted-foreground leading-relaxed pt-1">
+                            {deleteModal.description}
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter className="mt-4 gap-2">
+                        <AlertDialogCancel onClick={() => setDeleteModal(prev => ({ ...prev, isOpen: false }))}>
+                            Cancelar
+                        </AlertDialogCancel>
+                        <AlertDialogAction 
+                            className="bg-rose-600 hover:bg-rose-700 text-white font-semibold"
+                            onClick={async () => {
+                                setDeleteModal(prev => ({ ...prev, isOpen: false }));
+                                await deleteModal.onConfirm();
+                            }}
+                        >
+                            Confirmar Eliminación
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
         </main>
     );
 }

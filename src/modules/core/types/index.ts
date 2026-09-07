@@ -26,6 +26,7 @@ export type User = {
   activeWizardSession?: string | null;
   employeeId?: string | null;
   salespersonId?: string | null;
+  telegramChatId?: string | null;
   is_active?: number;
 };
 
@@ -194,6 +195,10 @@ export type ApiSettings = {
     haciendaExemptionApi: string;
     haciendaTributariaApi: string;
     recopeApi?: string;
+    navixyBaseUrl?: string;
+    navixyApiKey?: string;
+    cartoApiKey?: string;
+    googleMapsApiKey?: string;
 };
 
 export type AiSettings = {
@@ -207,6 +212,14 @@ export type AiSettings = {
     deepseekApiKey: string;
     deepseekModel: string;
     systemPrompt: string;
+    synonyms?: string;
+    aiMemory?: string;
+    adaptTechnicalLevel?: number;
+    strictSafetyRules?: number;
+    auditorMasterPrompt?: string;
+    auditorAllowedTables?: string;
+    auditorMaxRowsPerQuery?: number;
+    auditorTimeoutSeconds?: number;
 };
 
 /**
@@ -724,7 +737,7 @@ export type WizardSession = {
 export type Suggestion = {
   id: number;
   content: string;
-  userId: number;
+  userId: number | null;
   userName: string;
   isRead: 0 | 1;
   timestamp: string;
@@ -1099,6 +1112,9 @@ export interface EmailSettings {
   smtpUser: string;
   smtpPass: string;
   smtpSecure: boolean;
+  smtpFallbackEnabled?: boolean;
+  smtpFallbackPort?: number;
+  smtpFallbackSecure?: boolean;
   recoveryEmailSubject?: string;
   recoveryEmailBody?: string;
 }

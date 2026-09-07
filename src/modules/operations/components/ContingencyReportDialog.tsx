@@ -273,7 +273,7 @@ export function ContingencyReportDialog({
                     </Button>
                     <Button 
                         onClick={handleSubmit}
-                        disabled={modalLoading || submitLoading || (settings.delivery_mode === 'avanzado' && modalLines.length === 0)}
+                        disabled={modalLoading || submitLoading || generatingCode || (settings.delivery_mode === 'avanzado' && modalLines.length === 0)}
                         className="rounded-lg font-bold text-xs gap-1.5 bg-blue-600 hover:bg-blue-700 text-white shadow"
                     >
                         {submitLoading ? (

@@ -123,6 +123,8 @@ export async function initializeOperationsSchema(db: Database) {
                 activa INTEGER DEFAULT 1,
                 siguiente_cliente TEXT,
                 siguiente_cliente_fecha TEXT,
+                fecha_salida TEXT,
+                fecha_llegada_bodega TEXT,
                 fecha_completada TEXT,
                 FOREIGN KEY (ruta_id) REFERENCES ops_delivery_routes(id) ON DELETE CASCADE,
                 FOREIGN KEY (vehiculo_id) REFERENCES fleet_vehicles(id) ON DELETE RESTRICT
@@ -151,6 +153,7 @@ export async function initializeOperationsSchema(db: Database) {
                 telegram_lock_by TEXT,               -- Chat ID del chofer que tiene el bloqueo
                 tipo_documento_erp TEXT,             -- 'F' o 'D'
                 factura_original TEXT,               -- Referencia a factura original si es 'D'
+                boleta_numero TEXT,                  -- Consecutivo de boleta emitida (re-despacho o entrega parcial)
                 latitud REAL,
                 longitud REAL,
                 
@@ -182,7 +185,22 @@ export async function initializeOperationsSchema(db: Database) {
                 FOREIGN KEY (delivery_order_id) REFERENCES ops_delivery_queue(id) ON DELETE CASCADE
             );
 
-            -- 7. Historial de Notificaciones ERP
+            -- 7. Bitácora de Registros de la APK Nativa (Logs de Operaciones)
+            CREATE TABLE IF NOT EXISTS ops_driver_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                user_name TEXT,
+                chofer_nombre TEXT,
+                chofer_telefono TEXT,
+                ruta_nombre TEXT,
+                placa_vehiculo TEXT,
+                level TEXT NOT NULL,
+                category TEXT DEFAULT 'operativo',
+                message TEXT NOT NULL,
+                timestamp TEXT NOT NULL
+            );
+
+            -- 8. Historial de Notificaciones ERP
             CREATE TABLE IF NOT EXISTS ops_delivery_notifications (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 delivery_order_id INTEGER NOT NULL,
@@ -194,6 +212,40 @@ export async function initializeOperationsSchema(db: Database) {
                 FOREIGN KEY (delivery_order_id) REFERENCES ops_delivery_queue(id) ON DELETE CASCADE
             );
 
+            -- 9. Dispositivos Móviles Registrados e Inventario de Hardware (Auto-Aprovisionamiento & IT Assets)
+            CREATE TABLE IF NOT EXISTS fleet_registered_devices (
+                hardware_id TEXT PRIMARY KEY,
+                device_name TEXT,
+                last_user_id INTEGER,
+                last_driver_name TEXT,
+                driver_phone TEXT,
+                printer_mac TEXT,
+                paper_size TEXT DEFAULT '80mm',
+                server_url_override TEXT,
+                custom_config_json TEXT,
+                asset_id INTEGER,
+                last_seen TEXT NOT NULL,
+                phone_number TEXT,
+                current_app_version TEXT,
+                current_version_code INTEGER,
+                battery_level INTEGER,
+                ota_paused INTEGER DEFAULT 0,
+                install_failed_count INTEGER DEFAULT 0,
+                last_install_error TEXT
+            );
+
+            -- 9b. Configuración de Versiones Oficiales de la APK para Auto-Actualización OTA
+            CREATE TABLE IF NOT EXISTS ops_app_version_settings (
+                id INTEGER PRIMARY KEY,
+                version_name TEXT NOT NULL,
+                version_code INTEGER NOT NULL,
+                apk_url TEXT NOT NULL,
+                release_notes TEXT,
+                global_ota_paused INTEGER DEFAULT 0,
+                force_update INTEGER DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
+
             -- 8. Historial GPS de Ruta (Rastreo en vivo)
             CREATE TABLE IF NOT EXISTS ops_delivery_gps_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -201,15 +253,38 @@ export async function initializeOperationsSchema(db: Database) {
                 latitud REAL NOT NULL,
                 longitud REAL NOT NULL,
                 timestamp TEXT NOT NULL,
+                evento TEXT,
                 FOREIGN KEY (asignacion_id) REFERENCES ops_delivery_assignments(id) ON DELETE CASCADE
+            );
+
+            -- 9. Correos de Clientes
+            CREATE TABLE IF NOT EXISTS ops_client_emails (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cliente_id TEXT NOT NULL,
+                email TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(cliente_id, email)
+            );
+
+            -- 10. Descartes de Documentos
+            CREATE TABLE IF NOT EXISTS ops_delivery_discards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                documento_numero TEXT NOT NULL,
+                motivo_descarte TEXT NOT NULL,
+                usuario_descarte TEXT NOT NULL,
+                fecha_descarte DATETIME DEFAULT CURRENT_TIMESTAMP
             );
 
             -- Índices de Rendimiento
             CREATE INDEX IF NOT EXISTS idx_ops_delivery_queue_doc ON ops_delivery_queue(documento_numero);
             CREATE INDEX IF NOT EXISTS idx_ops_delivery_queue_estado ON ops_delivery_queue(estado);
+            CREATE INDEX IF NOT EXISTS idx_ops_delivery_queue_fecha ON ops_delivery_queue(fecha_registro);
+            CREATE INDEX IF NOT EXISTS idx_ops_delivery_queue_asign ON ops_delivery_queue(asignacion_id) WHERE asignacion_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS idx_ops_queue_asig_entregado ON ops_delivery_queue(asignacion_id, entregado, fecha_registro DESC);
             CREATE INDEX IF NOT EXISTS idx_ops_delivery_assignments_fecha ON ops_delivery_assignments(fecha, activa);
             CREATE INDEX IF NOT EXISTS idx_ops_delivery_lines_order ON ops_delivery_lines(delivery_order_id);
             CREATE INDEX IF NOT EXISTS idx_ops_delivery_gps_logs_ass ON ops_delivery_gps_logs(asignacion_id);
+            CREATE INDEX IF NOT EXISTS idx_ops_delivery_gps_asig_ts ON ops_delivery_gps_logs(asignacion_id, timestamp DESC);
         `);
 
         // Populate settings
@@ -221,6 +296,10 @@ export async function initializeOperationsSchema(db: Database) {
         insertSetting.run('hora_barrido_fin_jornada', '19:00');
         insertSetting.run('limite_coincidencias', '5');
         insertSetting.run('notificaciones_email', 'true');
+        insertSetting.run('driver_boleta_pdf_enabled', 'true');
+        insertSetting.run('driver_boleta_email_enabled', 'true');
+        insertSetting.run('driver_boleta_print_enabled', 'true');
+        insertSetting.run('driver_boleta_paper_size', '80mm');
 
         db.prepare('INSERT INTO _ops_migrations (version, installed_at) VALUES (?, ?)').run(2, new Date().toISOString());
     }
@@ -449,11 +528,219 @@ export async function initializeOperationsSchema(db: Database) {
             insertSetting.run('route_consecutive_prefix', 'RUT-');
             insertSetting.run('route_consecutive_next', '1');
             insertSetting.run('notificaciones_ruta_emails', 'logistica@empresa.com');
+            insertSetting.run('route_sheet_iso_text', 'DOC-LOG-04 | Ver. 02 | Sistema de Gestión de Calidad ISO 9001:2015');
         } catch (e: any) {
             console.error('Error inserting settings in migration 15:', e.message);
         }
         db.prepare('INSERT INTO _ops_migrations (version, installed_at) VALUES (?, ?)').run(15, new Date().toISOString());
     }
 
-    console.log('Operations schema initialized at version', currentVersion < 15 ? 15 : currentVersion);
+    if (currentVersion < 16) {
+        try {
+            db.exec(`
+                ALTER TABLE ops_delivery_queue ADD COLUMN hora_ingreso_geocerca TEXT;
+                ALTER TABLE ops_delivery_queue ADD COLUMN hora_entrega_efectiva TEXT;
+                ALTER TABLE ops_delivery_queue ADD COLUMN hora_salida_geocerca TEXT;
+                ALTER TABLE ops_delivery_queue ADD COLUMN tiempo_descarga_min INTEGER;
+                ALTER TABLE ops_delivery_queue ADD COLUMN tiempo_espera_post_entrega_min INTEGER;
+                ALTER TABLE ops_delivery_queue ADD COLUMN tiempo_total_permanencia_min INTEGER;
+                ALTER TABLE ops_client_emails ADD COLUMN notificar_llegada INTEGER DEFAULT 1;
+            `);
+        } catch (e: any) {
+            console.warn('Migration to version 16 columns warned/skipped:', e.message);
+        }
+        db.prepare('INSERT INTO _ops_migrations (version, installed_at) VALUES (?, ?)').run(16, new Date().toISOString());
+    }
+
+    if (currentVersion < 17) {
+        try {
+            const tableInfo = db.prepare("PRAGMA table_info('ops_delivery_queue')").all();
+            const cols = tableInfo.map((c: any) => c.name);
+            if (!cols.includes('firma_cliente')) {
+                db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN firma_cliente TEXT;`);
+            }
+        } catch (e: any) {
+            console.warn('Migration to version 17 columns warned/skipped:', e.message);
+        }
+        db.prepare('INSERT INTO _ops_migrations (version, installed_at) VALUES (?, ?)').run(17, new Date().toISOString());
+    }
+
+    if (currentVersion < 18) {
+        try {
+            const tableInfo = db.prepare("PRAGMA table_info('ops_delivery_queue')").all();
+            const cols = tableInfo.map((c: any) => c.name);
+            if (!cols.includes('nombre_recibe')) {
+                db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN nombre_recibe TEXT;`);
+            }
+        } catch (e: any) {
+            console.warn('Migration to version 18 columns warned/skipped:', e.message);
+        }
+        db.prepare('INSERT INTO _ops_migrations (version, installed_at) VALUES (?, ?)').run(18, new Date().toISOString());
+    }
+
+    // Always run self-healing check for ops_delivery_queue
+    try {
+        const tableInfo = db.prepare("PRAGMA table_info('ops_delivery_queue')").all();
+        const cols = tableInfo.map((c: any) => c.name);
+        if (!cols.includes('foto_evidencia')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN foto_evidencia TEXT;`);
+        if (!cols.includes('foto_factura')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN foto_factura TEXT;`);
+        if (!cols.includes('devolucion_asignacion_id')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN devolucion_asignacion_id INTEGER;`);
+        if (!cols.includes('hora_ingreso_geocerca')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN hora_ingreso_geocerca TEXT;`);
+        if (!cols.includes('hora_entrega_efectiva')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN hora_entrega_efectiva TEXT;`);
+        if (!cols.includes('hora_salida_geocerca')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN hora_salida_geocerca TEXT;`);
+        if (!cols.includes('tiempo_descarga_min')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN tiempo_descarga_min INTEGER;`);
+        if (!cols.includes('tiempo_espera_post_entrega_min')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN tiempo_espera_post_entrega_min INTEGER;`);
+        if (!cols.includes('tiempo_total_permanencia_min')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN tiempo_total_permanencia_min INTEGER;`);
+        if (!cols.includes('firma_cliente')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN firma_cliente TEXT;`);
+        if (!cols.includes('nombre_recibe')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN nombre_recibe TEXT;`);
+        if (!cols.includes('boleta_numero')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN boleta_numero TEXT;`);
+    } catch (e: any) {
+        console.warn('Self-healing ops_delivery_queue check warning:', e.message);
+    }
+
+    // Always run self-healing check for ops_delivery_assignments
+    try {
+        const tableInfo = db.prepare("PRAGMA table_info('ops_delivery_assignments')").all();
+        const cols = tableInfo.map((c: any) => c.name);
+        if (!cols.includes('fecha_creacion')) db.exec(`ALTER TABLE ops_delivery_assignments ADD COLUMN fecha_creacion TEXT;`);
+        if (!cols.includes('fecha_inicio_retorno')) db.exec(`ALTER TABLE ops_delivery_assignments ADD COLUMN fecha_inicio_retorno TEXT;`);
+        if (!cols.includes('latitud_retorno')) db.exec(`ALTER TABLE ops_delivery_assignments ADD COLUMN latitud_retorno REAL;`);
+        if (!cols.includes('longitud_retorno')) db.exec(`ALTER TABLE ops_delivery_assignments ADD COLUMN longitud_retorno REAL;`);
+        if (!cols.includes('latitud_llegada')) db.exec(`ALTER TABLE ops_delivery_assignments ADD COLUMN latitud_llegada REAL;`);
+        if (!cols.includes('longitud_llegada')) db.exec(`ALTER TABLE ops_delivery_assignments ADD COLUMN longitud_llegada REAL;`);
+        if (!cols.includes('latitud_inicio')) db.exec(`ALTER TABLE ops_delivery_assignments ADD COLUMN latitud_inicio REAL;`);
+        if (!cols.includes('longitud_inicio')) db.exec(`ALTER TABLE ops_delivery_assignments ADD COLUMN longitud_inicio REAL;`);
+        if (!cols.includes('fecha_salida')) db.exec(`ALTER TABLE ops_delivery_assignments ADD COLUMN fecha_salida TEXT;`);
+        if (!cols.includes('fecha_llegada_bodega')) db.exec(`ALTER TABLE ops_delivery_assignments ADD COLUMN fecha_llegada_bodega TEXT;`);
+        if (!cols.includes('consecutivo')) db.exec(`ALTER TABLE ops_delivery_assignments ADD COLUMN consecutivo TEXT;`);
+    } catch (e: any) {
+        console.warn('Self-healing ops_delivery_assignments check warning:', e.message);
+    }
+
+    // Always run self-healing check for ops_delivery_gps_logs
+    try {
+        const tableInfo = db.prepare("PRAGMA table_info('ops_delivery_gps_logs')").all();
+        const cols = tableInfo.map((c: any) => c.name);
+        if (!cols.includes('evento')) db.exec(`ALTER TABLE ops_delivery_gps_logs ADD COLUMN evento TEXT;`);
+    } catch (e: any) {
+        console.warn('Self-healing ops_delivery_gps_logs check warning:', e.message);
+    }
+
+    // Always run self-healing check for ops_client_emails, ops_delivery_discards and ops_app_version_settings tables
+    try {
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS ops_client_emails (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cliente_id TEXT NOT NULL,
+                email TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(cliente_id, email)
+            );
+            CREATE TABLE IF NOT EXISTS ops_delivery_discards (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                documento_numero TEXT NOT NULL,
+                motivo_descarte TEXT NOT NULL,
+                usuario_descarte TEXT NOT NULL,
+                fecha_descarte DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS ops_app_version_settings (
+                id INTEGER PRIMARY KEY,
+                version_name TEXT NOT NULL,
+                version_code INTEGER NOT NULL,
+                apk_url TEXT NOT NULL,
+                release_notes TEXT,
+                global_ota_paused INTEGER DEFAULT 0,
+                force_update INTEGER DEFAULT 0,
+                server_url_primary TEXT,
+                server_url_fallback TEXT,
+                updated_at TEXT NOT NULL
+            );
+        `);
+    } catch (e: any) {
+        console.warn('Self-healing create auxiliary tables warning:', e.message);
+    }
+
+    // Ensure columns for ops_app_version_settings
+    try {
+        const versionCols = db.prepare("PRAGMA table_info('ops_app_version_settings')").all().map((c: any) => c.name);
+        if (!versionCols.includes('server_url_primary')) db.exec(`ALTER TABLE ops_app_version_settings ADD COLUMN server_url_primary TEXT;`);
+        if (!versionCols.includes('server_url_fallback')) db.exec(`ALTER TABLE ops_app_version_settings ADD COLUMN server_url_fallback TEXT;`);
+        if (!versionCols.includes('force_update')) db.exec(`ALTER TABLE ops_app_version_settings ADD COLUMN force_update INTEGER DEFAULT 0;`);
+        if (!versionCols.includes('global_ota_paused')) db.exec(`ALTER TABLE ops_app_version_settings ADD COLUMN global_ota_paused INTEGER DEFAULT 0;`);
+
+        // Ensure default row exists
+        const countRow = db.prepare("SELECT COUNT(*) as count FROM ops_app_version_settings").get() as any;
+        if (!countRow || countRow.count === 0) {
+            db.prepare(`
+                INSERT INTO ops_app_version_settings 
+                (id, version_name, version_code, apk_url, release_notes, global_ota_paused, force_update, server_url_primary, server_url_fallback, updated_at)
+                VALUES (1, '1.2.37', 56, '/downloads/apk/ClicDriver.apk', 'Actualización Oficial v1.2.37: Protección PopScope contra salidas accidentales, política de retención local de fotos hasta la nueva ruta y diagnóstico silencioso de sensores para TI.', 0, 1, '192.168.1.14:9003', '192.168.1.14:9001', CURRENT_TIMESTAMP)
+            `).run();
+        } else {
+            // Auto-actualizar registro por defecto si está en versión inferior
+            db.prepare(`
+                UPDATE ops_app_version_settings
+                SET version_name = '1.2.37', version_code = 56, release_notes = 'Actualización Oficial v1.2.37: Protección PopScope contra salidas accidentales, política de retención local de fotos hasta la nueva ruta y diagnóstico silencioso de sensores para TI.'
+                WHERE id = 1 AND version_code < 56
+            `).run();
+        }
+    } catch (e: any) {
+        console.warn('Self-healing ops_app_version_settings warning:', e.message);
+    }
+
+    // Ensure columns for fleet_registered_devices
+    try {
+        const devCols = db.prepare("PRAGMA table_info('fleet_registered_devices')").all().map((c: any) => c.name);
+        if (!devCols.includes('phone_number')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN phone_number TEXT;`);
+        if (!devCols.includes('current_app_version')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN current_app_version TEXT;`);
+        if (!devCols.includes('current_version_code')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN current_version_code INTEGER;`);
+        if (!devCols.includes('battery_level')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN battery_level INTEGER;`);
+        if (!devCols.includes('ota_paused')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN ota_paused INTEGER DEFAULT 0;`);
+        if (!devCols.includes('install_failed_count')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN install_failed_count INTEGER DEFAULT 0;`);
+        if (!devCols.includes('last_install_error')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN last_install_error TEXT;`);
+        
+        // Advanced MDM Telemetry columns
+        if (!devCols.includes('current_lat')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN current_lat REAL;`);
+        if (!devCols.includes('current_lng')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN current_lng REAL;`);
+        if (!devCols.includes('installed_apps_json')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN installed_apps_json TEXT;`);
+        if (!devCols.includes('storage_free_mb')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN storage_free_mb INTEGER;`);
+        if (!devCols.includes('storage_total_mb')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN storage_total_mb INTEGER;`);
+        if (!devCols.includes('ram_free_mb')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN ram_free_mb INTEGER;`);
+        if (!devCols.includes('ram_total_mb')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN ram_total_mb INTEGER;`);
+        if (!devCols.includes('battery_temp_c')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN battery_temp_c REAL;`);
+        if (!devCols.includes('is_charging')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN is_charging INTEGER;`);
+        if (!devCols.includes('network_type')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN network_type TEXT;`);
+        if (!devCols.includes('sim_carrier')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN sim_carrier TEXT;`);
+        if (!devCols.includes('os_version')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN os_version TEXT;`);
+        if (!devCols.includes('device_model')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN device_model TEXT;`);
+        if (!devCols.includes('shutdown_lat')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN shutdown_lat REAL;`);
+        if (!devCols.includes('shutdown_lng')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN shutdown_lng REAL;`);
+        if (!devCols.includes('shutdown_at')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN shutdown_at TEXT;`);
+        if (!devCols.includes('shutdown_battery')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN shutdown_battery INTEGER;`);
+        if (!devCols.includes('shutdown_reason')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN shutdown_reason TEXT;`);
+        if (!devCols.includes('is_device_owner')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN is_device_owner INTEGER;`);
+        if (!devCols.includes('serial_number')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN serial_number TEXT;`);
+        if (!devCols.includes('imei')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN imei TEXT;`);
+
+        // MDM Hardening & App Whitelist columns
+        if (!devCols.includes('mdm_kiosk_enabled')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_kiosk_enabled INTEGER DEFAULT 0;`);
+        if (!devCols.includes('mdm_force_gps')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_force_gps INTEGER DEFAULT 1;`);
+        if (!devCols.includes('mdm_disallow_airplane_mode')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_disallow_airplane_mode INTEGER DEFAULT 0;`);
+        if (!devCols.includes('mdm_disallow_mobile_data_off')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_disallow_mobile_data_off INTEGER DEFAULT 0;`);
+        if (!devCols.includes('mdm_disallow_battery_saver')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_disallow_battery_saver INTEGER DEFAULT 0;`);
+        if (!devCols.includes('mdm_block_uninstall')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_block_uninstall INTEGER DEFAULT 1;`);
+        if (!devCols.includes('mdm_disallow_settings')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_disallow_settings INTEGER DEFAULT 0;`);
+        if (!devCols.includes('mdm_disallow_tethering')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_disallow_tethering INTEGER DEFAULT 0;`);
+        if (!devCols.includes('mdm_disallow_install_apps')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_disallow_install_apps INTEGER DEFAULT 0;`);
+        if (!devCols.includes('mdm_disallow_play_store_install')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_disallow_play_store_install INTEGER DEFAULT 0;`);
+        if (!devCols.includes('mdm_always_on_vpn')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_always_on_vpn INTEGER DEFAULT 0;`);
+        if (!devCols.includes('mdm_whitelisted_packages')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_whitelisted_packages TEXT;`);
+        if (!devCols.includes('mdm_pinned_apps')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_pinned_apps TEXT;`);
+        if (!devCols.includes('mdm_pending_uninstalls')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_pending_uninstalls TEXT;`);
+        if (!devCols.includes('mdm_pending_reboot')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_pending_reboot INTEGER DEFAULT 0;`);
+    } catch (e: any) {
+        console.warn('Self-healing auxiliary tables check warning:', e.message);
+    }
+
+    console.log('Operations schema initialized at version', currentVersion < 17 ? 17 : currentVersion);
 }

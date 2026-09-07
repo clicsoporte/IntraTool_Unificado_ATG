@@ -13,7 +13,7 @@ import {
   Palette, UserCheck, ShoppingBag, QrCode, HelpCircle, ClipboardCheck,
   ClipboardList, Wand2, Lock, PackageCheck, RotateCcw, BookUser, GitBranch,
   Construction, BookCopy, Cpu, FileSignature, Settings, ListChecks, FileInput, Box, SlidersHorizontal,
-  Container, Tags, Truck, LayoutGrid, FileSpreadsheet, Trash2
+  Container, Tags, Truck, LayoutGrid, FileSpreadsheet, Trash2, Smartphone, Bot
 } from "lucide-react";
 import { allAdminPermissions } from "./permissions";
 
@@ -87,6 +87,14 @@ export const mainTools: Tool[] = [
     icon: FileSignature,
     bgColor: 'bg-teal-700',
   },
+  {
+    id: 'operaciones_chofer_web',
+    name: 'Portal Entregas Móvil',
+    description: 'Ruta activa, entregas y recolectas móviles.',
+    href: '/dashboard/operations/logistics/driver',
+    icon: Truck,
+    bgColor: 'bg-indigo-600',
+  },
    {
     id: "it-tools:access",
     name: "Herramientas de TI",
@@ -150,6 +158,14 @@ export const mainTools: Tool[] = [
     href: "/dashboard/tickets",
     icon: Wrench,
     bgColor: "bg-blue-600",
+  },
+  {
+    id: "ai:audit:logs",
+    name: "Auditor IA & Logs",
+    description: "Diagnóstico inteligente de logs, fallas de red y soporte técnico de TI.",
+    href: "/dashboard/it-tools/ai-auditor",
+    icon: Cpu,
+    bgColor: "bg-purple-700",
   },
   {
     id: "help",
@@ -324,6 +340,22 @@ export const consignmentsTools: Tool[] = [
 ];
 
 export const itTools: Tool[] = [
+    {
+        id: 'ai:audit:logs',
+        name: 'Asistente IA & Diagnóstico TI',
+        description: 'Diagnóstico inteligente de servidores, licencias, celulares Android y auditoría de logs.',
+        href: '/dashboard/it-tools/ai-auditor',
+        icon: Bot,
+        bgColor: 'bg-purple-600',
+    },
+    {
+        id: 'it-tools:assets:read',
+        name: 'Gestión de Flota Móvil y APK',
+        description: 'Administración de celulares Android Device Owner, asignación de choferes, líneas y auto-actualización OTA.',
+        href: '/dashboard/it-tools/mobile',
+        icon: Smartphone,
+        bgColor: 'bg-purple-700',
+    },
     {
         id: 'it-tools:notes:read',
         name: 'Notas Técnicas',

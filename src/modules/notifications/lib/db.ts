@@ -970,6 +970,128 @@ export async function initializeNotificationDefaults(db: any) {
             `,
             telegram: '📦 <b>ENTREGA PARCIAL DETECTADA</b>\n\nDocumento: <b>{{documento_numero}}</b>\nCliente: <b>{{cliente_nombre}}</b>\nChofer: <b>{{chofer_nombre}}</b>\nFaltantes: <i>{{motivo_incompleto}}</i>',
             internal: 'Documento {{documento_numero}} reportado como incompleto. Faltantes: {{motivo_incompleto}}'
+        },
+        {
+            eventId: 'onDeliveryArrivalGeofence',
+            subject: '🚛 [ARRIBO A BODEGA] El camión {{vehiculoPlaca}} ha ingresado a sus instalaciones - Factura #{{docNumero}}',
+            body: `
+                <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 20px;">
+                    <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); overflow: hidden; border: 1px solid #e2e8f0;">
+                        <div style="background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%); padding: 28px; text-align: center; color: #ffffff;">
+                            <h1 style="margin: 0; font-size: 22px; font-weight: 700;">Notificación de Arribo a Bodega</h1>
+                            <p style="margin: 6px 0 0 0; font-size: 13px; opacity: 0.9;">Control Satelital de Entregas Clic-Tools</p>
+                        </div>
+                        <div style="padding: 28px;">
+                            <div style="text-align: center; margin-bottom: 20px;">
+                                <span style="display: inline-block; padding: 6px 16px; border-radius: 9999px; font-size: 13px; font-weight: 700; color: #15803d; background-color: #f0fdf4; border: 1px solid #bbf7d0;">
+                                    📍 Camión en Instalaciones del Cliente
+                                </span>
+                            </div>
+                            <p style="font-size: 14px; color: #334155; line-height: 1.6; margin-bottom: 20px;">
+                                Estimado cliente <strong>{{clienteNombre}}</strong>,<br/>
+                                Le informamos que la unidad de transporte asignada a su entrega ha ingresado a su geocerca / instalaciones.
+                            </p>
+                            <div style="background-color: #f1f5f9; border-radius: 12px; padding: 18px; margin-bottom: 20px;">
+                                <table style="width: 100%; font-size: 13px; border-collapse: collapse; color: #334155;">
+                                    <tr>
+                                        <td style="padding: 5px 0; font-weight: 700;">Documento / Factura:</td>
+                                        <td style="padding: 5px 0; text-align: right; font-weight: 600; color: #1e40af;">{{docNumero}}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 5px 0; font-weight: 700;">Hora de Arribo:</td>
+                                        <td style="padding: 5px 0; text-align: right;">{{horaArribo}}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 5px 0; font-weight: 700;">Vehículo / Placa:</td>
+                                        <td style="padding: 5px 0; text-align: right;">{{vehiculoPlaca}}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 5px 0; font-weight: 700;">Chofer Asignado:</td>
+                                        <td style="padding: 5px 0; text-align: right;">{{choferNombre}}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 5px 0; font-weight: 700;">Lugar de Entrega:</td>
+                                        <td style="padding: 5px 0; text-align: right;">{{lugarEntrega}}</td>
+                                    </tr>
+                                </table>
+                            </div>
+                            <p style="font-size: 12px; color: #64748b; text-align: center; margin: 0;">
+                                Gracias por su preferencia. Si tiene alguna duda o requiere asistencia, contáctenos.
+                            </p>
+                        </div>
+                        <div style="background-color: #f8fafc; padding: 14px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0;">
+                            Mensaje generado automáticamente por Clic-Tools Logistics Engine
+                        </div>
+                    </div>
+                </div>
+            `,
+            telegram: '📍 <b>Arribo a Bodega del Cliente</b>\n\nFactura: <b>#{{docNumero}}</b>\nCliente: <b>{{clienteNombre}}</b>\nHora: <b>{{horaArribo}}</b>\nVehículo: <b>{{vehiculoPlaca}}</b>\nChofer: <b>{{choferNombre}}</b>',
+            internal: 'El camión {{vehiculoPlaca}} ingresó a las instalaciones de {{clienteNombre}} (Doc #{{docNumero}}).'
+        },
+        {
+            eventId: 'onDriverWaitingCustomer',
+            subject: '⏱️ [EN ESPERA] Chofer esperando atención en {{clienteNombre}} - Factura #{{docNumero}}',
+            body: `
+                <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 20px;">
+                    <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); overflow: hidden; border: 1px solid #e2e8f0;">
+                        <div style="background: linear-gradient(135deg, #d97706 0%, #b45309 100%); padding: 26px; text-align: center; color: #ffffff;">
+                            <h1 style="margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.025em;">⏱️ Chofer en Espera de Atención</h1>
+                            <p style="margin: 6px 0 0 0; font-size: 13px; opacity: 0.95;">Aviso de Ubicación y Tiempo en Sitio - Logística</p>
+                        </div>
+                        <div style="padding: 26px;">
+                            <div style="text-align: center; margin-bottom: 20px;">
+                                <span style="display: inline-block; padding: 6px 16px; border-radius: 9999px; font-size: 13px; font-weight: 700; color: #b45309; background-color: #fef3c7; border: 1px solid #fde68a;">
+                                    ⏳ Chofer en sitio esperando ser atendido
+                                </span>
+                            </div>
+                            <p style="font-size: 14px; color: #334155; line-height: 1.6; margin-bottom: 18px;">
+                                Se informa que el conductor <strong>{{choferNombre}}</strong> ya se encuentra en las instalaciones de <strong>{{clienteNombre}}</strong> esperando a que el cliente reciba la mercancía del documento <strong>#{{docNumero}}</strong>.
+                            </p>
+                            <div style="background-color: #fffbeb; border: 1px solid #fef3c7; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+                                <table style="width: 100%; font-size: 13px; border-collapse: collapse; color: #334155;">
+                                    <tr>
+                                        <td style="padding: 4px 0; font-weight: 700; color: #78350f;">Cliente:</td>
+                                        <td style="padding: 4px 0; text-align: right; font-weight: 600;">{{clienteNombre}} ({{clienteId}})</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 4px 0; font-weight: 700; color: #78350f;">Documento ERP:</td>
+                                        <td style="padding: 4px 0; text-align: right; font-weight: 700; color: #b45309;">#{{docNumero}}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 4px 0; font-weight: 700; color: #78350f;">Hora de Reporte:</td>
+                                        <td style="padding: 4px 0; text-align: right; font-weight: 600;">{{horaReporte}}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 4px 0; font-weight: 700; color: #78350f;">Chofer:</td>
+                                        <td style="padding: 4px 0; text-align: right; font-weight: 600;">{{choferNombre}}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 4px 0; font-weight: 700; color: #78350f;">Vehículo / Ruta:</td>
+                                        <td style="padding: 4px 0; text-align: right;">{{vehiculoPlaca}} | {{rutaNombre}}</td>
+                                    </tr>
+                                    <tr>
+                                        <td style="padding: 4px 0; font-weight: 700; color: #78350f;">Dirección (EMB):</td>
+                                        <td style="padding: 4px 0; text-align: right; font-size: 12px;">{{lugarEntrega}}</td>
+                                    </tr>
+                                </table>
+                            </div>
+
+                            {{productosTable}}
+
+                            <div style="text-align: center; margin-top: 24px; margin-bottom: 12px;">
+                                <a href="{{mapsLink}}" target="_blank" style="display: inline-block; background-color: #d97706; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-size: 13px; font-weight: 700; box-shadow: 0 2px 4px rgba(217, 119, 6, 0.25);">
+                                    📍 Ver Ubicación en Google Maps
+                                </a>
+                            </div>
+                        </div>
+                        <div style="background-color: #f8fafc; padding: 14px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0;">
+                            Aviso automático generado desde Clic Driver APK Móvil
+                        </div>
+                    </div>
+                </div>
+            `,
+            telegram: '⏱️ <b>CHOFER EN ESPERA DE ATENCIÓN</b>\n\nDoc: <b>#{{docNumero}}</b>\nCliente: <b>{{clienteNombre}}</b>\nChofer: <b>{{choferNombre}}</b> ({{vehiculoPlaca}})\nHora: <b>{{horaReporte}}</b>\nDirección: <i>{{lugarEntrega}}</i>\n\n📍 <a href="{{mapsLink}}">Ver Ubicación GPS en Google Maps</a>',
+            internal: 'Chofer {{choferNombre}} reporta espera en cliente {{clienteNombre}} para entrega #{{docNumero}}.'
         }
     ];
 

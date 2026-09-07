@@ -1,9 +1,10 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Card, CardHeader, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { User, Truck, MapPin, MapPinOff } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { User, Truck, MapPin, MapPinOff, ChevronLeft, ChevronRight } from 'lucide-react';
 import { calculateAssignmentDurations } from '@/modules/operations/lib/utils';
 
 interface LogisticsMetricsTabProps {
@@ -12,6 +13,9 @@ interface LogisticsMetricsTabProps {
 }
 
 export function LogisticsMetricsTab({ assignments, deliveries }: LogisticsMetricsTabProps) {
+    const [page, setPage] = useState(1);
+    const PAGE_SIZE = 5;
+
     // Tarjetas de KPI Promedios
     const activeOrCompleted = assignments || [];
     let totalDeliveryMins = 0;
@@ -27,7 +31,7 @@ export function LogisticsMetricsTab({ assignments, deliveries }: LogisticsMetric
     activeOrCompleted.forEach(ass => {
         const docsForAss = (deliveries || []).filter(d => d.asignacion_id === ass.id);
         totalDocs += docsForAss.length;
-        completedDocsCount += docsForAss.filter(d => d.entregado === 1).length;
+        completedDocsCount += docsForAss.filter(d => d.estado === 'completo').length;
 
         const metrics = calculateAssignmentDurations(ass, docsForAss);
         if (metrics.activeDeliveryMins > 0) {
@@ -59,6 +63,9 @@ export function LogisticsMetricsTab({ assignments, deliveries }: LogisticsMetric
     const successRate = totalDocs > 0 
         ? `${Math.round((completedDocsCount / totalDocs) * 100)}%`
         : 'N/A';
+
+    const totalPages = Math.ceil(assignments.length / PAGE_SIZE) || 1;
+    const pagedAssignments = assignments.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
     return (
         <div className="space-y-6 animate-in fade-in duration-300">
@@ -100,10 +107,10 @@ export function LogisticsMetricsTab({ assignments, deliveries }: LogisticsMetric
             <div className="space-y-4">
                 {assignments.length === 0 ? (
                     <div className="text-center p-12 bg-card border rounded-2xl text-xs font-semibold text-muted-foreground">
-                        No hay rutas activas registradas el día de hoy para analizar tiempos.
+                        No hay rutas registradas en el período seleccionado.
                     </div>
                 ) : (
-                    assignments.map((ass) => {
+                    pagedAssignments.map((ass) => {
                         const docsForAss = (deliveries || []).filter(d => d.asignacion_id === ass.id);
                         const metrics = calculateAssignmentDurations(ass, docsForAss);
                         
@@ -296,6 +303,33 @@ export function LogisticsMetricsTab({ assignments, deliveries }: LogisticsMetric
                     })
                 )}
             </div>
+
+            {/* Controls de Paginación para Rutas */}
+            {totalPages > 1 && (
+                <div className="flex items-center justify-between pt-4 border-t text-xs">
+                    <span className="text-muted-foreground font-medium">Página {page} de {totalPages}</span>
+                    <div className="flex items-center gap-1">
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 text-xs rounded-lg gap-1"
+                            disabled={page <= 1}
+                            onClick={() => setPage(p => p - 1)}
+                        >
+                            <ChevronLeft className="w-3.5 h-3.5" /> Anterior
+                        </Button>
+                        <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 text-xs rounded-lg gap-1"
+                            disabled={page >= totalPages}
+                            onClick={() => setPage(p => p + 1)}
+                        >
+                            Siguiente <ChevronRight className="w-3.5 h-3.5" />
+                        </Button>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

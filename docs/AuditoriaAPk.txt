@@ -1,0 +1,77 @@
+INFORME QA / ARQUITECTURA — APK Clic Driver (carpeta \Android)
+Versión auditada: 1.2.37 (code 56) — config.dart:3-4 y pubspec.yaml:4 (1.2.37+56) consistentes ✅ Alcance: lib/** (24 archivos), nativos Kotlin (MainActivity.kt 800+ líneas, receivers), manifest/gradle, servicios (sync/OTA/impresión/biometría/diagnóstico), screens (dashboard 4,565–4,786 líneas, proceso de entrega 1,827, login 574). Modo: solo lectura. Flujos verificados adelante/atrás + cruce con backend (delivery-service.ts, schema.ts, app-version/route.ts).
+
+Resumen ejecutivo
+La capa offline/persistencia es sólida (guarda en SQLite con is_synced=0, reintentos en SyncEngine), pero hay 4 problemas críticos de integridad/comunicación (HTTP plano + OTA MITM, corridas concurrentes de sync, atasco permanente de entregas con fotos ya borradas, boleta impresa ≠ registrada), 1 crítico de seguridad nativa (release firmada con la keystore debug + contraseñas de la release hardcodeadas), y 1 crítico de fuga (PIN maestro 7429 hardcodeado que reconfigura el servidor → exfiltración de credenciales y evidencias).
+Muchos cálculos revisados son correctos (Haversine, cooldowns, conteos de pestañas, formato de duración, comparador de versiones por code). Los errores de cálculo reales están en cantidades de líneas (invariante pedida=entregada+faltante rota en revert y al editar), GPS de entrega falso, boleta no transaccional y telemetría de batería inventada (100%).
+La versión OTA está desincronizada con el backend: schema.ts:677-684 solo siembra 1.2.36/55; no existe referencia a 1.2.37/56 en src → si la BD quedó en 55 el OTA nunca disparará hacia esta versión (riesgo de loop inverso).
+🔴 CRÍTICOS
+#	Área	Hallazgo	Evidencia
+C1	Seguridad APK	Release se firma con la keystore debug estándar de Flutter y las contraseñas de la keystore "release" están en el repo	android/app/build.gradle.kts:29-40 (signingConfig = getByName("debug"), keyPassword/storePassword = "ClicDriver2026!"). Un tercero con el APK puede firmar una "actualización" maliciosa que el OS acepta como confiable (y la app tiene canales installApk, wipe, reboot, Device Owner)
+C2	Comunicación/Seguridad	Todo HTTP plano (IP LAN hardcodeada, login/credenciales/evidencias/APK OTA en claro, sin pinning)	config.dart:9 (http://192.168.1.14:9003), api_service.dart:46-56 (fuerza http://), login_screen.dart:277-287, version_service.dart:49-66,190-208 (descarga/instala APK sin verificar firma ni hash). MITM → robo de credenciales/PII o RCE vía OTA
+C3	Sincronización	Sync concurrente sin mutex (Timer.periodic + sync manual + 2 isolates) → doble POST del mismo doc/evento, doble incremento de consecutivo	sync_engine.dart:66-72 (sin flag), background_sync_service.dart:150-155, dashboard_screen.dart:2322,3879,4109-4116
+C4	Sincronización	Atasco permanente: el server rechaza el doble procesamiento (delivery-service.ts:169-172), la app borra las fotos apenas responde OK (api_service.dart:349-352) y luego un fallo local deja el doc is_synced=0 para siempre con fotos perdidas. Sin reconciliación de conflictos	sync_engine.dart:155-163, api_service.dart:349-352, offline_db_service.dart:307-337
+C5	UI	ScaffoldMessenger.of(context) con context del diálogo ya desmontado tras pop+await → assert/excepción en cada reporte de avería/boleta	dashboard_screen.dart:491-508, 1871-1934
+C6	UI	Reportes de avería y envío de boleta por correo sin try/catch → excepción no capturada si no hay red	dashboard_screen.dart:491-511, 891-909; api_service.dart:377-397,399-415
+C7	Login/Seguridad	PIN maestro '7429' hardcodeado + fallback '0000': desbloquea reconfigurar el servidor → el próximo login y todo el sync (fotos/firma) van a un host del atacante	login_screen.dart:96,156
+C8	Nativo	Ramas duplicadas en el when de startLockTask/stopLockTask (la 2ª es código muerto, sin isDeviceOwnerApp, kiosco con LOCK_TASK_FEATURE_NONE)	MainActivity.kt:206-224 vs 517-550
+🟠 ALTOS (selección)
+Entregas / cálculos
+
+F3: Rechazo/parcial sin obligar motivo (se guarda con solo nombre) — delivery_process_screen.dart:157-224,924-942.
+F4: Doble submit por carrera (los await de GPS/BT corren antes de _isSaving=true) — delivery_process_screen.dart:158,226-246.
+F5: Fotos/firma solo en memoria/caché hasta _saveAndPrint; un kill a mitad pierde toda la evidencia — delivery_process_screen.dart:41-44,131-143.
+F6: Fallo de sync silencioso (catch(_){}) → "✓ guardada exitosamente" y pop(true) aunque quedó offline — delivery_process_screen.dart:356-375.
+F7: GPS falso: si no hay fix GPS, se envían las coordenadas precargadas del cliente como ubicación de entrega — delivery_process_screen.dart:250-257.
+F10: Back durante _isSaving sale sin confirmar y el Dashboard refresca antes de que termine — delivery_process_screen.dart:944-947.
+M1: Revert no resetea entregada/faltante/fecha/coords → segunda entrega parte con la cantidad ya entregada (invariante rota) — dashboard_screen.dart:327-341.
+A3: Rechazado es terminal en la app (sin revertir ni reprocesar) — dashboard_screen.dart:4737-4749.
+A4: Inicio de pausa falla en silencio (sin else, sin cola offline) — dashboard_screen.dart:780-796.
+M7: La tarjeta solo muestra pedida, nunca entregada/faltante → una entrega parcial luce como completa — dashboard_screen.dart:4636-4643,3483.
+Comunicación/sync
+
+A1/A2: _departRoute encola DEPART_ROUTE duplicado tras excepción post-éxito; _finishRouteAction no encola FINISH_ROUTE en fallo de red y muestra éxito falso con ok=false — dashboard_screen.dart:2313-2337,3849-3892.
+A5: Boleta: contador local no transaccional (offline_db_service.dart:278-287) + syncDelivery no envía boleta_numero (api_service.dart:327-339) → el server asigna otra; boleta impresa ≠ registrada; colisiones multi-chofer.
+A1(svc): Sin manejo de 401/expiración de sesión → chofer trabaja offline "para siempre" sin aviso.
+M3: offline_events sin máx. de reintentos (evento "veneno" reintentado infinito). M1/M2: runFullSync no aborta sin red; health-checks en serie (hasta ~16 s/ciclo).
+Nativo/seguridad/dispositivo
+
+A-1: usesCleartextTraffic=true global; allowBackup no declarado (default true) → token+BD+fotos se van al backup.
+A-5: Device Admin con blockUninstall=true por defecto y sin vía de salida (clearAllMdmRestrictions no hace removeActiveAdmin) → equipo imposible de liberar sin factory reset.
+A-11/A-15: FGS solo dataSync (en Android 14 se corta ~6 h sin Device Owner); BootReceiver lanza Activity desde BOOT_COMPLETED (bloqueado por BAL si no es DO) y no hay directBootAware → tras reboot el sync no se reinicia.
+A-16: ShutdownReceiver hace red en thread{} sin goAsync() ni cola persistente → el aviso de apagado se pierde.
+A-18: HWID fallback usa Build.ID (idéntico en la misma ROM) → colisión de dispositivos.
+A-14/M-11: Self-test con falsos positivos (HARDWARE siempre verde aunque BT esté apagado; GPS_NAVIXY "éxito" en cualquier excepción) y test RED contra google.com (falso negativo en flota con VPN).
+Biometría/sesión
+
+F9/M9: auth_token y sesión en SharedPreferences en claro (no flutter_secure_storage, que ya es dependencia). A-7: sin re-lock al volver de background. M-4: no se valida que el usuario biométrico siga siendo el dueño.
+Impresión
+
+A-8: printBoleta ignora el resultado de connect() y sin cola → boleta truncada sin reimpresión; dos impresiones concurrentes corrompen ambos tickets.
+A-9: testPrint cae al primer dispositivo emparejado si el elegido no conecta (imprime en impresora ajena).
+Fotos/rendimiento
+
+A-10/A2: Sin maxWidth ni reescalado en persistencia; todas las fotos base64 en RAM con 2-3 copias por envío y timeout de 15 s sin reintento → OOM en gama baja y fallos con señal mala.
+F8 (a verificar): ent.clamp(0, ped) devuelve num asignado a int en delivery_process_screen.dart:488,652 — riesgo de error de tipos según SDK; confirmar con flutter analyze.
+🟡 MEDIOS de render/UX
+F11/F12/F13: campo de cantidad desincronizado tras el toggle 0/100% (TextFormField sin controller), chip "Faltante" con valores viejos, y campo vacío ⇒ línea completa marcada faltante en silencio (delivery_process_screen.dart:637-689,650-656).
+M3: cronómetro de pausa congelado dentro del diálogo (el setState reconstruye el Dashboard, no el DialogRoute) — dashboard_screen.dart:617-656 vs 664-767.
+M5: RefreshIndicator inservible (_isLoading reemplaza la lista por spinner) — dashboard_screen.dart:4244,4392-4394.
+F18: SegmentedButton.selected con estado de server no contemplado puede lanzar assert — delivery_process_screen.dart:1176.
+M2: diálogo "Iniciar Ruta" sin await + guardián liberado con diálogo abierto (reentrada). F17: setState post-await sin mounted.
+B3: AppBar con título+chip versión+Online+3 botones puede desbordar en 360-400dp.
+F16/F15: recolecta recoger sin manejo de montos/pago y el payload de sync no envía boleta/fecha/tipo/collectDetails.
+Textos 9-11 px y targets <40dp para uso conduciendo; errores crudos Error: $e al chofer.
+✅ Cálculos verificados como CORRECTOS
+Haversine (gps_tracking_service.dart:95-105), cooldown SOS (emergency_alert_service.dart:60), _formatDuration y countdown de pausa (dashboard_screen.dart:605-657), conteos de pestañas Todos=Pendientes+Procesados (partición exhaustiva, dashboard_screen.dart:4379-4385,915-929), comparador OTA por version_code entero (version_service.dart), parseo de cantidades parseQty (delivery_doc.dart:19-28).
+⚠️ Puntos débiles de cálculo/fechas (detectados)
+Timestamps locales ISO sin offset/Z enviados al server (interpretados como UTC → ±6 h en logs) — app_logger.dart:39,82, offline_db_service.dart:505, dashboard_screen.dart:2304.
+batteryPct reporta 100 ante cualquier fallo (telemetría falsa) — MainActivity.kt:86,122.
+Progreso OTA con tamaño fijo 58 MB si no hay contentLength — version_service.dart:190.
+🔁 Flujos adelante/atrás críticos (síntesis de simulación)
+Offline → entrega → vuelve red: si updateDeliveryState falla tras borrar fotos ⇒ doc atascado para siempre (C4). Orden de reenvío además manda FINISH_ROUTE antes que las entregas (C4 del agente de servicios).
+Reboot sin abrir la app: no se reinicia el sync ni el rastreo (A-15/A-17/M-15).
+Revertir entrega → reprocesar: parte con cantidades de la entrega anterior (M1).
+Back en proceso de entrega: protegido por PopScope (✅) salvo durante el guardado (F10). Back en Dashboard con ruta activa: sin confirmación (M4).
+Token vencido: sin 401 handler ⇒ cola eterna "offline".
+Doble OTA (early sin await en main.dart:16 + diálogo del dashboard) ⇒ doble descarga/instalación.

@@ -3,6 +3,7 @@ import { triggerNotificationEvent } from './notifications-engine';
 import { getDb } from '@/modules/core/lib/db';
 import { CORE_TABLE_NAMES } from '@/modules/core/lib/schema';
 import { logInfo, logError } from '@/modules/core/lib/logger';
+import { recalculateFleetMetrics } from '@/modules/fleet/lib/db';
 
 /**
  * Main runner for automated tasks.
@@ -134,6 +135,13 @@ async function executeTask(taskId: string) {
  */
 export async function runFleetAudit(sendAlerts: boolean = true) {
     const db = await getDb();
+
+    // Recalcular odómetros y cambios de aceite retroactivamente basándose en el historial completo
+    try {
+        await recalculateFleetMetrics();
+    } catch (e: any) {
+        logError('Error al recalcular métricas de flota en auditoría', { error: e.message });
+    }
     
     // 1. Get enabled Milestones from fleet_settings (or default if empty)
     const rtvSettings = db.prepare("SELECT value FROM fleet_settings WHERE category = 'rtv_milestone'").all() as any[];
@@ -155,10 +163,9 @@ export async function runFleetAudit(sendAlerts: boolean = true) {
 
     for (const vehicle of vehicles) {
         // --- 1. OIL CHANGE / ODOMETER ALERTS ---
-        const mileageSinceLast = (vehicle.currentMileage || 0) - (vehicle.lastOilChangeMileage || 0);
-        const progress = vehicle.oilChangeInterval > 0 
-            ? Math.round((mileageSinceLast / vehicle.oilChangeInterval) * 100)
-            : 0;
+        const mileageSinceLast = Math.max(0, (vehicle.currentMileage || 0) - (vehicle.lastOilChangeMileage || 0));
+        const interval = (vehicle.oilChangeInterval && vehicle.oilChangeInterval > 0) ? vehicle.oilChangeInterval : 5000;
+        const progress = Math.round((mileageSinceLast / interval) * 100);
         
         // Find the highest threshold reached from the active milestones list
         const reachedThresholds = oilMilestones.filter(m => progress >= m);

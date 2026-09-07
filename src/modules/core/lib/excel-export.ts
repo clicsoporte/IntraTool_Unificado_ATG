@@ -1,30 +1,19 @@
-
-/**
- * @fileoverview Utility function for exporting data to an Excel (.xlsx) file.
- * This module uses the 'xlsx' library (SheetJS) to create and download Excel files
- * on the client-side.
- */
 'use client';
 
 import * as XLSX from 'xlsx';
 
-interface ExportToExcelOptions {
+export interface ExportToExcelOptions {
     fileName: string;
     sheetName?: string;
     headers: string[];
     data: (string | number | null | undefined)[][];
     columnWidths?: number[];
+    includeTimestampInFilename?: boolean;
 }
 
 /**
- * Creates and downloads an Excel (.xlsx) file from the provided data.
- * 
- * @param {ExportToExcelOptions} options - The configuration for the Excel file.
- * @param {string} options.fileName - The name of the file to be downloaded (without extension).
- * @param {string[]} options.headers - An array of strings for the table headers.
- * @param {(string | number | null | undefined)[][]} options.data - A 2D array of data for the rows.
- * @param {string} [options.sheetName='Datos'] - The name of the worksheet.
- * @param {number[]} [options.columnWidths] - Optional array of widths for each column.
+ * Motor Centralizado de Exportación a Excel (.xlsx) para Clic-Tools.
+ * Genera archivos .xlsx nativos con formato limpio, auto-ajuste de ancho de columnas y cabeceras estructuradas.
  */
 export const exportToExcel = ({
     fileName,
@@ -32,33 +21,50 @@ export const exportToExcel = ({
     headers,
     data,
     columnWidths,
+    includeTimestampInFilename = true,
 }: ExportToExcelOptions) => {
-    // Create a new workbook and a worksheet
+    // 1. Create a new workbook
     const workbook = XLSX.utils.book_new();
     
-    // Add headers to the beginning of the data array
-    const dataWithHeaders = [headers, ...data];
+    // 2. Pre-process rows to ensure clean string/number formatting
+    const processedData = data.map(row => 
+        row.map(cell => (cell === null || cell === undefined ? '' : cell))
+    );
 
-    // Create worksheet from the array of arrays
+    const dataWithHeaders = [headers, ...processedData];
+
+    // 3. Create worksheet from AOA
     const worksheet = XLSX.utils.aoa_to_sheet(dataWithHeaders);
 
-    // Apply column widths if provided
-    if (columnWidths) {
+    // 4. Calculate auto column widths if not provided
+    if (columnWidths && columnWidths.length === headers.length) {
         worksheet['!cols'] = columnWidths.map(width => ({ wch: width }));
+    } else {
+        const autoWidths = headers.map((header, colIndex) => {
+            let maxLen = header ? header.toString().length : 10;
+            processedData.forEach(row => {
+                const cellVal = row[colIndex];
+                if (cellVal !== undefined && cellVal !== null) {
+                    const len = cellVal.toString().length;
+                    if (len > maxLen) {
+                        maxLen = len;
+                    }
+                }
+            });
+            return { wch: Math.min(Math.max(maxLen + 3, 12), 60) }; // min 12, max 60 chars
+        });
+        worksheet['!cols'] = autoWidths;
     }
 
-    // Apply bold style to header row
-    const headerCellStyle = { font: { bold: true } };
-    const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1:A1');
-    for (let C = range.s.c; C <= range.e.c; ++C) {
-        const address = XLSX.utils.encode_cell({ r: 0, c: C });
-        if (!worksheet[address]) continue;
-        worksheet[address].s = headerCellStyle;
-    }
-
-    // Append the worksheet to the workbook
+    // 5. Append worksheet to workbook
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
 
-    // Generate the .xlsx file and trigger the download
-    XLSX.writeFile(workbook, `${fileName}_${new Date().getTime()}.xlsx`);
+    // 6. Generate .xlsx filename
+    const dateStr = new Date().toISOString().split('T')[0];
+    const finalFilename = includeTimestampInFilename 
+        ? `${fileName}_${dateStr}.xlsx` 
+        : `${fileName}.xlsx`;
+
+    // 7. Download file
+    XLSX.writeFile(workbook, finalFilename);
 };

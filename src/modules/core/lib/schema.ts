@@ -7,7 +7,7 @@
 import type { Role, Company, TransitStatusAlias } from '@/modules/core/types';
 import { initialRoles, initialCompany } from './data';
 
-export const CORE_SCHEMA_VERSION = 9;
+export const CORE_SCHEMA_VERSION = 14;
 
 export const CORE_TABLE_NAMES = {
     users: 'core_users',
@@ -67,6 +67,7 @@ export const CORE_TABLES = `
         forcePasswordChange BOOLEAN DEFAULT FALSE,
         activeWizardSession TEXT,
         employeeId TEXT,
+        telegramChatId TEXT,
         is_active INTEGER DEFAULT 1
     );
 
@@ -102,7 +103,11 @@ export const CORE_TABLES = `
         exchangeRateApi TEXT,
         haciendaExemptionApi TEXT,
         haciendaTributariaApi TEXT,
-        recopeApi TEXT
+        recopeApi TEXT,
+        navixyBaseUrl TEXT,
+        navixyApiKey TEXT,
+        cartoApiKey TEXT,
+        googleMapsApiKey TEXT
     );
 
     CREATE TABLE IF NOT EXISTS ${CORE_TABLE_NAMES.aiSettings} (
@@ -115,7 +120,15 @@ export const CORE_TABLES = `
         geminiModel TEXT DEFAULT 'gemini-1.5-flash',
         deepseekApiKey TEXT DEFAULT '',
         deepseekModel TEXT DEFAULT 'deepseek-v4-flash',
-        systemPrompt TEXT DEFAULT 'Eres un asistente experto en usabilidad. Tu objetivo es guiar al usuario a completar el flujo del bot.'
+        systemPrompt TEXT DEFAULT 'Eres un asistente experto en usabilidad. Tu objetivo es guiar al usuario a completar el flujo del bot.',
+        synonyms TEXT DEFAULT '[]',
+        aiMemory TEXT DEFAULT '{}',
+        adaptTechnicalLevel INTEGER DEFAULT 1,
+        strictSafetyRules INTEGER DEFAULT 1,
+        auditorMasterPrompt TEXT DEFAULT 'Eres un Auditor Senior de Sistemas e Infraestructura para Clic-Tools. Analiza los logs, identifica causas raíz, diagnostica fallas de red/sockets/base de datos y sugiere soluciones claras y preventivas.',
+        auditorAllowedTables TEXT DEFAULT '["core_logs","ops_driver_logs","fleet_telegram_bot_logs","ops_delivery_queue","fleet_vehicles","it_assets","it_asset_telemetry"]',
+        auditorMaxRowsPerQuery INTEGER DEFAULT 100,
+        auditorTimeoutSeconds INTEGER DEFAULT 45
     );
 
     CREATE TABLE IF NOT EXISTS ${CORE_TABLE_NAMES.analyticsSettings} (
@@ -257,7 +270,10 @@ export const CORE_TABLES = `
         name TEXT,
         alias TEXT,
         email TEXT,
-        phone TEXT
+        phone TEXT,
+        address TEXT,
+        latitude REAL,
+        longitude REAL
     );
 
     CREATE TABLE IF NOT EXISTS ${CORE_TABLE_NAMES.erpOrderHeaders} (
@@ -397,6 +413,7 @@ export const CORE_TABLES = `
         telefono2 TEXT,
         latitude REAL,
         longitude REAL,
+        email_notificacion TEXT,
         UNIQUE(cliente_id, direccion_id)
     );
 
@@ -631,6 +648,69 @@ export const CORE_MIGRATIONS: ((db: any) => void)[] = [
         } catch (e: any) {
             console.error("[Migration v9] ❌ Error en migración v9:", e);
             throw e;
+        }
+    },
+    // Version 10: Add navixy fields to core_api_settings
+    (db: any) => {
+        try {
+            db.exec(`ALTER TABLE core_api_settings ADD COLUMN navixyBaseUrl TEXT;`);
+            db.exec(`ALTER TABLE core_api_settings ADD COLUMN navixyApiKey TEXT;`);
+            console.log("[Migration v10] ✅ Columnas navixyBaseUrl y navixyApiKey agregadas a 'core_api_settings'.");
+        } catch (e: any) {
+            console.warn("[Migration v10] ⚠️ Columnas Navixy ya existen o aviso menor:", e.message);
+        }
+    },
+    // Version 11: Add email_notificacion to core_customer_shipment_addresses
+    (db: any) => {
+        try {
+            const tableInfo = db.prepare("PRAGMA table_info('core_customer_shipment_addresses')").all();
+            const exists = tableInfo.some((col: any) => col.name === 'email_notificacion');
+            if (!exists) {
+                db.exec(`ALTER TABLE core_customer_shipment_addresses ADD COLUMN email_notificacion TEXT;`);
+            }
+            console.log("[Migration v11] ✅ Columna 'email_notificacion' agregada a 'core_customer_shipment_addresses'.");
+        } catch (e: any) {
+            console.warn("[Migration v11] ⚠️ Columna email_notificacion ya existe o aviso:", e.message);
+        }
+    },
+    // Version 12: Add synonyms, aiMemory, adaptTechnicalLevel, strictSafetyRules to core_ai_settings
+    (db: any) => {
+        try {
+            const tableInfo = db.prepare("PRAGMA table_info('core_ai_settings')").all();
+            const cols = tableInfo.map((c: any) => c.name);
+            if (!cols.includes('synonyms')) db.exec(`ALTER TABLE core_ai_settings ADD COLUMN synonyms TEXT DEFAULT '[]';`);
+            if (!cols.includes('aiMemory')) db.exec(`ALTER TABLE core_ai_settings ADD COLUMN aiMemory TEXT DEFAULT '{}';`);
+            if (!cols.includes('adaptTechnicalLevel')) db.exec(`ALTER TABLE core_ai_settings ADD COLUMN adaptTechnicalLevel INTEGER DEFAULT 1;`);
+            if (!cols.includes('strictSafetyRules')) db.exec(`ALTER TABLE core_ai_settings ADD COLUMN strictSafetyRules INTEGER DEFAULT 1;`);
+            console.log("[Migration v12] ✅ Columnas de sinónimos, memoria y seguridad agregadas a 'core_ai_settings'.");
+        } catch (e: any) {
+            console.warn("[Migration v12] ⚠️ Aviso menor en migración v12:", e.message);
+        }
+    },
+    // Version 13: Add telegramChatId to core_users
+    (db: any) => {
+        try {
+            const tableInfo = db.prepare("PRAGMA table_info('core_users')").all();
+            const exists = tableInfo.some((col: any) => col.name === 'telegramChatId');
+            if (!exists) {
+                db.exec(`ALTER TABLE core_users ADD COLUMN telegramChatId TEXT;`);
+            }
+            console.log("[Migration v13] ✅ Columna 'telegramChatId' agregada a 'core_users'.");
+        } catch (e: any) {
+            console.warn("[Migration v13] ⚠️ Columna telegramChatId ya existe o aviso:", e.message);
+        }
+    },
+    // Version 14: Add address, latitude, and longitude to core_suppliers
+    (db: any) => {
+        try {
+            const tableInfo = db.prepare("PRAGMA table_info('core_suppliers')").all();
+            const cols = tableInfo.map((c: any) => c.name);
+            if (!cols.includes('address')) db.exec(`ALTER TABLE core_suppliers ADD COLUMN address TEXT;`);
+            if (!cols.includes('latitude')) db.exec(`ALTER TABLE core_suppliers ADD COLUMN latitude REAL;`);
+            if (!cols.includes('longitude')) db.exec(`ALTER TABLE core_suppliers ADD COLUMN longitude REAL;`);
+            console.log("[Migration v14] ✅ Columnas address, latitude y longitude agregadas a 'core_suppliers'.");
+        } catch (e: any) {
+            console.warn("[Migration v14] ⚠️ Aviso menor en migración v14:", e.message);
         }
     }
 ];

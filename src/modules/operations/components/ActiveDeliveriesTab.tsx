@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -18,20 +18,27 @@ import {
 import { 
     formatTimeElapsed, 
     getTvGridCols, 
-    formatFechaEntrega 
+    formatFechaEntrega,
+    parsePhotoUrls 
 } from '@/modules/operations/lib/utils';
+import VehicleTelemetryBadge from '@/modules/operations/components/VehicleTelemetryBadge';
+import { SelectedPhoto } from '@/modules/operations/components/EvidencePhotoViewer';
+import { IncompleteDocData } from '@/modules/operations/components/IncompleteDeliveryModal';
 
 interface ActiveDeliveriesTabProps {
+    loading?: boolean;
     assignments: any[];
     deliveries: any[];
     displayedDeliveries: any[];
     sortedAssignments: any[];
+    telemetryMap?: Record<string, any>;
     tvMode: boolean;
     themeStyles: any;
     hasPermission: (permission: string) => boolean;
     handleOpenManualDelivery: (doc: any) => void;
     handleRevertDelivery: (doc: any) => void;
-    setSelectedPhoto: (photo: { url: string; title: string } | null) => void;
+    setSelectedPhoto: (photo: SelectedPhoto | null) => void;
+    setSelectedIncompleteDoc?: (doc: IncompleteDocData | null) => void;
 }
 
 function renderComentario(comentario: string, tvMode: boolean) {
@@ -40,7 +47,9 @@ function renderComentario(comentario: string, tvMode: boolean) {
     const isJson = comentario.trim().startsWith('{') && comentario.trim().endsWith('}');
     if (isJson) {
         try {
-            const data = JSON.parse(comentario);
+            const parsed = JSON.parse(comentario);
+            if (!parsed || typeof parsed !== 'object') return null;
+            const data = parsed;
             
             let paymentMethod = data.metodo_pago || '';
             if (paymentMethod === 'ya_esta_pago') paymentMethod = 'Ya está pago';
@@ -56,62 +65,27 @@ function renderComentario(comentario: string, tvMode: boolean) {
                     <div className="font-extrabold text-amber-500 dark:text-amber-400 uppercase tracking-wider text-[9px] mb-1">
                         📦 Detalles de Recolecta
                     </div>
-                    {data.proveedor_contacto_nombre && (
-                        <div>
-                            <span className={`font-semibold ${labelClass}`}>Contacto: </span>
-                            <span className={`font-bold ${valueClass}`}>
-                                {data.proveedor_contacto_nombre} {data.proveedor_contacto_telefono ? `(${data.proveedor_contacto_telefono})` : ''}
-                            </span>
-                        </div>
-                    )}
-                    {(data.orden_compra || data.factura) && (
-                        <div className="flex flex-wrap gap-x-2">
-                            {data.orden_compra && (
-                                <div>
-                                    <span className={`font-semibold ${labelClass}`}>OC: </span>
-                                    <span className={`font-bold ${valueClass} font-mono`}>{data.orden_compra}</span>
-                                </div>
-                            )}
-                            {data.factura && (
-                                <div>
-                                    <span className={`font-semibold ${labelClass}`}>Factura: </span>
-                                    <span className={`font-bold ${valueClass} font-mono`}>{data.factura}</span>
-                                </div>
-                            )}
-                        </div>
-                    )}
-                    {paymentMethod && (
-                        <div>
-                            <span className={`font-semibold ${labelClass}`}>Pago: </span>
-                            <span className={`font-bold ${valueClass}`}>{paymentMethod}</span>
-                        </div>
-                    )}
-                    {data.horario_proveedor && (
-                        <div>
-                            <span className={`font-semibold ${labelClass}`}>Horario: </span>
-                            <span className={`font-bold ${valueClass}`}>{data.horario_proveedor}</span>
-                        </div>
-                    )}
+                    <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                        {data.orden_compra && <div><span className={labelClass}>OC:</span> <span className={`font-bold ${valueClass}`}>{data.orden_compra}</span></div>}
+                        {data.factura && <div><span className={labelClass}>Factura:</span> <span className={`font-bold ${valueClass}`}>{data.factura}</span></div>}
+                        {paymentMethod && <div className="col-span-2"><span className={labelClass}>Pago:</span> <span className={`font-bold text-amber-600 dark:text-amber-400 uppercase ${valueClass}`}>{paymentMethod}</span></div>}
+                        {data.proveedor_contacto_nombre && <div className="col-span-2"><span className={labelClass}>Contacto:</span> <span className={`font-semibold ${valueClass}`}>{data.proveedor_contacto_nombre} ({data.proveedor_contacto_telefono})</span></div>}
+                    </div>
                     {data.detalle_adicional && (
-                        <div>
-                            <span className={`font-semibold ${labelClass}`}>Detalle: </span>
-                            <span className={`font-bold ${valueClass} italic`}>&quot;{data.detalle_adicional}&quot;</span>
-                        </div>
-                    )}
-                    {data.solicitante_nombre && (
-                        <div>
-                            <span className={`font-semibold ${labelClass}`}>Solicitante: </span>
-                            <span className={`font-bold ${valueClass}`}>{data.solicitante_nombre}</span>
+                        <div className="pt-1 mt-1 border-t border-slate-200 dark:border-slate-800 text-[9.5px]">
+                            <span className={labelClass}>Nota:</span> <span className={valueClass}>{data.detalle_adicional}</span>
                         </div>
                     )}
                 </div>
             );
-        } catch (e) {
-            // fallback
-        }
+        } catch(e) {}
     }
-    
-    return <span className="leading-normal">&quot;{comentario}&quot;</span>;
+
+    return (
+        <span className="italic font-normal block truncate" title={comentario}>
+            &quot;{comentario}&quot;
+        </span>
+    );
 }
 
 export function ActiveDeliveriesTab({
@@ -119,13 +93,105 @@ export function ActiveDeliveriesTab({
     deliveries,
     displayedDeliveries,
     sortedAssignments,
+    telemetryMap,
     tvMode,
     themeStyles,
     hasPermission,
     handleOpenManualDelivery,
     handleRevertDelivery,
-    setSelectedPhoto
+    setSelectedPhoto,
+    setSelectedIncompleteDoc
 }: ActiveDeliveriesTabProps) {
+    // Memoize pre-indexed deliveries and stats by assignment (O(N) single pass instead of O(N*M))
+    const { docsByAss, displayedDocsByAss, statsByAss } = useMemo(() => {
+        const docsMap: Record<number, any[]> = {};
+        const displayedDocsMap: Record<number, any[]> = {};
+        const statsMap: Record<number, {
+            total: number;
+            complete: number;
+            incomplete: number;
+            rejected: number;
+            pending: number;
+            returnedCount: number;
+            deliveredCount: number;
+            pct: number;
+        }> = {};
+
+        for (const d of (deliveries || [])) {
+            if (d.asignacion_id) {
+                if (!docsMap[d.asignacion_id]) docsMap[d.asignacion_id] = [];
+                docsMap[d.asignacion_id].push(d);
+            }
+            if (d.devolucion_asignacion_id && d.devolucion_asignacion_id !== d.asignacion_id) {
+                if (!docsMap[d.devolucion_asignacion_id]) docsMap[d.devolucion_asignacion_id] = [];
+                docsMap[d.devolucion_asignacion_id].push(d);
+            }
+        }
+
+        for (const d of (displayedDeliveries || [])) {
+            if (d.asignacion_id) {
+                if (!displayedDocsMap[d.asignacion_id]) displayedDocsMap[d.asignacion_id] = [];
+                displayedDocsMap[d.asignacion_id].push(d);
+            }
+            if (d.devolucion_asignacion_id && d.devolucion_asignacion_id !== d.asignacion_id) {
+                if (!displayedDocsMap[d.devolucion_asignacion_id]) displayedDocsMap[d.devolucion_asignacion_id] = [];
+                displayedDocsMap[d.devolucion_asignacion_id].push(d);
+            }
+        }
+
+        for (const ass of (sortedAssignments || [])) {
+            const allDocs = docsMap[ass.id] || [];
+            const total = allDocs.length;
+            let complete = 0;
+            let incomplete = 0;
+            let rejected = 0;
+            let pending = 0;
+            let returnedCount = 0;
+
+            for (const d of allDocs) {
+                if (d.devolucion_asignacion_id === ass.id) {
+                    returnedCount++;
+                }
+                if (d.estado === 'completo') complete++;
+                else if (d.estado === 'incompleto') incomplete++;
+                else if (d.estado === 'rechazado') rejected++;
+                else if (d.devolucion_asignacion_id !== ass.id && (d.estado === 'en_ruta' || d.estado === 'pendiente')) {
+                    pending++;
+                }
+            }
+
+            const deliveredCount = complete + incomplete + rejected;
+            const pct = total > 0 ? Math.round((deliveredCount / total) * 100) : 0;
+
+            statsMap[ass.id] = {
+                total,
+                complete,
+                incomplete,
+                rejected,
+                pending,
+                returnedCount,
+                deliveredCount,
+                pct
+            };
+        }
+
+        return { docsByAss: docsMap, displayedDocsByAss: displayedDocsMap, statsByAss: statsMap };
+    }, [deliveries, displayedDeliveries, sortedAssignments]);
+
+    // Memoize recently delivered items for TV mode right-hand panel
+    const recentlyDelivered = useMemo(() => {
+        return [...displayedDeliveries]
+            .filter(d => d.entregado === 1 || ['completo', 'incompleto', 'rechazado'].includes(d.estado))
+            .sort((a, b) => {
+                const timeA = a.fecha_entrega ? new Date(a.fecha_entrega).getTime() : 0;
+                const timeB = b.fecha_entrega ? new Date(b.fecha_entrega).getTime() : 0;
+                if (timeA && timeB) return timeB - timeA;
+                const fallbackA = timeA || new Date(a.fecha_registro || a.updatedAt || 0).getTime();
+                const fallbackB = timeB || new Date(b.fecha_registro || b.updatedAt || 0).getTime();
+                return fallbackB - fallbackA;
+            });
+    }, [displayedDeliveries]);
+
     return (
         <div className="space-y-6">
             {assignments.length === 0 ? (
@@ -135,23 +201,14 @@ export function ActiveDeliveriesTab({
                     No hay camiones ni rutas activas el día de hoy. Configure despachos en &quot;Operación y Despacho&quot;.
                 </div>
             ) : tvMode ? (
-                <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch animate-in fade-in duration-500">
+                <div className="flex flex-col xl:flex-row gap-4 w-full items-stretch">
                     {/* Left Column: Grid of trucks */}
                     <div className="flex-1 min-w-0">
                         <div className={`grid ${getTvGridCols(sortedAssignments.length)} gap-4`}>
                             {sortedAssignments.map((ass) => {
-                                const allDocsForAss = deliveries.filter(d => d.asignacion_id === ass.id || d.devolucion_asignacion_id === ass.id);
-                                
-                                // Calculate assignment stats
-                                const total = allDocsForAss.length;
-                                const complete = allDocsForAss.filter(d => d.estado === 'completo').length;
-                                const incomplete = allDocsForAss.filter(d => d.estado === 'incompleto').length;
-                                const rejected = allDocsForAss.filter(d => d.estado === 'rechazado').length;
-                                const pending = allDocsForAss.filter(d => d.devolucion_asignacion_id !== ass.id && (d.estado === 'en_ruta' || d.estado === 'pendiente')).length;
-                                const returnedCount = allDocsForAss.filter(d => d.devolucion_asignacion_id === ass.id).length;
-
-                                const deliveredCount = complete + incomplete + rejected;
-                                const pct = total > 0 ? Math.round((deliveredCount / total) * 100) : 0;
+                                const allDocsForAss = docsByAss[ass.id] || [];
+                                const stats = statsByAss[ass.id] || { total: 0, complete: 0, incomplete: 0, rejected: 0, pending: 0, returnedCount: 0, deliveredCount: 0, pct: 0 };
+                                const { total, complete, incomplete, rejected, pending, returnedCount, deliveredCount, pct } = stats;
 
                                 // Color semáforo logic
                                 let borderTheme = 'border-l-blue-500';
@@ -218,14 +275,25 @@ export function ActiveDeliveriesTab({
                                             </div>
                                         </div>
 
-                                        {/* Driver short info */}
+                                        {/* Driver short info & Telemetry Badge */}
                                         <div className="flex items-center justify-between text-xs font-bold text-slate-500 pt-2 border-t border-slate-800/10 dark:border-slate-800/20 mt-1">
                                             <span className="truncate max-w-[120px] text-left">
-                                                👤 {ass.chofer_nombre.split(' ')[0]} {ass.chofer_nombre.split(' ')[1] || ''}
+                                                👤 {ass.chofer_nombre ? (ass.chofer_nombre.split(' ').slice(0, 2).join(' ')) : 'Sin asignar'}
                                             </span>
-                                            <span className="shrink-0 font-black text-[9px] sm:text-[10px] tracking-widest uppercase">
-                                                {statusText}
-                                            </span>
+                                            {telemetryMap && telemetryMap[(ass.vehiculo_placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '')] ? (
+                                                <VehicleTelemetryBadge
+                                                    compact
+                                                    connectionStatus={telemetryMap[(ass.vehiculo_placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '')].connectionStatus}
+                                                    movementStatus={telemetryMap[(ass.vehiculo_placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '')].movementStatus}
+                                                    speed={telemetryMap[(ass.vehiculo_placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '')].speed}
+                                                    timeInStateFormatted={telemetryMap[(ass.vehiculo_placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '')].timeInStateFormatted}
+                                                    timeInStateSeconds={telemetryMap[(ass.vehiculo_placa || '').toUpperCase().replace(/[^A-Z0-9]/g, '')].timeInStateSeconds}
+                                                />
+                                            ) : (
+                                                <span className="shrink-0 font-black text-[9px] sm:text-[10px] tracking-widest uppercase">
+                                                    {statusText}
+                                                </span>
+                                            )}
                                         </div>
 
                                         {ass.siguiente_cliente && (
@@ -283,21 +351,8 @@ export function ActiveDeliveriesTab({
                     </div>
 
                     {/* Right Column: Live Delivered Panel */}
-                    {(() => {
-                        const recentlyDelivered = [...displayedDeliveries]
-                            .filter(d => d.entregado === 1 || ['completo', 'incompleto', 'rechazado'].includes(d.estado))
-                            .sort((a, b) => {
-                                const timeA = a.fecha_entrega ? new Date(a.fecha_entrega).getTime() : 0;
-                                const timeB = b.fecha_entrega ? new Date(b.fecha_entrega).getTime() : 0;
-                                if (timeA && timeB) return timeB - timeA;
-                                const fallbackA = timeA || new Date(a.fecha_registro || a.updatedAt || 0).getTime();
-                                const fallbackB = timeB || new Date(b.fecha_registro || b.updatedAt || 0).getTime();
-                                return fallbackB - fallbackA;
-                            });
-
-                        return (
-                            <div className={`w-full xl:w-80 shrink-0 flex flex-col p-4 rounded-xl border ${themeStyles?.cardBg} h-[600px] xl:h-[calc(100vh-140px)] min-h-[450px]`}>
-                                <div className="flex items-center justify-between border-b pb-2 mb-3 border-slate-800/80 shrink-0">
+                    <div className={`w-full xl:w-80 shrink-0 flex flex-col p-4 rounded-xl border ${themeStyles?.cardBg} h-[600px] xl:h-[calc(100vh-140px)] min-h-[450px]`}>
+                        <div className="flex items-center justify-between border-b pb-2 mb-3 border-slate-800/80 shrink-0">
                                     <div className="flex items-center gap-2">
                                         <span className="relative flex h-2 w-2">
                                             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -366,9 +421,16 @@ export function ActiveDeliveriesTab({
 
                                                     {/* Doc number and Client Name */}
                                                     <div className="min-w-0">
-                                                        <span className="text-xs font-black font-mono tracking-tight leading-none block text-slate-100">
-                                                            {d.documento_numero}
-                                                        </span>
+                                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                                            <span className="text-xs font-black font-mono tracking-tight leading-none block text-slate-100">
+                                                                {d.boleta_numero ? `📄 ${d.boleta_numero}` : d.documento_numero}
+                                                            </span>
+                                                            {d.boleta_numero && d.boleta_numero !== d.documento_numero && (
+                                                                <span className="text-[9px] font-mono text-slate-400 bg-slate-900 px-1 py-0.2 rounded border border-slate-800">
+                                                                    ERP: #{d.documento_numero}
+                                                                </span>
+                                                            )}
+                                                        </div>
                                                         <p className="text-[10px] font-bold truncate pt-1 text-slate-300">
                                                             {d.cliente_nombre}
                                                         </p>
@@ -384,9 +446,25 @@ export function ActiveDeliveriesTab({
                                                                 </Badge>
                                                             )}
 
-                                                            <Badge className={`text-[8px] font-extrabold uppercase px-1.5 py-0.5 border-none shrink-0 ${badgeBg}`}>
-                                                                {statusLabel}
-                                                            </Badge>
+                                                            {(() => {
+                                                                const isDiscrepancy = (d.estado === 'incompleto' || d.estado === 'rechazado') && !!setSelectedIncompleteDoc;
+                                                                return (
+                                                                    <Badge 
+                                                                        onClick={(e) => {
+                                                                            if (isDiscrepancy) {
+                                                                                e.stopPropagation();
+                                                                                setSelectedIncompleteDoc(d);
+                                                                            }
+                                                                        }}
+                                                                        className={`text-[8px] font-extrabold uppercase px-1.5 py-0.5 border-none shrink-0 ${badgeBg} ${
+                                                                            isDiscrepancy ? 'cursor-pointer hover:ring-2 hover:ring-amber-400/80 hover:scale-105 active:scale-95 transition-all shadow-md' : ''
+                                                                        }`}
+                                                                        title={isDiscrepancy ? "🔍 Clic para ver desglose de artículos faltantes" : undefined}
+                                                                    >
+                                                                        {statusLabel}
+                                                                    </Badge>
+                                                                );
+                                                            })()}
 
                                                             {d.estado !== 'pendiente' && d.estado !== 'en_ruta' && (!d.latitud || !d.longitud) ? (
                                                                 <Badge className="bg-red-500/10 text-red-500 border border-red-500/30 text-[8px] font-extrabold px-1.5 py-0.5 shrink-0 flex items-center gap-1">
@@ -424,23 +502,15 @@ export function ActiveDeliveriesTab({
                                     )}
                                 </div>
                             </div>
-                        );
-                    })()}
                 </div>
             ) : (
                 /* Standard Matrix Grid (Modo Escritorio) */
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                     {sortedAssignments.map((ass) => {
-                        const allDocsForAss = deliveries.filter(d => d.asignacion_id === ass.id || d.devolucion_asignacion_id === ass.id);
-                        const docsForAss = displayedDeliveries.filter(d => d.asignacion_id === ass.id || d.devolucion_asignacion_id === ass.id);
-                        
-                        // Calculate assignment stats
-                        const total = allDocsForAss.length;
-                        const complete = allDocsForAss.filter(d => d.estado === 'completo').length;
-                        const incomplete = allDocsForAss.filter(d => d.estado === 'incompleto').length;
-                        const rejected = allDocsForAss.filter(d => d.estado === 'rechazado').length;
-                        const pending = allDocsForAss.filter(d => d.devolucion_asignacion_id !== ass.id && (d.estado === 'en_ruta' || d.estado === 'pendiente')).length;
-                        const returnedCount = allDocsForAss.filter(d => d.devolucion_asignacion_id === ass.id).length;
+                        const allDocsForAss = docsByAss[ass.id] || [];
+                        const docsForAss = displayedDocsByAss[ass.id] || [];
+                        const stats = statsByAss[ass.id] || { total: 0, complete: 0, incomplete: 0, rejected: 0, pending: 0, returnedCount: 0, deliveredCount: 0, pct: 0 };
+                        const { total, complete, incomplete, rejected, pending, returnedCount } = stats;
 
                         return (
                             <Card 
@@ -560,9 +630,16 @@ export function ActiveDeliveriesTab({
                                                         {/* Doc header row */}
                                                         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2.5">
                                                             <div className="min-w-0">
-                                                                <span className={`text-xs font-black font-mono tracking-tight leading-none block ${tvMode ? 'text-slate-100' : 'text-foreground'}`}>
-                                                                    {doc.documento_numero}
-                                                                </span>
+                                                                <div className="flex items-center gap-1.5 flex-wrap">
+                                                                    <span className={`text-xs font-black font-mono tracking-tight leading-none block ${tvMode ? 'text-slate-100' : 'text-foreground'}`}>
+                                                                        {doc.boleta_numero ? `📄 ${doc.boleta_numero}` : doc.documento_numero}
+                                                                    </span>
+                                                                    {doc.boleta_numero && doc.boleta_numero !== doc.documento_numero && (
+                                                                        <span className="text-[9px] font-mono text-muted-foreground bg-muted/50 px-1 py-0.2 rounded border">
+                                                                            ERP: #{doc.documento_numero}
+                                                                        </span>
+                                                                    )}
+                                                                </div>
                                                                 <p className={`text-[10px] font-bold truncate pt-0.5 ${tvMode ? 'text-slate-300' : 'text-foreground/70'}`}>
                                                                     {doc.cliente_nombre}
                                                                 </p>
@@ -577,15 +654,31 @@ export function ActiveDeliveriesTab({
                                                                         </Badge>
                                                                     )}
 
-                                                                    <Badge className={`text-[8px] font-extrabold uppercase px-1.5 py-0 border-none ${
-                                                                        doc.devolucion_asignacion_id === ass.id ? 'bg-red-500/10 text-red-500 border border-red-500/20' :
-                                                                        doc.estado === 'completo' ? 'bg-emerald-500/10 text-emerald-500' :
-                                                                        doc.estado === 'incompleto' ? 'bg-amber-500/10 text-amber-500' :
-                                                                        doc.estado === 'rechazado' ? 'bg-red-500/10 text-red-500' :
-                                                                        'bg-blue-500/10 text-blue-500'
-                                                                    }`}>
-                                                                        {doc.devolucion_asignacion_id === ass.id ? 'DEVUELTA ❌' : doc.estado}
-                                                                    </Badge>
+                                                                    {(() => {
+                                                                        const isDiscrepancy = (doc.estado === 'incompleto' || doc.estado === 'rechazado') && !!setSelectedIncompleteDoc;
+                                                                        return (
+                                                                            <Badge 
+                                                                                onClick={(e) => {
+                                                                                    if (isDiscrepancy) {
+                                                                                        e.stopPropagation();
+                                                                                        setSelectedIncompleteDoc(doc);
+                                                                                    }
+                                                                                }}
+                                                                                className={`text-[8px] font-extrabold uppercase px-1.5 py-0 border-none ${
+                                                                                    doc.devolucion_asignacion_id === ass.id ? 'bg-red-500/10 text-red-500 border border-red-500/20' :
+                                                                                    doc.estado === 'completo' ? 'bg-emerald-500/10 text-emerald-500' :
+                                                                                    doc.estado === 'incompleto' ? 'bg-amber-500/10 text-amber-500' :
+                                                                                    doc.estado === 'rechazado' ? 'bg-red-500/10 text-red-500' :
+                                                                                    'bg-blue-500/10 text-blue-500'
+                                                                                } ${
+                                                                                    isDiscrepancy ? 'cursor-pointer hover:ring-2 hover:ring-amber-400/80 hover:scale-105 active:scale-95 transition-all shadow-md' : ''
+                                                                                }`}
+                                                                                title={isDiscrepancy ? "🔍 Clic para ver desglose de artículos faltantes" : undefined}
+                                                                            >
+                                                                                {doc.devolucion_asignacion_id === ass.id ? 'DEVUELTA ❌' : doc.estado}
+                                                                            </Badge>
+                                                                        );
+                                                                    })()}
 
                                                                     {doc.estado !== 'pendiente' && doc.estado !== 'en_ruta' && (!doc.latitud || !doc.longitud) ? (
                                                                         <Badge className="bg-red-500/10 text-red-500 border border-red-500/30 text-[8px] font-extrabold px-1.5 py-0 shrink-0 flex items-center gap-1">
@@ -630,7 +723,14 @@ export function ActiveDeliveriesTab({
                                                                     <Button
                                                                         variant="outline"
                                                                         size="sm"
-                                                                        onClick={() => setSelectedPhoto({ url: `/api/fleet/files/${doc.foto_evidencia}`, title: "Evidencia de Entrega" })}
+                                                                        onClick={() => {
+                                                                            const urls = parsePhotoUrls(doc.foto_evidencia);
+                                                                            setSelectedPhoto({ 
+                                                                                urls, 
+                                                                                url: urls[0], 
+                                                                                title: `Evidencia de Entrega ${urls.length > 1 ? `(${urls.length} fotos)` : ''}` 
+                                                                            });
+                                                                        }}
                                                                         className={`rounded-lg h-7 text-[10px] font-extrabold gap-1.5 border-blue-500/20 bg-blue-500/5 text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 ${
                                                                             tvMode ? 'border-slate-800' : ''
                                                                         }`}
@@ -643,10 +743,16 @@ export function ActiveDeliveriesTab({
                                                                     <Button
                                                                         variant="outline"
                                                                         size="sm"
-                                                                        onClick={() => setSelectedPhoto({ 
-                                                                            url: `/api/fleet/files/${doc.foto_factura}`, 
-                                                                            title: doc.tipo_documento === 'recoger' ? "Comprobante Firmado" : "Factura Firmada" 
-                                                                        })}
+                                                                        onClick={() => {
+                                                                            const urls = parsePhotoUrls(doc.foto_factura);
+                                                                            setSelectedPhoto({ 
+                                                                                urls, 
+                                                                                url: urls[0], 
+                                                                                title: doc.tipo_documento === 'recoger' 
+                                                                                    ? `Comprobante Firmado ${urls.length > 1 ? `(${urls.length} fotos)` : ''}` 
+                                                                                    : `Factura Firmada ${urls.length > 1 ? `(${urls.length} fotos)` : ''}` 
+                                                                            });
+                                                                        }}
                                                                         className={`rounded-lg h-7 text-[10px] font-extrabold gap-1.5 border-emerald-500/20 bg-emerald-500/5 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/10 ${
                                                                             tvMode ? 'border-slate-800' : ''
                                                                         }`}
@@ -674,7 +780,7 @@ export function ActiveDeliveriesTab({
                                                             )}
 
                                                             {/* Revert delivery trigger */}
-                                                            {['completo', 'incompleto', 'rechazado'].includes(doc.estado) && hasPermission('deliveries:write') && (
+                                                            {['completo', 'incompleto', 'rechazado'].includes(doc.estado) && hasPermission('deliveries:revert') && (
                                                                 <Button
                                                                     variant="outline"
                                                                     size="sm"
