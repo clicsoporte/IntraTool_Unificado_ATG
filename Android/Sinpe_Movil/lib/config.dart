@@ -1,7 +1,7 @@
 class AppConfig {
   static const String appName = 'SINPE Listener';
-  static const String appVersion = '1.0.0';
-  static const int appVersionCode = 1;
+  static const String appVersion = '1.2.38';
+  static const int appVersionCode = 57;
   static const int brandColor = 0xFF059669; // Emerald Green
   static const int brandDarkColor = 0xFF0F172A;
 

@@ -1,7 +1,7 @@
 class AppConfig {
   static const String appName = 'Clic Driver';
-  static const String appVersion = '1.2.37';
-  static const int appVersionCode = 56;
+  static const String appVersion = '1.2.38';
+  static const int appVersionCode = 57;
   static const int brandColor = 0xFFFF6B00; // Clic Orange
   static const int brandDarkColor = 0xFF121212;
 
