@@ -39,11 +39,22 @@ export default function LogViewerPage() {
   // Filter state
   const [logTypeFilter, setLogTypeFilter] = useState<LogTypeFilter>('apk');
   const [searchTerm, setSearchTerm] = useState('');
+  const [debounceMs, setDebounceMs] = useState(300);
   const [dateFilter, setDateFilter] = useState<DateRange | undefined>({
     from: new Date(),
     to: new Date(),
   });
-  const [debouncedSearchTerm] = useDebounce(searchTerm, 500);
+  const [debouncedSearchTerm] = useDebounce(searchTerm, debounceMs);
+
+  useEffect(() => {
+    import('@/modules/core/lib/actions').then(({ getCompanySettingsAction }) => {
+      getCompanySettingsAction().then(settings => {
+        if (settings?.searchDebounceTime) {
+          setDebounceMs(Number(settings.searchDebounceTime) || 300);
+        }
+      }).catch(() => {});
+    });
+  }, []);
 
   // Clear logs dialog state
   const [isClearLogDialogOpen, setClearLogDialogOpen] = useState(false);
