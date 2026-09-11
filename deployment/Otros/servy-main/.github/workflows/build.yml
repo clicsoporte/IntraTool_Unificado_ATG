@@ -1,0 +1,90 @@
+# ==========================================================================================
+# GitHub Actions Workflow - Build Matrix
+# ------------------------------------------------------------------------------------------
+# Builds and validates the Servy .NET solution across both x64 and ARM64 target platforms
+# natively on matching Windows host runners (no emulation).
+# ==========================================================================================
+
+name: build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false  # Ensure a failure on one architecture doesn't cancel the other job
+      matrix:
+        include:
+          - os: windows-latest
+            runtime: win-x64
+            arch: x64
+          - os: windows-11-arm
+            runtime: win-arm64
+            arch: ARM64
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    env:
+      MAX_RETRIES: 5 # Maximum retry attempts for resilient network down-stream downloads
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 #v6.0.3
+
+      - name: Setup .NET
+        uses: ./.github/actions/setup-dotnet
+        with:
+          max_retries: ${{ env.MAX_RETRIES }}
+
+      - name: Restore dependencies
+        shell: pwsh
+        run: |
+          dotnet restore Servy.sln
+          if ($LASTEXITCODE -ne 0) { throw "Restore failed for Servy.sln (exit $LASTEXITCODE)" }
+
+      - name: Build solution (Debug)
+        shell: pwsh
+        run: |
+          dotnet build Servy.sln --configuration Debug --no-restore
+          if ($LASTEXITCODE -ne 0) { throw "Debug build failed for Servy.sln (exit $LASTEXITCODE)" }
+
+      - name: Build Servy projects (Release ${{ matrix.arch }})
+        shell: pwsh
+        env:
+          MATRIX_RUNTIME: ${{ matrix.runtime }}
+        run: |
+          $config = "Release"
+          $runtime = $env:MATRIX_RUNTIME
+
+          $projects = @(
+            "src\Servy.Restarter\Servy.Restarter.csproj",
+            "src\Servy.Service\Servy.Service.csproj",
+            "src\Servy\Servy.csproj",
+            "src\Servy.CLI\Servy.CLI.csproj",
+            "src\Servy.Manager\Servy.Manager.csproj"
+          )
+
+          foreach ($proj in $projects) {
+            Write-Host "Restoring $proj for $runtime..."
+            dotnet restore $proj --runtime $runtime
+            if ($LASTEXITCODE -ne 0) { throw "Restore failed for $proj (exit $LASTEXITCODE)" }
+          }
+
+          foreach ($proj in $projects) {
+            Write-Host "Building $proj ($config) for $runtime..."
+            # Build per-project with an explicit RID so each matrix leg produces native (x64/ARM64) binaries
+            dotnet build $proj --configuration $config --runtime $runtime --no-restore
+            if ($LASTEXITCODE -ne 0) { throw "Build failed for $proj (exit $LASTEXITCODE)" }
+          }

@@ -1,0 +1,955 @@
+using Servy.Core.Common;
+using Servy.Core.Config;
+using Servy.Core.Data;
+using Servy.Core.DTOs;
+using Servy.Core.Enums;
+using Servy.Core.Helpers;
+using Servy.Core.Logging;
+using Servy.Core.Services;
+using Servy.Core.Validation;
+using Servy.Manager.Config;
+using Servy.Manager.Mappers;
+using Servy.Manager.Models;
+using Servy.Manager.Resources;
+using Servy.Manager.Validation;
+using Servy.UI.Services;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Windows;
+
+namespace Servy.Manager.Services
+{
+    /// <summary>
+    ///  Concrete implementation of <see cref="IServiceCommands"/> that provides service management commands such as install, uninstall, start, stop, and restart.
+    /// </summary>
+    public class ServiceCommands : IServiceCommands
+    {
+        /// <summary>
+        /// Per-service locking mechanism to prevent Head-of-Line blocking.
+        /// </summary>
+        private readonly ConcurrentDictionary<string, Lazy<SemaphoreSlim>> _serviceLocks = new ConcurrentDictionary<string, Lazy<SemaphoreSlim>>(StringComparer.OrdinalIgnoreCase);
+
+        private int _isDisposed = 0; // 0 = false, 1 = true
+
+        #region Private Fields
+
+        private readonly IServiceManager _serviceManager;
+        private readonly IServiceRepository _serviceRepository;
+        private readonly IMessageBoxService _messageBoxService;
+        private readonly IFileDialogService _fileDialogService;
+        private readonly Action<string> _removeServiceCallback;
+        private readonly Func<Task> _refreshCallback;
+        private readonly IServiceConfigurationValidator _serviceConfigurationValidator;
+        private readonly IXmlServiceValidator _xmlServiceValidator;
+        private readonly IJsonServiceValidator _jsonServiceValidator;
+        private readonly IXmlServiceSerializer _xmlServiceSerializer;
+        private readonly IJsonServiceSerializer _jsonServiceSerializer;
+        private readonly IAppConfiguration _appConfig;
+        private readonly IProcessHelper _processHelper;
+        private readonly IUiDispatcher _dispatcher;
+
+        #endregion
+
+        #region Constructor
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ServiceCommands"/> class.
+        /// </summary>
+        /// <param name="serviceManager">The <see cref="IServiceManager"/> used to manage Windows services.</param>
+        /// <param name="serviceRepository">The repository interface for accessing service data.</param>
+        /// <param name="messageBoxService">The service used to show message boxes to the user.</param>
+        /// <param name="fileDialogService">The service used to show file dialogs.</param>
+        /// <param name="removeServiceCallback">A callback invoked when a service should be removed from the UI or collection.</param>
+        /// <param name="refreshCallback">A callback invoked when a services list should be refreshed.</param>
+        /// <param name="serviceConfigurationValidator">The service configuration validator.</param>
+        /// <param name="xmlServiceValidator">XML service validator.</param>
+        /// <param name="jsonServiceValidator">JSON service validator.</param>
+        /// <param name="xmlServiceSerializer">XML service serializer.</param>
+        /// <param name="jsonServiceSerializer">JSON service serializer.</param>
+        /// <param name="appConfig">The application configuration interface.</param>
+        /// <param name="processHelper">The process helper used to format process commands and start processes.</param>
+        /// <param name="dispatcher">The UI dispatcher used for STA operations like Clipboard access.</param>
+        /// <exception cref="ArgumentNullException">Thrown if any argument is null.</exception>
+        public ServiceCommands(
+            IServiceManager serviceManager,
+            IServiceRepository serviceRepository,
+            IMessageBoxService messageBoxService,
+            IFileDialogService fileDialogService,
+            Action<string> removeServiceCallback,
+            Func<Task> refreshCallback,
+            IServiceConfigurationValidator serviceConfigurationValidator,
+            IXmlServiceValidator xmlServiceValidator,
+            IJsonServiceValidator jsonServiceValidator,
+            IXmlServiceSerializer xmlServiceSerializer,
+            IJsonServiceSerializer jsonServiceSerializer,
+            IAppConfiguration appConfig,
+            IProcessHelper processHelper,
+            IUiDispatcher dispatcher
+        )
+        {
+            _serviceManager = serviceManager ?? throw new ArgumentNullException(nameof(serviceManager));
+            _serviceRepository = serviceRepository ?? throw new ArgumentNullException(nameof(serviceRepository));
+            _messageBoxService = messageBoxService ?? throw new ArgumentNullException(nameof(messageBoxService));
+            _fileDialogService = fileDialogService ?? throw new ArgumentNullException(nameof(fileDialogService));
+            _removeServiceCallback = removeServiceCallback ?? throw new ArgumentNullException(nameof(removeServiceCallback));
+            _refreshCallback = refreshCallback ?? throw new ArgumentNullException(nameof(refreshCallback));
+            _serviceConfigurationValidator = serviceConfigurationValidator ?? throw new ArgumentNullException(nameof(serviceConfigurationValidator));
+            _xmlServiceValidator = xmlServiceValidator ?? throw new ArgumentNullException(nameof(xmlServiceValidator));
+            _jsonServiceValidator = jsonServiceValidator ?? throw new ArgumentNullException(nameof(jsonServiceValidator));
+            _xmlServiceSerializer = xmlServiceSerializer ?? throw new ArgumentNullException(nameof(xmlServiceSerializer));
+            _jsonServiceSerializer = jsonServiceSerializer ?? throw new ArgumentNullException(nameof(jsonServiceSerializer));
+            _appConfig = appConfig ?? throw new ArgumentNullException(nameof(appConfig));
+            _processHelper = processHelper ?? throw new ArgumentNullException(nameof(processHelper));
+            _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
+        }
+
+        #endregion
+
+        #region Locking Orchestrator
+
+        /// <summary>
+        /// Executes an asynchronous operation within a per-service lock.
+        /// Uses a persistent ConcurrentDictionary of SemaphoreSlim instances to guarantee
+        /// absolute mutual exclusion per service name across the application lifecycle.
+        /// </summary>
+        private async Task<T> ExecuteLockedAsync<T>(string serviceName, Func<Task<T>> action, CancellationToken cancellationToken = default)
+        {
+            if (Volatile.Read(ref _isDisposed) != 0)
+                throw new ObjectDisposedException(nameof(ServiceCommands));
+
+            if (string.IsNullOrWhiteSpace(serviceName))
+                throw new ArgumentException("Service name cannot be null, empty, or whitespace.", nameof(serviceName));
+
+            // Get or create the lock for this specific service.
+            // We intentionally DO NOT eagerly evict these semaphores when they become idle.
+            // Evicting a semaphore while other threads might be concurrently calling GetOrAdd
+            // introduces a race condition where multiple threads can acquire different
+            // semaphore instances for the same service key, violating mutual exclusion.
+            var sem = _serviceLocks.GetOrAdd(
+                serviceName,
+                _ => new Lazy<SemaphoreSlim>(() => new SemaphoreSlim(1, 1), LazyThreadSafetyMode.ExecutionAndPublication)
+                ).Value;
+
+            await sem.WaitAsync(cancellationToken);
+            try
+            {
+                return await action();
+            }
+            finally
+            {
+                try { sem.Release(); }
+                catch (ObjectDisposedException) { /* disposed while the operation was in flight */ }
+            }
+        }
+
+        #endregion
+
+        #region IServiceCommands Implementation
+
+        /// <inheritdoc />
+        public async Task<List<Service>> SearchServicesAsync(string? searchText, bool calculatePerf, CancellationToken cancellationToken = default)
+        {
+            var results = await _serviceRepository.SearchAsync(
+                searchText ?? string.Empty, decrypt: false, cancellationToken).ConfigureAwait(false);
+
+            // Bound concurrent process-tree metric collection; GetProcessTreeMetrics issues heavy
+            // OS calls and an unbounded fan-out over the result set can exhaust the thread pool.
+            using (var throttler = new SemaphoreSlim(AppConfig.ServiceSearchMaxDegreeOfParallelism))
+            {
+                // Map all domain services to Service models in parallel with a bounded degree of parallelism
+                var tasks = results.Select(async r =>
+                {
+                    await throttler.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        return await ServiceMapper.ToModelAsync(
+                            Core.Mappers.ServiceDtoMapper.ToDomain(_serviceManager, r),
+                            _appConfig.IsDesktopAppAvailable,
+                            calculatePerf,
+                            _processHelper,
+                            cancellationToken: cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        throttler.Release();
+                    }
+                });
+
+                var services = await Task.WhenAll(tasks).ConfigureAwait(false);
+
+                // Filter out nulls resulting from malformed/orphaned DTOs
+                // to prevent NullReferenceExceptions during UI data binding.
+                return services.OfType<Service>().ToList();
+            }
+        }
+
+        /// <inheritdoc />
+        public Task<bool> StartServiceAsync(Service? service, bool showMessageBox = true, CancellationToken cancellationToken = default) =>
+            ExecuteServiceCommandAsync(
+                service,
+                d => d.StartAsync(cancellationToken),
+                ServiceStatus.Running,
+                Strings.Msg_ServiceStarted,
+                checkDisabled: true,
+                showMessageBox: showMessageBox,
+                cancellationToken: cancellationToken);
+
+        /// <inheritdoc />
+        public Task<bool> StopServiceAsync(Service? service, bool showMessageBox = true, CancellationToken cancellationToken = default) =>
+            ExecuteServiceCommandAsync(service,
+                d => d.StopAsync(cancellationToken),
+                ServiceStatus.Stopped,
+                Strings.Msg_ServiceStopped,
+                checkDisabled: false,
+                showMessageBox: showMessageBox,
+                cancellationToken: cancellationToken);
+
+        /// <inheritdoc />
+        public Task<bool> RestartServiceAsync(Service? service, bool showMessageBox = true, CancellationToken cancellationToken = default) =>
+            ExecuteServiceCommandAsync(service,
+                d => d.RestartAsync(cancellationToken),
+                ServiceStatus.Running,
+                Strings.Msg_ServiceRestarted,
+                checkDisabled: true,
+                showMessageBox: showMessageBox,
+                cancellationToken: cancellationToken);
+
+        /// <inheritdoc />
+        public async Task ConfigureServiceAsync(Service? service, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                string? desktopPath = _appConfig.DesktopAppPublishPath;
+                string baseDir = AppFoldersHelper.GetAppDirectory();
+
+                if (string.IsNullOrWhiteSpace(desktopPath) || !File.Exists(desktopPath))
+                {
+                    await _messageBoxService.ShowErrorAsync(Strings.Msg_DesktopAppNotFound, UiAppConfig.Caption);
+                    return;
+                }
+
+#if !DEBUG
+                // Security invariant check: re-verify target path is safely contained within application directory
+                // (the config-time check in App.xaml.cs runs once at startup and can go stale afterwards).
+                // Compiled out in Debug deliberately: App.xaml.cs points a Debug build at
+                // AppConfig.DesktopAppPublishReleasePath, the repository's bin/Release publish folder, which is a
+                // sibling of the running app directory and would therefore be refused on every launch. This
+                // assumes Debug builds are never distributed and the repository checkout is a trusted location.
+                if (!PathSecurityGuard.IsSafelyContainedWithinAppDirectory(desktopPath, baseDir))
+                {
+                    Logger.Error($"Refusing to launch Desktop application: Target path '{desktopPath}' is not contained within application directory '{baseDir}'.");
+                    await _messageBoxService.ShowErrorAsync(Strings.Msg_DesktopAppLaunchFailed, UiAppConfig.Caption);
+                    return;
+                }
+#endif
+                var forceFlag = _appConfig.ForceSoftwareRendering ? $" {AppConfig.ForceSoftwareRenderingArg}" : string.Empty;
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = desktopPath,
+                    Arguments = $"\"{AppConfig.SkipSplashArgument}\"{forceFlag}", // Pass false to skip splash screen
+                    UseShellExecute = true,
+                    WorkingDirectory = baseDir
+                };
+
+                if (service == null)
+                {
+                    using (var process = StartProcess(psi))
+                    {
+                        if (process == null)
+                        {
+                            await _messageBoxService.ShowErrorAsync(Strings.Msg_DesktopAppLaunchFailed, UiAppConfig.Caption);
+                        }
+                    }
+                    return;
+                }
+
+                if (string.IsNullOrWhiteSpace(service.Name))
+                {
+                    await _messageBoxService.ShowErrorAsync(Core.Resources.Strings.Msg_InvalidServiceName, UiAppConfig.Caption);
+                    return;
+                }
+
+                var serviceDto = await _serviceRepository.GetByNameAsync(service.Name, decrypt: false, cancellationToken);
+                if (serviceDto == null)
+                {
+                    await _messageBoxService.ShowErrorAsync(Core.Resources.Strings.Msg_ServiceNotFound, UiAppConfig.Caption);
+                    return;
+                }
+
+                // Pass false to skip splash screen
+                psi.Arguments = $"\"{AppConfig.SkipSplashArgument}\" {Helper.Quote(service.Name)}{forceFlag}";
+
+                using (var process = StartProcess(psi))
+                {
+                    if (process == null)
+                    {
+                        await _messageBoxService.ShowErrorAsync(Strings.Msg_DesktopAppLaunchFailed, UiAppConfig.Caption);
+                        return;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                string serviceName = service?.Name ?? "<unknown>";
+                Logger.Debug($"Operation on {serviceName} was cancelled.");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                string serviceName = service?.Name ?? "<unknown>";
+                Logger.Error($"Failed to configure {serviceName}.", ex);
+                await _messageBoxService.ShowErrorAsync(Strings.Msg_UnexpectedError, UiAppConfig.Caption);
+            }
+        }
+
+        /// <inheritdoc />
+        public async Task<bool> InstallServiceAsync(Service? service, CancellationToken cancellationToken = default)
+        {
+            if (service == null) return false;
+            if (string.IsNullOrWhiteSpace(service.Name)) return false;
+
+            return await ExecuteLockedAsync(service.Name, async () =>
+            {
+                try
+                {
+                    var exists = await Task.Run(() => _serviceManager.IsServiceInstalled(service.Name, cancellationToken: cancellationToken), cancellationToken);
+
+                    if (exists)
+                    {
+                        var result = await _messageBoxService.ShowConfirmAsync(Strings.Msg_ServiceAlreadyExists, UiAppConfig.Caption);
+                        if (!result)
+                        {
+                            return false;
+                        }
+
+                    }
+
+                    var serviceDomain = await GetServiceDomain(service.Name, cancellationToken);
+                    if (serviceDomain == null)
+                    {
+                        await _messageBoxService.ShowErrorAsync(Core.Resources.Strings.Msg_ServiceNotFound, UiAppConfig.Caption);
+                        return false;
+                    }
+
+                    string? wrapperExeDir = null;
+#if DEBUG
+                    wrapperExeDir = Path.GetFullPath(AppConfig.ServyServiceManagerDebugFolder);
+                    if (!Directory.Exists(wrapperExeDir))
+                    {
+                        await _messageBoxService.ShowErrorAsync(Strings.Msg_InvalidWrapperExePath, UiAppConfig.Caption);
+                        return false;
+                    }
+#endif
+                    var res = await Task.Run(() => serviceDomain.InstallAsync(wrapperExeDir, cancellationToken: cancellationToken), cancellationToken);
+
+                    if (!res.IsSuccess)
+                    {
+                        var msg = !string.IsNullOrWhiteSpace(res.ErrorMessage) ? res.ErrorMessage : Strings.Msg_UnexpectedError;
+                        Logger.Warn($"InstallService failed: {msg}");
+                        await _messageBoxService.ShowErrorAsync(msg, UiAppConfig.Caption);
+                        return false;
+                    }
+
+                    service.IsInstalled = true;
+                    await _messageBoxService.ShowInfoAsync(Strings.Msg_ServiceInstalled, UiAppConfig.Caption);
+                    return true;
+                }
+                catch (OperationCanceledException)
+                {
+                    Logger.Debug($"Operation on {service.Name} was cancelled.");
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Failed to install {service.Name}.", ex);
+                    await _messageBoxService.ShowErrorAsync(Strings.Msg_UnexpectedError, UiAppConfig.Caption);
+                    return false;
+                }
+            }, cancellationToken: cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public async Task<bool> UninstallServiceAsync(Service? service, CancellationToken cancellationToken = default)
+        {
+            if (service == null) return false;
+            if (string.IsNullOrWhiteSpace(service.Name)) return false;
+
+            return await ExecuteLockedAsync(service.Name, async () =>
+            {
+                try
+                {
+                    var confirm = await _messageBoxService.ShowConfirmAsync(Strings.Msg_UninstallServiceConfirm, UiAppConfig.Caption);
+                    if (!confirm) return false;
+
+                    var serviceDomain = await GetServiceDomain(service.Name, cancellationToken);
+                    if (serviceDomain == null)
+                    {
+                        await _messageBoxService.ShowErrorAsync(Core.Resources.Strings.Msg_ServiceNotFound, UiAppConfig.Caption);
+                        return false;
+                    }
+
+                    var res = await Task.Run(() => serviceDomain.UninstallAsync(cancellationToken), cancellationToken);
+
+                    if (!res.IsSuccess)
+                    {
+                        var msg = !string.IsNullOrWhiteSpace(res.ErrorMessage) ? res.ErrorMessage : Strings.Msg_UnexpectedError;
+                        Logger.Warn($"UninstallService failed: {msg}");
+                        await _messageBoxService.ShowErrorAsync(msg, UiAppConfig.Caption);
+                        return false;
+                    }
+
+                    RemoveService(service);
+                    return true;
+                }
+                catch (OperationCanceledException)
+                {
+                    Logger.Debug($"Operation on {service.Name} was cancelled.");
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Failed to uninstall {service.Name}.", ex);
+                    await _messageBoxService.ShowErrorAsync(Strings.Msg_UnexpectedError, UiAppConfig.Caption);
+                    return false;
+                }
+            }, cancellationToken: cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public async Task<bool> RemoveServiceAsync(Service? service, CancellationToken cancellationToken = default)
+        {
+            if (service == null) return false;
+            if (string.IsNullOrWhiteSpace(service.Name)) return false;
+
+            return await ExecuteLockedAsync(service.Name, async () =>
+            {
+                try
+                {
+                    var confirm = await _messageBoxService.ShowConfirmAsync(Strings.Msg_RemoveServiceConfirm, UiAppConfig.Caption);
+                    if (!confirm) return false;
+
+                    // 1. Confirm the row still exists before attempting the delete
+                    var existing = await _serviceRepository.GetByNameAsync(service.Name, decrypt: false, cancellationToken);
+                    if (existing == null)
+                    {
+                        await _messageBoxService.ShowErrorAsync(Core.Resources.Strings.Msg_ServiceNotFound, UiAppConfig.Caption);
+                        return false;
+                    }
+
+                    // 2. Perform the deletion pass
+                    var res = await _serviceRepository.DeleteAsync(service.Name, cancellationToken);
+                    var success = res > 0;
+                    if (success) RemoveService(service);
+
+                    if (success)
+                    {
+                        Logger.Info($"Service {service.Name} removed successfully.");
+                    }
+                    else
+                    {
+                        Logger.Error($"Failed to remove service {service.Name} from repository.");
+                        await _messageBoxService.ShowErrorAsync(Strings.Msg_UnexpectedError, UiAppConfig.Caption);
+                    }
+
+                    return success;
+                }
+                catch (OperationCanceledException)
+                {
+                    Logger.Debug($"Operation on {service.Name} was cancelled.");
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Failed to remove {service.Name}.", ex);
+                    await _messageBoxService.ShowErrorAsync(Strings.Msg_UnexpectedError, UiAppConfig.Caption);
+                    return false;
+                }
+            }, cancellationToken: cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task ExportServiceToXmlAsync(Service? service, CancellationToken cancellationToken = default) =>
+            ExportServiceConfigAsync(
+                service,
+                getFilePath: () => _fileDialogService.SaveXml(Strings.SaveFileDialog_XmlTitle),
+                exportAction: ServiceExporter.ExportXml,
+                formatName: "XML",
+                successMessage: Strings.ExportXml_Success,
+                cancellationToken: cancellationToken);
+
+        /// <inheritdoc />
+        public Task ExportServiceToJsonAsync(Service? service, CancellationToken cancellationToken = default) =>
+            ExportServiceConfigAsync(
+                service,
+                getFilePath: () => _fileDialogService.SaveJson(Strings.SaveFileDialog_JsonTitle),
+                exportAction: ServiceExporter.ExportJson,
+                formatName: "JSON",
+                successMessage: Strings.ExportJson_Success,
+                cancellationToken: cancellationToken);
+
+        /// <inheritdoc />
+        public Task ImportXmlConfigAsync(CancellationToken cancellationToken = default) =>
+            ImportConfigAsync(
+                getFilePath: _fileDialogService.OpenXml,
+                validateContent: (content) => { var isValid = _xmlServiceValidator.TryValidate(content, out var err); return (isValid, err); },
+                deserialize: (content) => _xmlServiceSerializer.Deserialize(content),
+                formatName: "XML",
+                loadErrorMessage: Strings.Msg_FailedToLoadXml,
+                successMessage: Strings.ImportXml_Success,
+                errorMessage: Strings.ImportXml_Error,
+                cancellationToken: cancellationToken);
+
+        /// <inheritdoc />
+        public Task ImportJsonConfigAsync(CancellationToken cancellationToken = default) =>
+            ImportConfigAsync(
+                getFilePath: _fileDialogService.OpenJson,
+                validateContent: (content) => { var isValid = _jsonServiceValidator.TryValidate(content, out var err); return (isValid, err); },
+                deserialize: (content) => _jsonServiceSerializer.Deserialize(content),
+                formatName: "JSON",
+                loadErrorMessage: Strings.Msg_FailedToLoadJson,
+                successMessage: Strings.ImportJson_Success,
+                errorMessage: Strings.ImportJson_Error,
+                cancellationToken: cancellationToken);
+
+        /// <inheritdoc />
+        public async Task CopyPidAsync(Service? service, CancellationToken cancellationToken = default)
+        {
+            if (service?.Pid == null) return;
+
+            try
+            {
+                string pidValue = service.Pid.Value.ToString();
+                string serviceName = service.Name ?? "<unknown>";
+
+                bool success = false;
+
+                // Move the retry loop outside the Dispatcher to prevent UI freezing
+                for (int i = 0; i < AppConfig.ClipboardComMaxRetries; i++)
+                {
+                    // Accessing the Clipboard requires the STA thread (UI Thread)
+                    // We invoke only the granular action on the dispatcher
+                    success = await _dispatcher.InvokeAsync(() =>
+                    {
+                        try
+                        {
+                            Clipboard.SetText(pidValue);
+                            return true;
+                        }
+                        catch (ExternalException)
+                        {
+                            // COMException (clipboard locked by another process) or any other Win32 clipboard
+                            // failure: non-fatal, retry after the configured delay.
+                            return false;
+                        }
+                    });
+
+                    if (success) break;
+
+                    // If we failed, wait asynchronously before trying again.
+                    // This allows the UI thread to remain responsive during the wait.
+                    if (i < AppConfig.ClipboardComMaxRetries - 1)
+                    {
+                        await Task.Delay(AppConfig.ClipboardComRetryDelayMs, cancellationToken: cancellationToken);
+                    }
+                }
+
+                if (success)
+                {
+                    Logger.Info($"PID {pidValue} of service {serviceName} copied to clipboard.");
+                    await _messageBoxService.ShowInfoAsync(Strings.Msg_PidCopied, UiAppConfig.Caption);
+                }
+                else
+                {
+                    Logger.Warn($"Failed to copy PID {pidValue} for {serviceName} after {AppConfig.ClipboardComMaxRetries} attempts.");
+                    await _messageBoxService.ShowErrorAsync(Strings.Msg_PidCopyFailed, UiAppConfig.Caption);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                string serviceName = service?.Name ?? "<unknown>";
+                Logger.Debug($"Operation on {serviceName} was cancelled.");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error("Failed to copy PID to clipboard.", ex);
+                await _messageBoxService.ShowErrorAsync(Strings.Msg_UnexpectedError, UiAppConfig.Caption);
+            }
+        }
+
+        /// <summary>
+        /// Releases the per-service <see cref="SemaphoreSlim"/> locks held by this instance.
+        /// </summary>
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Releases the managed resources used by <see cref="ServiceCommands"/> - the per-service
+        /// semaphores in the lock dictionary.
+        /// </summary>
+        /// <param name="disposing">
+        /// <see langword="true"/> when called from <see cref="Dispose()"/>. This type has no finalizer,
+        /// so it is never <see langword="false"/>; the parameter exists for derived types to override.
+        /// </param>
+        protected virtual void Dispose(bool disposing)
+        {
+            // Atomic guard: Only the first caller proceeds to disposal
+            if (Interlocked.Exchange(ref _isDisposed, 1) != 0)
+            {
+                return;
+            }
+
+            if (disposing)
+            {
+                foreach (var sem in _serviceLocks.Values)
+                {
+                    try
+                    {
+                        sem.Value.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error("Error disposing semaphore during ServiceCommands teardown.", ex);
+                    }
+                }
+                _serviceLocks.Clear();
+            }
+        }
+
+#endregion
+
+        #region Private Helpers
+
+        /// <summary>
+        /// Executes a service management operation within a per-service lock, managing background execution,
+        /// UI state synchronization, and optional user notifications.
+        /// </summary>
+        /// <param name="service">The <see cref="Service"/> UI model to be updated upon successful operation.</param>
+        /// <param name="operation">An asynchronous delegate that performs the core domain logic using a
+        /// <see cref="Core.Domain.Service"/> instance.</param>
+        /// <param name="targetStatus">The <see cref="ServiceStatus"/> that the UI model should transition
+        /// to if the operation succeeds (e.g., Running, Stopped).</param>
+        /// <param name="successMessage">The localized message string to display in a success dialog
+        /// if <paramref name="showMessageBox"/> is <c>true</c>.</param>
+        /// <param name="checkDisabled">If <c>true</c>, verifies the service is not 'Disabled' before
+        /// invoking the operation.</param>
+        /// <param name="showMessageBox">Indicates whether to display success/error dialogs to the user
+        /// after execution.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>
+        /// A task representing the asynchronous operation. The task result is <c>true</c> if the operation
+        /// completed successfully and the service state was updated; otherwise, <c>false</c>.
+        /// </returns>
+        /// <remarks>
+        /// This method utilizes <see cref="ExecuteLockedAsync{T}"/> to prevent concurrent, conflicting
+        /// operations on the same service (Head-of-Line blocking). The core operation is explicitly
+        /// offloaded to <see cref="Task.Run"/> to keep the UI responsive during long-running service state
+        /// transitions.
+        /// </remarks>
+        private async Task<bool> ExecuteServiceCommandAsync(
+            Service? service,
+            Func<Core.Domain.Service, Task<OperationResult>> operation,
+            ServiceStatus targetStatus,
+            string successMessage,
+            bool checkDisabled,
+            bool showMessageBox,
+            CancellationToken cancellationToken = default)
+        {
+            if (service == null) return false;
+            if (string.IsNullOrWhiteSpace(service.Name)) return false;
+
+            return await ExecuteLockedAsync(service.Name, async () =>
+            {
+                bool success = false;
+                string? errorMessage = null;
+                string? infoMessage = null;
+
+                try
+                {
+                    var serviceDomain = await GetServiceDomain(service.Name, cancellationToken);
+                    if (serviceDomain == null)
+                    {
+                        errorMessage = Core.Resources.Strings.Msg_ServiceNotFound;
+                    }
+                    else if (checkDisabled && await Task.Run(() => _serviceManager.GetServiceStartupType(service.Name, cancellationToken: cancellationToken), cancellationToken) == ServiceStartType.Disabled)
+                    {
+                        errorMessage = Strings.Msg_ServiceDisabledError;
+                    }
+                    else
+                    {
+                        // Execute the core logic on a background thread
+                        var res = await Task.Run(() => operation(serviceDomain), cancellationToken);
+
+                        if (res.IsSuccess)
+                        {
+                            service.Status = targetStatus;
+                            infoMessage = successMessage;
+                            success = true;
+                        }
+                        else
+                        {
+                            errorMessage = !string.IsNullOrWhiteSpace(res.ErrorMessage) ? res.ErrorMessage : Strings.Msg_UnexpectedError;
+                            Logger.Warn($"Failed to execute operation on {service.Name}: {errorMessage}");
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    Logger.Debug($"Operation on {service.Name} was cancelled.");
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error($"Failed to execute operation on {service.Name}.", ex);
+                    errorMessage = Strings.Msg_UnexpectedError;
+                }
+
+                if (showMessageBox)
+                {
+                    if (!string.IsNullOrWhiteSpace(errorMessage))
+                        await _messageBoxService.ShowErrorAsync(errorMessage, UiAppConfig.Caption);
+                    else if (!string.IsNullOrWhiteSpace(infoMessage))
+                        await _messageBoxService.ShowInfoAsync(infoMessage, UiAppConfig.Caption);
+                }
+
+                return success;
+            }, cancellationToken: cancellationToken);
+        }
+
+        /// <summary>
+        /// Retrieves the domain representation of a service by its name.
+        /// </summary>
+        /// <param name="serviceName">The name of the service.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>The domain service if found; otherwise, <c>null</c>.</returns>
+        private async Task<Core.Domain.Service?> GetServiceDomain(string serviceName, CancellationToken cancellationToken = default)
+        {
+            var serviceDto = await _serviceRepository.GetByNameAsync(serviceName, decrypt: true, cancellationToken: cancellationToken);
+
+            // If the service is not in the repository, we must return null
+            // to allow callers to show the "Service Not Found" message.
+            if (serviceDto == null)
+            {
+                Logger.Warn($"Lookup failed: Service '{serviceName}' was not found in the repository.");
+                return null;
+            }
+
+            // Map to the domain engine only if we have a valid data transfer object
+            return Core.Mappers.ServiceDtoMapper.ToDomain(_serviceManager, serviceDto);
+        }
+
+        /// <summary>
+        /// Standardizes the service configuration export pipeline by retrieving the persistence-layer DTO
+        /// and executing a format-specific serialization delegate.
+        /// </summary>
+        /// <param name="service">The UI model representing the service to be exported.</param>
+        /// <param name="getFilePath">A delegate that opens a save file dialog and returns the chosen destination path.</param>
+        /// <param name="exportAction">A delegate responsible for serializing the <see cref="ServiceDto"/> and writing it to disk.</param>
+        /// <param name="formatName">The name of the format (e.g., "XML", "JSON") for logging and error context.</param>
+        /// <param name="successMessage">The localized string to display upon successful export.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A task representing the asynchronous export operation.</returns>
+        /// <remarks>
+        /// Unlike the Desktop App variant, this method retrieves the <see cref="ServiceDto"/> directly
+        /// from the <see cref="IServiceRepository"/> to ensure the exported file reflects the current
+        /// configuration. Credentials are exported in decrypted (plaintext) form so the file remains
+        /// portable across machines; the resulting file should be treated as sensitive.
+        /// </remarks>
+        private async Task ExportServiceConfigAsync(
+            Service? service,
+            Func<string?> getFilePath,
+            Action<ServiceDto, string> exportAction,
+            string formatName,
+            string successMessage,
+            CancellationToken cancellationToken = default)
+        {
+            if (service == null || string.IsNullOrWhiteSpace(service.Name)) return;
+
+            try
+            {
+                var path = getFilePath();
+                if (string.IsNullOrEmpty(path)) return;
+
+                var dto = await _serviceRepository.GetByNameAsync(service.Name, decrypt: true, cancellationToken: cancellationToken);
+                if (dto == null)
+                {
+                    await _messageBoxService.ShowErrorAsync(Core.Resources.Strings.Msg_ServiceNotFound, UiAppConfig.Caption);
+                    return;
+                }
+
+                exportAction(dto, path);
+
+                Logger.Info($"Service configuration exported to {formatName} at: {path}");
+                await _messageBoxService.ShowInfoAsync(successMessage, UiAppConfig.Caption);
+            }
+            catch (OperationCanceledException)
+            {
+                Logger.Debug($"Operation on {service.Name} was cancelled.");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Failed to export {formatName} of {service?.Name}.", ex);
+                await _messageBoxService.ShowErrorAsync(Strings.Msg_UnexpectedError, UiAppConfig.Caption);
+            }
+        }
+
+        /// <summary>
+        /// Standardizes the configuration import pipeline, enforcing a multi-stage validation gate
+        /// before persisting the configuration to the repository and refreshing the UI.
+        /// </summary>
+        /// <param name="getFilePath">A delegate that opens an open file dialog and returns the source path.</param>
+        /// <param name="validateContent">A delegate that performs raw format validation (e.g., schema or syntax checks).</param>
+        /// <param name="deserialize">A delegate that converts the validated string content into a <see cref="ServiceDto"/>.</param>
+        /// <param name="formatName">The name of the format (e.g., "XML", "JSON") for logging purposes.</param>
+        /// <param name="loadErrorMessage">The message to display if the file content is incompatible with the DTO structure.</param>
+        /// <param name="successMessage">The message to display upon successful repository persistence.</param>
+        /// <param name="errorMessage">The message to display if the repository upsert operation fails.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A task representing the asynchronous import operation.</returns>
+        /// <remarks>
+        /// The import follows a strict "Gatekeeper" pattern:
+        /// <list type="number">
+        /// <item><description>Security &amp; Size Check: Prevents large file attacks, UNC bypasses, and path traversal via <see cref="ImportGuard"/>.</description></item>
+        /// <item><description>Format Check: Ensures the raw string is valid XML/JSON.</description></item>
+        /// <item><description>Domain Check: Validates business rules via <see cref="IServiceConfigurationValidator"/>.</description></item>
+        /// <item><description>Persistence: Executes an Upsert in the database.</description></item>
+        /// <item><description>UI Sync: Triggers the <see cref="RefreshServices"/> callback to update the dashboard.</description></item>
+        /// </list>
+        /// </remarks>
+        private async Task ImportConfigAsync(
+            Func<string?, string?> getFilePath,
+            Func<string, (bool IsValid, string? ErrorMsg)> validateContent,
+            Func<string, ServiceDto?> deserialize,
+            string formatName,
+            string loadErrorMessage,
+            string successMessage,
+            string errorMessage,
+            CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var path = getFilePath(null);
+                if (string.IsNullOrEmpty(path)) return;
+
+                // Defense-in-depth: Run the security guards FIRST before touching the disk via size validation
+                var guardResult = ImportGuard.ValidatePathSecurityAndSize(path, out string? content);
+                if (!guardResult.IsValid || content == null)
+                {
+                    var msg = !string.IsNullOrWhiteSpace(guardResult.ErrorMessage)
+                        ? guardResult.ErrorMessage
+                        : Strings.Msg_UnexpectedError;
+                    await _messageBoxService.ShowErrorAsync(msg, UiAppConfig.Caption);
+                    return;
+                }
+
+                var validation = validateContent(content);
+                if (!validation.IsValid)
+                {
+                    await _messageBoxService.ShowErrorAsync(validation.ErrorMsg, UiAppConfig.Caption);
+                    return;
+                }
+
+                var dto = deserialize(content);
+                if (dto == null)
+                {
+                    await _messageBoxService.ShowErrorAsync(loadErrorMessage, UiAppConfig.Caption);
+                    return;
+                }
+
+                if (!await _serviceConfigurationValidator.ValidateAsync(dto, importMode: true, cancellationToken: cancellationToken))
+                {
+                    Logger.Warn($"{formatName} file '{path}' is not valid.");
+                    return;
+                }
+
+                var existing = await _serviceRepository.GetByNameAsync(dto.Name, decrypt: false, cancellationToken);
+                if (existing != null)
+                {
+                    var confirm = await _messageBoxService.ShowConfirmAsync(Strings.Msg_ImportServiceConfirmation, UiAppConfig.Caption);
+                    if (!confirm) return;
+                }
+
+                var res = await ExecuteLockedAsync(dto.Name, () =>
+                    _serviceRepository.UpsertAsync(
+                        dto,
+                        preserveExistingRuntimeState: true,
+                        preserveExistingCredentials: true,
+                        cancellationToken: cancellationToken),
+                    cancellationToken);
+
+                if (res > 0)
+                {
+                    Logger.Info($"Service configuration imported from {formatName} at: {path}");
+                    await _messageBoxService.ShowInfoAsync(successMessage, UiAppConfig.Caption);
+                    await RefreshServices();
+                }
+                else
+                {
+                    Logger.Error($"Failed to import {formatName} config from {path}");
+                    await _messageBoxService.ShowErrorAsync(errorMessage, UiAppConfig.Caption);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                Logger.Debug($"{formatName} config import was cancelled.");
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Failed to import {formatName} config.", ex);
+                await _messageBoxService.ShowErrorAsync(Strings.Msg_UnexpectedError, UiAppConfig.Caption);
+            }
+        }
+
+        /// <summary>
+        /// Removes a service using the configured removal callback.
+        /// </summary>
+        /// <param name="service">The service to remove.</param>
+        private void RemoveService(Service? service)
+        {
+            if (service == null) throw new ArgumentNullException(nameof(service));
+            if (string.IsNullOrWhiteSpace(service.Name)) throw new ArgumentException("Service name is required.", nameof(service));
+            _removeServiceCallback.Invoke(service.Name);
+        }
+
+        /// <summary>
+        /// Refreshes services list using the configured refresh callback.
+        /// </summary>
+        private async Task RefreshServices()
+        {
+            await _refreshCallback();
+        }
+
+        /// <summary>
+        /// Attempts to launch an external process.
+        /// </summary>
+        /// <param name="psi">The <see cref="ProcessStartInfo"/> that contains the information used to start the process,
+        /// including the file name and command-line arguments.</param>
+        /// <returns>The active process instance; returns null if the creation fails.</returns>
+        /// <remarks>
+        /// Failures are logged here; launch exceptions propagate directly to the caller.
+        /// </remarks>
+        private Process? StartProcess(ProcessStartInfo psi)
+        {
+            var process = _processHelper.Start(psi);
+
+            if (process == null)
+            {
+                Logger.Warn($"Failed to start external process {psi.FileName}.");
+            }
+
+            return process;
+        }
+
+        #endregion
+    }
+}

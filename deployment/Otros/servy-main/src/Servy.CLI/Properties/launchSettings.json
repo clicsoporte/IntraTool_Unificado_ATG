@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "Servy.CLI": {
+      "commandName": "Project",
+      "commandLineArgs": "help"
+    }
+  }
+}

@@ -1,0 +1,176 @@
+using Servy.Core.Data;
+using Servy.Core.EnvironmentVariables;
+using Servy.Core.Logging;
+using Servy.Service.CommandLine;
+using Servy.Service.ProcessManagement;
+using System.ServiceProcess;
+
+namespace Servy.Service.Helpers
+{
+    /// <summary>Launches (or relaunches) the monitored child process.</summary>
+    /// <param name="exePath">Fully resolved path to the child executable.</param>
+    /// <param name="arguments">Command-line arguments for the child.</param>
+    /// <param name="workingDirectory">Working directory the child is started in.</param>
+    /// <param name="environmentVariables">Environment block to inject.</param>
+    /// <param name="cancellationToken">Token observed while starting.</param>
+    public delegate void StartProcessCallback(
+        string exePath,
+        string arguments,
+        string workingDirectory,
+        List<EnvironmentVariable> environmentVariables,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Defines methods to assist with service startup operations,
+    /// including argument sanitization, logging, validation, and initialization of startup options.
+    /// </summary>
+    public interface IServiceHelper
+    {
+        /// <summary>
+        /// Retrieves the full command-line arguments for the current process, in
+        /// <see cref="Environment.GetCommandLineArgs"/> layout: index 0 is the executable path
+        /// and the caller-supplied arguments start at index 1.
+        /// </summary>
+        /// <returns>
+        /// An array of strings containing the command-line arguments, executable path first.
+        /// See <see cref="ICommandLineProvider.GetArgs"/> for why the layout must be preserved -
+        /// an array taken from <c>Main(string[] args)</c> is offset by one and shifts every
+        /// consumer's indices.
+        /// </returns>
+        string[] GetArgs();
+
+        /// <summary>
+        /// Parses the command-line arguments and loads the service configuration from the repository.
+        /// </summary>
+        /// <param name="serviceRepository">The repository used to fetch service-specific configurations.</param>
+        /// <param name="fullArgs">
+        /// The full set of command-line arguments to parse, as returned by <see cref="GetArgs"/>:
+        /// index 0 is the executable path and index 1 is the service name.
+        /// </param>
+        /// <returns>
+        /// Returns a populated <see cref="StartOptions"/>.
+        /// </returns>
+        /// <exception cref="ArgumentException">
+        /// Thrown when the command-line arguments are invalid.
+        /// </exception>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown when the service configuration is missing.
+        /// </exception>
+        StartOptions? ParseOptions(IServiceRepository serviceRepository, string[] fullArgs);
+
+        /// <summary>
+        /// Records the full initialization context, including raw command-line arguments and resolved
+        /// <see cref="StartOptions"/>, to the diagnostic log and Windows Event Log.
+        /// </summary>
+        /// <param name="options">
+        /// The hydrated configuration object containing the executable paths, timeouts,
+        /// and environment variables.
+        /// </param>
+        /// <param name="logger">
+        /// The scoped logger instance used for public output. If <see langword="null"/>, public diagnostic
+        /// information will not be recorded.
+        /// </param>
+        /// <remarks>
+        /// <para>
+        /// This method acts as the "black box" recorder for the service startup. Public parameter metadata is logged
+        /// to both local file logs and the Windows Event Log using <paramref name="logger"/>.
+        /// </para>
+        /// <para>
+        /// <b>Security Note:</b> Sensitive fields (such as environment variable values and raw executable arguments) are
+        /// only recorded when <see cref="StartOptions.EnableDebugLogs"/> is <see langword="true"/>. Prior to output,
+        /// all sensitive values are redacted directly by this method using <c>ServiceHelper.MaskSensitiveValue</c> and
+        /// <c>ServiceHelper.MaskRawArguments</c>. Sensitive blocks are written exclusively to the local file log
+        /// (<c>Servy.Service.log</c>) via the static logger and are never emitted to the Windows Event Log.
+        /// </para>
+        /// </remarks>
+        void LogStartupArguments(StartOptions options, IServyLogger? logger);
+
+        /// <summary>
+        /// Performs a comprehensive validation of the startup options and logs the results.
+        /// </summary>
+        /// <remarks>
+        /// This method logs the startup parameters (including sensitive data if debug logging is enabled)
+        /// and verifies that all critical paths and configurations are valid before the service starts.
+        /// </remarks>
+        /// <param name="options">The startup options to validate.</param>
+        /// <param name="logger">The logger instance (typically a scoped/promoted logger) used for reporting.</param>
+        /// <returns>
+        /// <c>true</c> if the options are valid and the service can proceed; otherwise, <c>false</c>.
+        /// </returns>
+        bool ValidateAndLog(StartOptions options, IServyLogger? logger);
+
+        /// <summary>
+        /// Ensures the working directory specified in the options is valid.
+        /// If not valid, sets a fallback working directory and logs a warning.
+        /// </summary>
+        /// <param name="options">The startup options containing the working directory to validate.</param>
+        /// <param name="logger">The logger to write warnings to.</param>
+        void EnsureValidStartupDirectory(StartOptions options, IServyLogger? logger);
+
+        /// <summary>
+        /// Attempts to restart the given process by:
+        /// 1. Capturing the parent PID and start time before stopping (for descendant tracking).
+        /// 2. Stopping the parent via <see cref="IProcessWrapper.Stop"/> if it is still running.
+        /// 3. Sweeping descendant processes via <see cref="IProcessWrapper.StopDescendants"/>.
+        /// 4. Invoking <paramref name="startProcess"/> to launch a fresh instance with the original path, arguments, working directory, and environment.
+        /// 5. Disposing the old process wrapper in a finally block to release native handles.
+        /// </summary>
+        /// <param name="process">The process wrapper to restart.</param>
+        /// <param name="startProcess">Callback to restart the process.</param>
+        /// <param name="realExePath">Path to the executable.</param>
+        /// <param name="realArgs">Command-line arguments.</param>
+        /// <param name="workingDir">Working directory for the process.</param>
+        /// <param name="environmentVariables">Environment variables.</param>
+        /// <param name="logger">Logger instance.</param>
+        /// <param name="stopTimeoutMs">Timeout in milliseconds to wait for the process to stop.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        void RestartProcess(
+            IProcessWrapper process,
+            StartProcessCallback startProcess,
+            string realExePath,
+            string realArgs,
+            string workingDir,
+            List<EnvironmentVariable> environmentVariables,
+            IServyLogger? logger,
+            int stopTimeoutMs,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Attempts to restart the Windows service associated with the current process.
+        /// </summary>
+        /// <param name="serviceName">The name of the Windows service to restart.</param>
+        /// <param name="logger">The logger instance used to report progress and errors.</param>
+        /// <remarks>
+        /// This should be used when the service is registered with the Service Control Manager.
+        /// </remarks>
+        void RestartService(string serviceName, IServyLogger? logger);
+
+        /// <summary>
+        /// Restarts the computer.
+        /// </summary>
+        /// <param name="logger">The logger instance used to report progress and errors.</param>
+        /// <remarks>
+        /// This operation requires appropriate privileges and will cause a system reboot.
+        /// Use with extreme caution.
+        /// </remarks>
+        void RestartComputer(IServyLogger? logger);
+
+        /// <summary>
+        /// Informs the Service Control Manager (SCM) that the service needs additional time to start,
+        /// stop, pause, or continue before the operation is considered failed.
+        /// </summary>
+        /// <param name="service">The service instance.</param>
+        /// <param name="milliseconds">
+        /// The number of milliseconds to add to the service timeout. This value extends the default
+        /// SCM timeout for the current operation (e.g., OnStart or OnStop).
+        /// </param>
+        /// <param name="logger">Logger.</param>
+        /// <remarks>
+        /// Use this method inside the SCM lifecycle callbacks (<c>OnStart</c>, <c>OnStop</c>,
+        /// <c>OnPause</c>, <c>OnContinue</c>) when the operation may exceed the default SCM timeout.
+        /// Calling this method has no effect if the service is not running under the SCM (for example,
+        /// during unit tests or console execution).
+        /// </remarks>
+        void RequestAdditionalTime(ServiceBase service, int milliseconds, IServyLogger? logger);
+    }
+}

@@ -1,0 +1,117 @@
+# ==========================================================================================
+# Composite Action - Setup and Verify CycloneDX Tools
+# ------------------------------------------------------------------------------------------
+# Purpose:
+#    Downloads, hash-verifies, and securely isolates both the CycloneDX CLI
+#    and the CycloneDX .NET tool within single-pass workflow runners.
+# ==========================================================================================
+
+name: 'Setup CycloneDX'
+description: 'Install and cryptographically verify CycloneDX CLI and .NET Tool'
+
+inputs:
+  tool_version:
+    description: 'CycloneDX .NET Tool Version'
+    required: false
+    default: '6.2.0'
+  tool_hash:
+    description: 'Expected SHA256 hash of the .NET tool nupkg'
+    required: false
+    default: '3473525381eee02a649b75bbf5b4f0ffa66112f62917aff798fed196e290a884'
+  cli_version:
+    description: 'CycloneDX CLI Version Tag'
+    required: false
+    default: 'v0.31.0'
+  cli_hash:
+    description: 'Expected SHA256 hash of the CLI binary executable'
+    required: false
+    default: 'da18bdb0d5b10a5f45ddfb59b7b08b11ddc050bb5c6407608d831929a1799d3f'
+  max_retries:
+    description: 'Maximum download retries for CycloneDX CLI and .NET Tool'
+    required: false
+    default: '5'
+
+runs:
+  using: 'composite'
+  steps:
+    # --- 1. Download CycloneDX CLI Executable via Shared Helper ---
+    - name: Download CycloneDX CLI
+      uses: ./.github/actions/download-with-retry
+      with:
+        url: "https://github.com/CycloneDX/cyclonedx-cli/releases/download/${{ inputs.cli_version }}/cyclonedx-win-x64.exe"
+        output_path: "%USERPROFILE%\\cyclonedx-cli\\cyclonedx.exe"
+        asset_name: "CycloneDX CLI executable"
+        max_retries: ${{ inputs.max_retries }}
+
+    # --- 2. CycloneDX CLI Cryptographic Verification & Path Exposure ---
+    - name: Verify and Register CycloneDX CLI
+      shell: pwsh
+      env:
+        INPUT_CLI_HASH: ${{ inputs.cli_hash }}
+      run: |
+        $cliHash = $env:INPUT_CLI_HASH
+        $cliDir  = "$env:USERPROFILE\cyclonedx-cli"
+        $outPath = "$cliDir\cyclonedx.exe"
+
+        # --- SECURITY CHECK: SHA256 PINNING ---
+        Write-Host "Verifying SHA256 checksum of CycloneDX CLI..."
+        $actualHash = (Get-FileHash $outPath -Algorithm SHA256).Hash
+
+        if ($actualHash -ne $cliHash) {
+            throw "Security Breach: CycloneDX CLI hash mismatch! Expected: $cliHash, Got: $actualHash"
+        }
+        Write-Host "CLI Checksum verified successfully."
+        # --------------------------------------
+        # Append only the isolated subfolder to PATH
+        Add-Content -Path $env:GITHUB_PATH -Value $cliDir
+
+    # --- 3. Download CycloneDX .NET Tool Package via Shared Helper ---
+    - name: Download CycloneDX .NET Tool Package
+      uses: ./.github/actions/download-with-retry
+      with:
+        url: "https://www.nuget.org/api/v2/package/CycloneDX/${{ inputs.tool_version }}"
+        output_path: "%USERPROFILE%\\cyclonedx-tool\\CycloneDX.${{ inputs.tool_version }}.nupkg"
+        asset_name: "CycloneDX NuGet package"
+        max_retries: ${{ inputs.max_retries }}
+
+    # --- 4. CycloneDX .NET Tool Verification & Isolated Installation ---
+    - name: Verify and Install CycloneDX .NET Tool
+      shell: pwsh
+      env:
+        INPUT_TOOL_VERSION: ${{ inputs.tool_version }}
+        INPUT_TOOL_HASH: ${{ inputs.tool_hash }}
+      run: |
+        # --- SECURITY CHECK: SHA256 PINNING FOR .NET TOOL ---
+        # We verify the CycloneDX nupkg itself against inputs.tool_hash.
+        # The isolated NuGet.config below then restricts restore to that one verified
+        # package - it does not verify transitive dependencies, it prevents them from
+        # being fetched at all. CycloneDX currently has none; if a future version adds
+        # one, this install fails with NU1101 rather than silently pulling it.
+        $toolVersion = $env:INPUT_TOOL_VERSION
+        $toolHash    = $env:INPUT_TOOL_HASH
+        $toolPkgDir  = "$env:USERPROFILE\cyclonedx-tool"
+        $toolPkgPath = "$toolPkgDir\CycloneDX.$toolVersion.nupkg"
+
+        Write-Host "Verifying SHA256 checksum of CycloneDX .NET Tool package..."
+        $actualToolHash = (Get-FileHash $toolPkgPath -Algorithm SHA256).Hash
+        if ($actualToolHash -ne $toolHash) {
+            throw "Security Breach: CycloneDX .NET Tool hash mismatch! Expected: $toolHash, Got: $actualToolHash"
+        }
+        Write-Host "Tool package checksum verified successfully."
+
+        # --- ISOLATION: Enforce local source only ---
+        $nugetConfig = @"
+        <?xml version="1.0" encoding="utf-8"?>
+        <configuration>
+          <packageSources>
+            <clear />
+            <add key="LocalVerified" value="$toolPkgDir" />
+          </packageSources>
+        </configuration>
+        "@
+        $nugetConfig | Set-Content -Path "$toolPkgDir\nuget.config"
+
+        # Continue with the .NET tool installation using the isolated source configuration
+        dotnet tool install --global CycloneDX --version $toolVersion --configfile "$toolPkgDir\nuget.config"
+        if ($LASTEXITCODE -ne 0) { throw "CycloneDX .NET tool install failed with exit code $LASTEXITCODE" }
+        Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.dotnet\tools"

@@ -1,0 +1,323 @@
+using Servy.Core.Config;
+using Servy.Core.Enums;
+using System.Diagnostics.Eventing.Reader;
+using System.Security.Principal;
+using EventLogReader = Servy.Core.Logging.EventLogReader;
+
+namespace Servy.Core.UnitTests.Logging
+{
+    public class EventLogReaderTests
+    {
+        #region ParseLevel Tests
+
+        [Theory]
+        [InlineData(0, EventLogLevel.Information)] // LogAlways
+        [InlineData(1, EventLogLevel.Error)]       // Critical folded to Error
+        [InlineData(2, EventLogLevel.Error)]       // Error
+        [InlineData(3, EventLogLevel.Warning)]     // Warning
+        [InlineData(4, EventLogLevel.Information)] // Information
+        [InlineData(5, EventLogLevel.Information)] // Verbose folded to Information
+        [InlineData(6, EventLogLevel.Information)] // Unknown level boundary fallback
+        [InlineData(255, EventLogLevel.Information)]
+        public void ParseLevel_AllBranches_ReturnExpectedStronglyTypedEnum(byte rawLevel, EventLogLevel expected)
+        {
+            // Act
+            var result = EventLogReader.ParseLevel(rawLevel);
+
+            // Assert
+            Assert.Equal(expected, result);
+        }
+
+        #endregion
+
+        #region SafeToOffset Tests
+
+        [Fact]
+        public void SafeToOffset_WhenNull_ReturnsDateTimeOffsetMinValue()
+        {
+            // Act
+            var result = EventLogReader.SafeToOffset(null);
+
+            // Assert
+            Assert.Equal(DateTimeOffset.MinValue, result);
+        }
+
+        [Fact]
+        public void SafeToOffset_WhenValidUtcDateTime_ReturnsCorrectUtcOffset()
+        {
+            // Arrange
+            var testTime = new DateTime(2026, 6, 24, 12, 0, 0, DateTimeKind.Utc);
+
+            // Act
+            var result = EventLogReader.SafeToOffset(testTime);
+
+            // Assert
+            Assert.Equal(TimeSpan.Zero, result.Offset);
+            Assert.Equal(2026, result.Year);
+            Assert.Equal(12, result.Hour);
+        }
+
+        [Fact]
+        public void SafeToOffset_WhenNearMinValue_ReturnsDateTimeOffsetMinValue()
+        {
+            // Arrange - Any timestamp within 1 day of DateTime.MinValue would overflow on negative local offset shifts
+            var nearMinTime = DateTime.MinValue.AddHours(12);
+
+            // Act
+            var result = EventLogReader.SafeToOffset(nearMinTime);
+
+            // Assert
+            Assert.Equal(DateTimeOffset.MinValue, result);
+        }
+
+        [Fact]
+        public void SafeToOffset_WhenNearMaxValue_ReturnsDateTimeOffsetMaxValue()
+        {
+            // Arrange - Any timestamp within 1 day of DateTime.MaxValue would overflow on west-of-UTC (negative offset) shifts
+            var nearMaxTime = DateTime.MaxValue.AddHours(-12);
+
+            // Act
+            var result = EventLogReader.SafeToOffset(nearMaxTime);
+
+            // Assert
+            Assert.Equal(DateTimeOffset.MaxValue, result);
+        }
+
+        [Theory]
+        [InlineData(DateTimeKind.Unspecified)]
+        [InlineData(DateTimeKind.Local)]
+        public void SafeToOffset_WhenUnspecifiedOrLocalKind_InheritsMachineLocalOffset(DateTimeKind kind)
+        {
+            // Arrange
+            // The expected offset comes from TimeZoneInfo, not from the 'new DateTimeOffset(raw.Value)'
+            // expression under test: computing it the SUT's own way made both assertions hold for any
+            // change to how the offset is derived, which is the one thing the test name promises.
+            var testTime = new DateTime(2026, 6, 24, 12, 0, 0, kind);
+            var expectedOffset = TimeZoneInfo.Local.GetUtcOffset(testTime);
+
+            // Act
+            var result = EventLogReader.SafeToOffset(testTime);
+
+            // Assert
+            Assert.Equal(expectedOffset, result.Offset);
+            Assert.Equal(testTime, result.DateTime); // the wall-clock reading is stamped, not shifted
+        }
+
+        #endregion
+
+        #region MapToDto Tests
+
+        [Fact]
+        public void MapToDto_AllPropertiesValid_MapsCorrectly()
+        {
+            // Arrange
+            var timeCreated = new DateTime(2026, 6, 24, 15, 0, 0, DateTimeKind.Utc);
+            var mockEvent = new TestableEventRecord
+            {
+                IdValue = 42,
+                TimeCreatedValue = timeCreated,
+                LevelValue = 3,
+                ProviderNameValue = "ServyEngine",
+                FormatDescriptionValue = "Service started successfully."
+            };
+
+            // Act
+            var result = EventLogReader.MapToDto(mockEvent);
+
+            // Assert
+            Assert.Equal(42, result.EventId);
+            Assert.Equal(EventLogLevel.Warning, result.Level);
+            Assert.Equal("ServyEngine", result.ProviderName);
+            Assert.Equal("Service started successfully.", result.Message);
+            // The whole instant, not just the offset: DateTimeOffset.MinValue - the fallback MapToDto
+            // leaves in place when TimeCreated cannot be read - also has a Zero offset, so pinning
+            // .Offset alone stayed green even with the timestamp mapping deleted. An explicitly-UTC
+            // DateTime projects to a Zero offset, so the expected value is machine-independent.
+            Assert.Equal(new DateTimeOffset(timeCreated, TimeSpan.Zero), result.Time);
+        }
+
+        [Fact]
+        public void MapToDto_NullLevelAndNullMessage_UsesDefaultsSafely()
+        {
+            // Arrange
+            var mockEvent = new TestableEventRecord
+            {
+                IdValue = 101,
+                TimeCreatedValue = null,
+                LevelValue = null,
+                ProviderNameValue = "Servy",
+                FormatDescriptionValue = null
+            };
+
+            // Act
+            var result = EventLogReader.MapToDto(mockEvent);
+
+            // Assert
+            Assert.Equal(101, result.EventId);
+            Assert.Equal(DateTimeOffset.MinValue, result.Time);
+            Assert.Equal(EventLogLevel.Information, result.Level); // Level null triggers 0 inside MapToDto -> ParseLevel(0) is Information
+            Assert.Equal("Servy", result.ProviderName);
+            Assert.NotNull(result.Message);
+            Assert.Empty(result.Message);
+        }
+
+        [Fact]
+        public void MapToDto_WhenEventLogExceptionsThrownOnProperties_CatchesAndAssignsDefaults()
+        {
+            // Arrange
+            var mockEvent = new TestableEventRecord
+            {
+                // Deliberately non-default: if a getter stopped throwing, these values would
+                // surface instead of the defaults asserted below.
+                IdValue = 4242,
+                TimeCreatedValue = new DateTime(2026, 6, 24, 15, 0, 0, DateTimeKind.Utc),
+                LevelValue = 2,                       // would map to Error, not Information
+                ProviderNameValue = "ServyEngine",
+                ThrowExceptionOnProperties = true,
+                FormatDescriptionValue = "Message survives a properties-only failure"
+            };
+
+            // Act
+            var result = EventLogReader.MapToDto(mockEvent);
+
+            // Assert
+            Assert.Equal(0, result.EventId);
+            Assert.Equal(DateTimeOffset.MinValue, result.Time);
+            Assert.Equal(EventLogLevel.Information, result.Level);
+            Assert.Equal(AppConfig.EventSource, result.ProviderName);
+            Assert.Equal("Message survives a properties-only failure", result.Message);
+        }
+
+        [Theory]
+        [InlineData(typeof(EventLogException))]
+        [InlineData(typeof(InvalidOperationException))]
+        public void MapToDto_WhenFormatDescriptionThrowsExpectedExceptions_WrapsExceptionMessage(Type exceptionType)
+        {
+            // Arrange
+            var exception = (Exception)Activator.CreateInstance(exceptionType, "Native description handle missing")!;
+            var mockEvent = new TestableEventRecord
+            {
+                IdValue = 500,
+                ProviderNameValue = "System",
+                ExceptionToThrowOnFormat = exception
+            };
+
+            // Act
+            var result = EventLogReader.MapToDto(mockEvent);
+
+            // Assert
+            Assert.Equal(500, result.EventId);
+            // The whole wrapper, not just its prefix: the interpolated ex.Message is the entire
+            // diagnostic value of this branch, and dropping it or interpolating the wrong value
+            // left a prefix-only assertion green. The expected text is read from the arranged
+            // exception rather than spelled out, because EventLogException overrides Message and
+            // does not necessarily return the string its constructor was given.
+            Assert.Equal($"[{AppConfig.EventSource}] <message unavailable: {exception.Message}>", result.Message);
+        }
+
+        #endregion
+
+        #region Helper Mock Stub Layout for EventRecord
+
+        /// <summary>
+        /// A test double for <see cref="EventRecord"/>. Every member is overridden directly, so no
+        /// reflection or native event-log handle is required. Set <see cref="ThrowExceptionOnProperties"/>
+        /// or <see cref="ExceptionToThrowOnFormat"/> to exercise MapToDto's per-property catch blocks.
+        /// Set <see cref="FormatDescriptionValue"/> to <c>null</c> to simulate missing provider metadata.
+        /// </summary>
+        private class TestableEventRecord : EventRecord
+        {
+            public int IdValue { get; set; }
+            public DateTime? TimeCreatedValue { get; set; }
+            public byte? LevelValue { get; set; }
+            public string? ProviderNameValue { get; set; }
+            public string? FormatDescriptionValue { get; set; }
+            public bool ThrowExceptionOnProperties { get; set; }
+            public Exception? ExceptionToThrowOnFormat { get; set; }
+
+            public override int Id => ThrowExceptionOnProperties
+                ? throw new EventLogNotFoundException("Simulated missing property exception context")
+                : IdValue;
+
+            public override DateTime? TimeCreated => ThrowExceptionOnProperties
+                ? throw new EventLogReadingException("Simulated missing time offset")
+                : TimeCreatedValue;
+
+            public override byte? Level => ThrowExceptionOnProperties
+                ? throw new EventLogException("Simulated exception")
+                : LevelValue;
+
+            public override string ProviderName => ThrowExceptionOnProperties
+                ? throw new EventLogException("Access Denied")
+                : ProviderNameValue ?? string.Empty;
+
+            public override Guid? ActivityId => null;
+
+            public override EventBookmark? Bookmark => null;
+
+            public override long? Keywords => null;
+
+            public override IEnumerable<string> KeywordsDisplayNames => Array.Empty<string>();
+
+            public override string? LevelDisplayName => null;
+
+            public override string? LogName => null;
+
+            public override string? MachineName => null;
+
+            public override short? Opcode => null;
+
+            public override string? OpcodeDisplayName => null;
+
+            public override int? ProcessId => null;
+
+            public override IList<EventProperty> Properties => Array.Empty<EventProperty>();
+
+            public override Guid? ProviderId => null;
+
+            public override int? Qualifiers => null;
+
+            public override long? RecordId => null;
+
+            public override Guid? RelatedActivityId => null;
+
+            public override int? Task => null;
+
+            public override string? TaskDisplayName => null;
+
+            public override int? ThreadId => null;
+
+            public override SecurityIdentifier? UserId => null;
+
+            public override byte? Version => null;
+
+            // Deliberately returns null through a non-nullable signature: the real
+            // EventRecord.FormatDescription() can return null when provider metadata is
+            // missing, and MapToDto's '?? string.Empty' is what this covers. Do not "fix".
+            public override string FormatDescription()
+            {
+                if (ExceptionToThrowOnFormat != null)
+                {
+                    throw ExceptionToThrowOnFormat;
+                }
+                return FormatDescriptionValue!;
+            }
+
+            public override string FormatDescription(IEnumerable<object> values)
+            {
+                if (ExceptionToThrowOnFormat != null)
+                {
+                    throw ExceptionToThrowOnFormat;
+                }
+                return FormatDescriptionValue!;
+            }
+
+            public override string ToXml()
+            {
+                return string.Empty;
+            }
+        }
+
+        #endregion
+    }
+}

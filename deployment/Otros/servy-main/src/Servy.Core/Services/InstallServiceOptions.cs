@@ -1,0 +1,203 @@
+using Servy.Core.Config;
+using Servy.Core.Enums;
+
+namespace Servy.Core.Services
+{
+    /// <summary>
+    /// Represents the configuration options required for installing or updating a Windows service.
+    /// </summary>
+    public class InstallServiceOptions
+    {
+        /// <summary>The name of the Windows service to create.</summary>
+        public string ServiceName { get; set; } = string.Empty;
+
+        /// <summary>The service description displayed in the Services MMC snap-in.</summary>
+        public string Description { get; set; } = string.Empty;
+
+        /// <summary>The full path to the wrapper executable that will be installed as the service binary.</summary>
+        public string WrapperExePath { get; set; } = string.Empty;
+
+        /// <summary>The full path to the real executable to be launched by the wrapper.</summary>
+        public string RealExePath { get; set; } = string.Empty;
+
+        /// <summary>The working directory to use when launching the real executable.</summary>
+        public string? StartupDirectory { get; set; }
+
+        /// <summary>The command line arguments to pass to the real executable.</summary>
+        public string? RealArgs { get; set; }
+
+        /// <summary>The service startup type (Automatic, AutomaticDelayedStart, Manual, Disabled).</summary>
+        public ServiceStartType StartType { get; set; } = AppConfig.DefaultStartupType;
+
+        /// <summary>Optional process priority for the service. Defaults to <see cref="AppConfig.DefaultProcessPriority"/>.</summary>
+        public ProcessPriority ProcessPriority { get; set; } = AppConfig.DefaultProcessPriority;
+
+        /// <summary>Logical CPUs the process may run on (e.g., '0-3,8' or '0xFF00').</summary>
+        public string? CpuAffinity { get; set; }
+
+        /// <summary>Whether to enable the console user interface for the service.</summary>
+        public bool EnableConsoleUI { get; set; } = AppConfig.DefaultEnableConsoleUI;
+
+        /// <summary>Optional path for standard output redirection. If null, no redirection is performed.</summary>
+        public string? StdoutPath { get; set; }
+
+        /// <summary>Optional path for standard error redirection. If null, no redirection is performed.</summary>
+        public string? StderrPath { get; set; }
+
+        /// <summary>Enable size-based log rotation.</summary>
+        public bool EnableSizeRotation { get; set; } = AppConfig.DefaultEnableSizeRotation;
+
+        /// <summary>
+        /// Size threshold in bytes that triggers a log rotation. Only used when <see cref="EnableSizeRotation"/> is true.
+        /// Callers are expected to supply a value of at least <see cref="AppConfig.MinRotationSize"/> MB;
+        /// <see cref="Servy.Core.Validation.IServiceValidationRules"/> enforces that bound on the DTO before mapping,
+        /// and a value below 1 MB disables rotation rather than lowering the threshold.
+        /// </summary>
+        public long RotationSizeInBytes { get; set; } = AppConfig.ToBytes(AppConfig.DefaultRotationSizeMB);
+
+        /// <summary>Use local system time (instead of UTC) for log rotation. Defaults to <see cref="AppConfig.DefaultUseLocalTimeForRotation"/>.</summary>
+        public bool UseLocalTimeForRotation { get; set; } = AppConfig.DefaultUseLocalTimeForRotation;
+
+        /// <summary>Enable health monitoring.</summary>
+        public bool EnableHealthMonitoring { get; set; } = AppConfig.DefaultEnableHealthMonitoring;
+
+        /// <summary>Heartbeat interval in seconds for the process. Only used when <see cref="EnableHealthMonitoring"/> is true; must be between <see cref="AppConfig.MinHeartbeatInterval"/> and <see cref="AppConfig.MaxHeartbeatInterval"/>.</summary>
+        public int HeartbeatInterval { get; set; } = AppConfig.DefaultHeartbeatInterval;
+
+        /// <summary>Maximum number of failed health checks before the service is considered unhealthy. Only used when <see cref="EnableHealthMonitoring"/> is true.</summary>
+        public int MaxFailedChecks { get; set; } = AppConfig.DefaultMaxFailedChecks;
+
+        /// <summary>Recovery action to take if the service fails. Only used when <see cref="EnableHealthMonitoring"/> is true.</summary>
+        public RecoveryAction RecoveryAction { get; set; } = AppConfig.DefaultRecoveryAction;
+
+        /// <summary>Whether to run recovery action even if the process exits successfully. Only used when <see cref="EnableHealthMonitoring"/> is true.</summary>
+        public bool RecoveryOnCleanExit { get; set; } = AppConfig.DefaultRecoveryOnCleanExit;
+
+        /// <summary>Maximum number of restart attempts if the service fails. Only used when <see cref="EnableHealthMonitoring"/> is true.</summary>
+        public int MaxRestartAttempts { get; set; } = AppConfig.DefaultMaxRestartAttempts;
+
+        /// <summary>The absolute URL used to send out-of-band diagnostic heartbeat pings (e.g., dead man's switch
+        /// platforms like healthchecks.io). Only used when <see cref="EnableHealthMonitoring"/> is true.</summary>
+        public string? HeartbeatUrl { get; set; }
+
+        /// <summary>Maximum time in seconds to wait for the external heartbeat URL request to complete before it is
+        /// cancelled. Only used when <see cref="EnableHealthMonitoring"/> is true and <see cref="HeartbeatUrl"/> is set.</summary>
+        public int HeartbeatUrlTimeoutSeconds { get; set; } = AppConfig.DefaultHeartbeatUrlTimeoutSeconds;
+
+        /// <summary>Whether start/fail status flags are appended to the heartbeat URL query string. Only used when
+        /// <see cref="EnableHealthMonitoring"/> is true and <see cref="HeartbeatUrl"/> is set.</summary>
+        public bool EnableHeartbeatUrlFlags { get; set; } = AppConfig.DefaultEnableHeartbeatUrlFlags;
+
+        /// <summary>Failure program path.</summary>
+        public string? FailureProgramPath { get; set; }
+
+        /// <summary>Failure program working directory.</summary>
+        public string? FailureProgramStartupDirectory { get; set; }
+
+        /// <summary>The command line arguments to pass to the failure program.</summary>
+        public string? FailureProgramExecutableArgs { get; set; }
+
+        /// <summary>
+        /// Environment variables for the wrapped process as <c>KEY=VALUE</c> pairs separated by semicolons or newlines
+        /// (a literal '=' or ';' inside a value is escaped with a backslash). Not validated by
+        /// <see cref="IServiceManager.InstallServiceAsync"/>; callers run <see cref="Servy.Core.Validation.IServiceValidationRules"/>
+        /// (or <see cref="Servy.Core.EnvironmentVariables.EnvironmentVariablesValidator"/>) before installing.
+        /// </summary>
+        public string? EnvironmentVariables { get; set; }
+
+        /// <summary>
+        /// Names of the services this service depends on, separated by semicolons or newlines (not commas).
+        /// A name may carry a leading '+' to reference a load-order group. Not validated by
+        /// <see cref="IServiceManager.InstallServiceAsync"/>; callers run <see cref="Servy.Core.Validation.IServiceValidationRules"/>
+        /// (or <see cref="Servy.Core.ServiceDependencies.ServiceDependenciesValidator"/>) before installing.
+        /// </summary>
+        public string? ServiceDependencies { get; set; }
+
+        /// <summary>Service account username: .\username  for local accounts, DOMAIN\username for domain accounts.</summary>
+        public string? Username { get; set; }
+
+        /// <summary>Service account password.</summary>
+        public string? Password { get; set; }
+
+        /// <summary>Pre-launch script exe path.</summary>
+        public string? PreLaunchExePath { get; set; }
+
+        /// <summary>Pre-launch working directory.</summary>
+        public string? PreLaunchStartupDirectory { get; set; }
+
+        /// <summary>The command line arguments to pass to the pre-launch executable.</summary>
+        public string? PreLaunchArgs { get; set; }
+
+        /// <summary>Environment variables for the pre-launch process, in the same <c>KEY=VALUE</c> format and with the same caller-side validation as <see cref="EnvironmentVariables"/>.</summary>
+        public string? PreLaunchEnvironmentVariables { get; set; }
+
+        /// <summary>Optional path for pre-launch standard output redirection. If null, no redirection is performed.</summary>
+        public string? PreLaunchStdoutPath { get; set; }
+
+        /// <summary>Optional path for pre-launch standard error redirection. If null, no redirection is performed.</summary>
+        public string? PreLaunchStderrPath { get; set; }
+
+        /// <summary>Pre-launch script timeout in seconds. Defaults to <see cref="AppConfig.DefaultPreLaunchTimeoutSeconds"/>.</summary>
+        public int PreLaunchTimeout { get; set; } = AppConfig.DefaultPreLaunchTimeoutSeconds;
+
+        /// <summary>Pre-launch script retry attempts.</summary>
+        public int PreLaunchRetryAttempts { get; set; } = AppConfig.DefaultPreLaunchRetryAttempts;
+
+        /// <summary>Ignore failure and start service even if pre-launch script fails.</summary>
+        public bool PreLaunchIgnoreFailure { get; set; } = AppConfig.DefaultPreLaunchIgnoreFailure;
+
+        /// <summary>Post-launch script exe path.</summary>
+        public string? PostLaunchExePath { get; set; }
+
+        /// <summary>Post-launch working directory.</summary>
+        public string? PostLaunchStartupDirectory { get; set; }
+
+        /// <summary>The command line arguments to pass to the post-launch executable.</summary>
+        public string? PostLaunchArgs { get; set; }
+
+        /// <summary>Enable debug logs for the service wrapper.</summary>
+        public bool EnableDebugLogs { get; set; } = AppConfig.DefaultEnableDebugLogs;
+
+        /// <summary>The Display Name of the service, shown in the Windows Services management console (<c>services.msc</c>).</summary>
+        public string? DisplayName { get; set; }
+
+        /// <summary>The maximum number of rotated log files to keep. Set to 0 for unlimited.</summary>
+        public int MaxRotations { get; set; } = AppConfig.DefaultMaxRotations;
+
+        /// <summary>Enables rotation based on the date interval specified by <see cref="DateRotationType"/>.</summary>
+        public bool EnableDateRotation { get; set; } = AppConfig.DefaultEnableDateRotation;
+
+        /// <summary>Defines the date-based rotation schedule (daily, weekly, or monthly). Only used when <see cref="EnableDateRotation"/> is true.</summary>
+        public DateRotationType DateRotationType { get; set; } = AppConfig.DefaultDateRotationType;
+
+        /// <summary>The timeout in seconds to wait for the process to start successfully before considering the startup as failed.</summary>
+        public int StartTimeout { get; set; } = AppConfig.DefaultStartTimeout;
+
+        /// <summary>The timeout in seconds to wait for the process to exit.</summary>
+        public int StopTimeout { get; set; } = AppConfig.DefaultStopTimeout;
+
+        /// <summary>The path to an executable that runs before the service stops.</summary>
+        public string? PreStopExePath { get; set; }
+
+        /// <summary>The startup directory for the pre-stop executable.</summary>
+        public string? PreStopStartupDirectory { get; set; }
+
+        /// <summary>The command line arguments to pass to the pre-stop executable.</summary>
+        public string? PreStopArgs { get; set; }
+
+        /// <summary>The maximum time in seconds to wait for the pre-stop executable to complete.</summary>
+        public int PreStopTimeout { get; set; } = AppConfig.DefaultPreStopTimeoutSeconds;
+
+        /// <summary>A flag to log pre-stop failure as error.</summary>
+        public bool PreStopLogAsError { get; set; } = AppConfig.DefaultPreStopLogAsError;
+
+        /// <summary>The path to an executable that runs after the service stops.</summary>
+        public string? PostStopExePath { get; set; }
+
+        /// <summary>The startup directory for the post-stop executable.</summary>
+        public string? PostStopStartupDirectory { get; set; }
+
+        /// <summary>The command line arguments to pass to the post-stop executable.</summary>
+        public string? PostStopArgs { get; set; }
+    }
+}

@@ -1,0 +1,355 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 18
+VisualStudioVersion = 18.0.11205.157
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy", "src\Servy\Servy.csproj", "{94182C28-CC25-2F20-1763-F275AEB96267}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "_global", "_global", "{02EA681E-C7D8-13C7-8484-4AC65E1B71E8}"
+	ProjectSection(SolutionItems) = preProject
+		.editorconfig = .editorconfig
+		.gitattributes = .gitattributes
+		.gitignore = .gitignore
+		.gitleaks.toml = .gitleaks.toml
+		bump-runtime.ps1 = bump-runtime.ps1
+		bump-version.ps1 = bump-version.ps1
+		CHANGELOG-v1.0-v7.2.md = CHANGELOG-v1.0-v7.2.md
+		CHANGELOG.md = CHANGELOG.md
+		codecov.yml = codecov.yml
+		Directory.Build.props = Directory.Build.props
+		Directory.Packages.props = Directory.Packages.props
+		Format-SourceFiles.ps1 = Format-SourceFiles.ps1
+		Format-SourceHygiene.ps1 = Format-SourceHygiene.ps1
+		Get-FileEncoding.ps1 = Get-FileEncoding.ps1
+		Get-FileEncoding.test.ps1 = Get-FileEncoding.test.ps1
+		global.json = global.json
+		LICENSE.txt = LICENSE.txt
+		NOTES.md = NOTES.md
+		README.md = README.md
+		ROADMAP.md = ROADMAP.md
+		THIRD-PARTY-NOTICES.md = THIRD-PARTY-NOTICES.md
+		Update-FileHelpers.ps1 = Update-FileHelpers.ps1
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "apps", "apps", "{525B29D4-743C-4A5B-BFB6-82A3F981495E}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{F56CEF5B-4A0B-4494-8BFD-F6EC660B510E}"
+	ProjectSection(SolutionItems) = preProject
+		src\linker.shared.xml = src\linker.shared.xml
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "core", "core", "{7D103998-9A71-474A-A668-10311727E6E7}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "service", "service", "{66EEF7A1-9E3D-4957-896A-394C6422F01F}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{50795869-2933-430F-98BD-956C414ABBE4}"
+	ProjectSection(SolutionItems) = preProject
+		tests\test.ps1 = tests\test.ps1
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.Core", "src\Servy.Core\Servy.Core.csproj", "{12557834-2324-4DC8-8D79-A6CCAB71AB59}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.Core.UnitTests", "tests\Servy.Core.UnitTests\Servy.Core.UnitTests.csproj", "{9601662F-6D0C-4171-8EBE-329078BFE90A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.Restarter", "src\Servy.Restarter\Servy.Restarter.csproj", "{93B5E5FE-F371-44BB-B01E-8577CBFCC4BA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.Service.UnitTests", "tests\Servy.Service.UnitTests\Servy.Service.UnitTests.csproj", "{6B26F14D-4CF9-4A7E-A94E-1B2741CC627C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.Restarter.UnitTests", "tests\Servy.Restarter.UnitTests\Servy.Restarter.UnitTests.csproj", "{05CEF054-B8AC-4088-9117-B8F6A508E85C}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".github", ".github", "{8E91D1D2-8183-4A34-922F-5F702720EBD6}"
+	ProjectSection(SolutionItems) = preProject
+		.github\dependabot.yml = .github\dependabot.yml
+		.github\FUNDING.yml = .github\FUNDING.yml
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "workflows", "workflows", "{9FEDDCAA-5911-471B-94CC-9913899B5AD7}"
+	ProjectSection(SolutionItems) = preProject
+		.github\workflows\build.yml = .github\workflows\build.yml
+		.github\workflows\bump-version.yml = .github\workflows\bump-version.yml
+		.github\workflows\changelog.yml = .github\workflows\changelog.yml
+		.github\workflows\choco.yml = .github\workflows\choco.yml
+		.github\workflows\loc.yml = .github\workflows\loc.yml
+		.github\workflows\publish.yml = .github\workflows\publish.yml
+		.github\workflows\release.yml = .github\workflows\release.yml
+		.github\workflows\sbom.yml = .github\workflows\sbom.yml
+		.github\workflows\scoop.yml = .github\workflows\scoop.yml
+		.github\workflows\security.yml = .github\workflows\security.yml
+		.github\workflows\sonar.yml = .github\workflows\sonar.yml
+		.github\workflows\test-project.yml = .github\workflows\test-project.yml
+		.github\workflows\test.yml = .github\workflows\test.yml
+		.github\workflows\wiki.yml = .github\workflows\wiki.yml
+		.github\workflows\winget.yml = .github\workflows\winget.yml
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.UnitTests", "tests\Servy.UnitTests\Servy.UnitTests.csproj", "{7EFC59C8-8037-4E5A-8B43-08273045AE64}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.CLI", "src\Servy.CLI\Servy.CLI.csproj", "{A693A6A5-551E-46BB-AA3F-9F80323342E0}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.CLI.UnitTests", "tests\Servy.CLI.UnitTests\Servy.CLI.UnitTests.csproj", "{72845E12-0BFD-4C14-93BF-4E005DE27554}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "setup", "setup", "{11479D8F-D8B6-4AD7-BC82-A423FCC30779}"
+	ProjectSection(SolutionItems) = preProject
+		setup\build-common.ps1 = setup\build-common.ps1
+		setup\build-config.ps1 = setup\build-config.ps1
+		setup\build-config.test.ps1 = setup\build-config.test.ps1
+		setup\common-helpers.ps1 = setup\common-helpers.ps1
+		setup\generate-sbom.ps1 = setup\generate-sbom.ps1
+		setup\publish-common.ps1 = setup\publish-common.ps1
+		setup\publish-res.ps1 = setup\publish-res.ps1
+		setup\publish-sc.ps1 = setup\publish-sc.ps1
+		setup\publish.ps1 = setup\publish.ps1
+		setup\servy.iss = setup\servy.iss
+		setup\Set-ServyExePermissions.ps1 = setup\Set-ServyExePermissions.ps1
+		setup\signpath.ps1 = setup\signpath.ps1
+		setup\tools-config.ps1 = setup\tools-config.ps1
+		setup\Verify-PublishExclusions.ps1 = setup\Verify-PublishExclusions.ps1
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.Infrastructure", "src\Servy.Infrastructure\Servy.Infrastructure.csproj", "{17B715D3-353A-4370-9FBE-8A0F079F5D56}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.Infrastructure.UnitTests", "tests\Servy.Infrastructure.UnitTests\Servy.Infrastructure.UnitTests.csproj", "{AE1B7B00-6FC4-4385-8C69-CE3C4FFE2E4E}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "data", "data", "{600A36AC-7B7F-44A9-9BDF-B9D86BB31E82}"
+	ProjectSection(SolutionItems) = preProject
+		tests\data\Service.json = tests\data\Service.json
+		tests\data\Service.xml = tests\data\Service.xml
+		tests\data\Wexflow.json = tests\data\Wexflow.json
+		tests\data\Wexflow.xml = tests\data\Wexflow.xml
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.Manager", "src\Servy.Manager\Servy.Manager.csproj", "{502C7577-7E31-4BAE-B259-E2EDC15CF541}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.UI", "src\Servy.UI\Servy.UI.csproj", "{7A15D976-7395-4827-BB96-9362167C7D26}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.Manager.UnitTests", "tests\Servy.Manager.UnitTests\Servy.Manager.UnitTests.csproj", "{9947CE01-9A62-4503-92DD-25723F8EA56B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.UI.UnitTests", "tests\Servy.UI.UnitTests\Servy.UI.UnitTests.csproj", "{62ABE4F3-41AB-4ADC-AF50-C77992E5846D}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "taskschd", "taskschd", "{9253D26F-5A46-4EE3-B0B7-0097AB90384E}"
+	ProjectSection(SolutionItems) = preProject
+		setup\taskschd\Get-ServyLastErrors.ps1 = setup\taskschd\Get-ServyLastErrors.ps1
+		setup\taskschd\Import-ServyDependencies.ps1 = setup\taskschd\Import-ServyDependencies.ps1
+		setup\taskschd\Servy-Watermark.psm1 = setup\taskschd\Servy-Watermark.psm1
+		setup\taskschd\ServyFailureEmail.ps1 = setup\taskschd\ServyFailureEmail.ps1
+		setup\taskschd\ServyFailureEmail.vbs = setup\taskschd\ServyFailureEmail.vbs
+		setup\taskschd\ServyFailureEmail.xml = setup\taskschd\ServyFailureEmail.xml
+		setup\taskschd\ServyFailureNotification.ps1 = setup\taskschd\ServyFailureNotification.ps1
+		setup\taskschd\ServyFailureNotification.vbs = setup\taskschd\ServyFailureNotification.vbs
+		setup\taskschd\ServyFailureNotification.xml = setup\taskschd\ServyFailureNotification.xml
+		setup\taskschd\ServySecurity.ps1 = setup\taskschd\ServySecurity.ps1
+		setup\taskschd\ServySecurity.test.ps1 = setup\taskschd\ServySecurity.test.ps1
+		setup\taskschd\smtp-config.xml = setup\taskschd\smtp-config.xml
+		setup\taskschd\Write-ServyLog.ps1 = setup\taskschd\Write-ServyLog.ps1
+		setup\taskschd\Write-ServyLog.test.ps1 = setup\taskschd\Write-ServyLog.test.ps1
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.Service", "src\Servy.Service\Servy.Service.csproj", "{02B40D5D-6A53-442A-9A5E-C51043592558}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "actions", "actions", "{FED01F22-71C4-4504-9BC6-217F6DE9F152}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "setup-dotnet", "setup-dotnet", "{0C2EFAF7-B686-4373-A26C-34C93E963BFB}"
+	ProjectSection(SolutionItems) = preProject
+		.github\actions\setup-dotnet\action.yml = .github\actions\setup-dotnet\action.yml
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.Core.IntegrationTests", "tests\Servy.Core.IntegrationTests\Servy.Core.IntegrationTests.csproj", "{C3832E91-A2D7-412B-9861-895E8848B16F}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "scoop", "scoop", "{A46EACF8-629B-462D-B859-243C56ECB376}"
+	ProjectSection(SolutionItems) = preProject
+		setup\scoop\README.md = setup\scoop\README.md
+		setup\scoop\servy.json = setup\scoop\servy.json
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.Service.IntegrationTests", "tests\Servy.Service.IntegrationTests\Servy.Service.IntegrationTests.csproj", "{A9929DF4-5FC7-4EA0-82E7-EBDFC1E6928C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.Testing", "tests\Servy.Testing\Servy.Testing.csproj", "{6421523A-29C6-46E9-BCE7-D38CAAC4B94E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.UI.IntegrationTests", "tests\Servy.UI.IntegrationTests\Servy.UI.IntegrationTests.csproj", "{3B4345FC-28F9-4016-8FB3-E87A70C78923}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "choco", "choco", "{0C916905-AFCC-4C80-85FD-7D98DF5E6DE5}"
+	ProjectSection(SolutionItems) = preProject
+		setup\choco\README.md = setup\choco\README.md
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "servy", "servy", "{09CA340C-8754-4FCC-92DA-441D279C604C}"
+	ProjectSection(SolutionItems) = preProject
+		setup\choco\servy\servy.nuspec = setup\choco\servy\servy.nuspec
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{DA3B55F8-FA18-4FF3-9221-F528D0501C72}"
+	ProjectSection(SolutionItems) = preProject
+		setup\choco\servy\tools\chocolateyinstall.ps1 = setup\choco\servy\tools\chocolateyinstall.ps1
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.Infrastructure.IntegrationTests", "tests\Servy.Infrastructure.IntegrationTests\Servy.Infrastructure.IntegrationTests.csproj", "{99D2C270-5AF9-482B-B8F4-780A6687554D}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "resolve-version", "resolve-version", "{BF373F26-8DEF-486B-8AE7-C38420BF50C0}"
+	ProjectSection(SolutionItems) = preProject
+		.github\actions\resolve-version\action.yml = .github\actions\resolve-version\action.yml
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "setup-cyclonedx", "setup-cyclonedx", "{B2C6492F-B0F0-4AF1-A4CF-730FF719DE16}"
+	ProjectSection(SolutionItems) = preProject
+		.github\actions\setup-cyclonedx\action.yml = .github\actions\setup-cyclonedx\action.yml
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "download-with-retry", "download-with-retry", "{DC8F9FE8-87F3-45D1-B7A7-A87A4D2C82CE}"
+	ProjectSection(SolutionItems) = preProject
+		.github\actions\download-with-retry\action.yml = .github\actions\download-with-retry\action.yml
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "setup-git-helpers", "setup-git-helpers", "{9ECF4CFF-05CD-43DA-9751-191FBE4A3B5C}"
+	ProjectSection(SolutionItems) = preProject
+		.github\actions\setup-git-helpers\action.yml = .github\actions\setup-git-helpers\action.yml
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Servy.CLI.IntegrationTests", "tests\Servy.CLI.IntegrationTests\Servy.CLI.IntegrationTests.csproj", "{840AE4B4-22C9-4943-AE94-16F9A2695537}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "winget", "winget", "{F59B094D-9ABF-4617-AD00-3F789DC14E4C}"
+	ProjectSection(SolutionItems) = preProject
+		setup\winget\README.md = setup\winget\README.md
+	EndProjectSection
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{94182C28-CC25-2F20-1763-F275AEB96267}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{94182C28-CC25-2F20-1763-F275AEB96267}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{94182C28-CC25-2F20-1763-F275AEB96267}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{94182C28-CC25-2F20-1763-F275AEB96267}.Release|Any CPU.Build.0 = Release|Any CPU
+		{12557834-2324-4DC8-8D79-A6CCAB71AB59}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{12557834-2324-4DC8-8D79-A6CCAB71AB59}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{12557834-2324-4DC8-8D79-A6CCAB71AB59}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{12557834-2324-4DC8-8D79-A6CCAB71AB59}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9601662F-6D0C-4171-8EBE-329078BFE90A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9601662F-6D0C-4171-8EBE-329078BFE90A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9601662F-6D0C-4171-8EBE-329078BFE90A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9601662F-6D0C-4171-8EBE-329078BFE90A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{93B5E5FE-F371-44BB-B01E-8577CBFCC4BA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{93B5E5FE-F371-44BB-B01E-8577CBFCC4BA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{93B5E5FE-F371-44BB-B01E-8577CBFCC4BA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{93B5E5FE-F371-44BB-B01E-8577CBFCC4BA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6B26F14D-4CF9-4A7E-A94E-1B2741CC627C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6B26F14D-4CF9-4A7E-A94E-1B2741CC627C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6B26F14D-4CF9-4A7E-A94E-1B2741CC627C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6B26F14D-4CF9-4A7E-A94E-1B2741CC627C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{05CEF054-B8AC-4088-9117-B8F6A508E85C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{05CEF054-B8AC-4088-9117-B8F6A508E85C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{05CEF054-B8AC-4088-9117-B8F6A508E85C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{05CEF054-B8AC-4088-9117-B8F6A508E85C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7EFC59C8-8037-4E5A-8B43-08273045AE64}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7EFC59C8-8037-4E5A-8B43-08273045AE64}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7EFC59C8-8037-4E5A-8B43-08273045AE64}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7EFC59C8-8037-4E5A-8B43-08273045AE64}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A693A6A5-551E-46BB-AA3F-9F80323342E0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A693A6A5-551E-46BB-AA3F-9F80323342E0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A693A6A5-551E-46BB-AA3F-9F80323342E0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A693A6A5-551E-46BB-AA3F-9F80323342E0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{72845E12-0BFD-4C14-93BF-4E005DE27554}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{72845E12-0BFD-4C14-93BF-4E005DE27554}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{72845E12-0BFD-4C14-93BF-4E005DE27554}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{72845E12-0BFD-4C14-93BF-4E005DE27554}.Release|Any CPU.Build.0 = Release|Any CPU
+		{17B715D3-353A-4370-9FBE-8A0F079F5D56}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{17B715D3-353A-4370-9FBE-8A0F079F5D56}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{17B715D3-353A-4370-9FBE-8A0F079F5D56}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{17B715D3-353A-4370-9FBE-8A0F079F5D56}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AE1B7B00-6FC4-4385-8C69-CE3C4FFE2E4E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AE1B7B00-6FC4-4385-8C69-CE3C4FFE2E4E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AE1B7B00-6FC4-4385-8C69-CE3C4FFE2E4E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AE1B7B00-6FC4-4385-8C69-CE3C4FFE2E4E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{502C7577-7E31-4BAE-B259-E2EDC15CF541}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{502C7577-7E31-4BAE-B259-E2EDC15CF541}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{502C7577-7E31-4BAE-B259-E2EDC15CF541}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{502C7577-7E31-4BAE-B259-E2EDC15CF541}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7A15D976-7395-4827-BB96-9362167C7D26}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7A15D976-7395-4827-BB96-9362167C7D26}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7A15D976-7395-4827-BB96-9362167C7D26}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7A15D976-7395-4827-BB96-9362167C7D26}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9947CE01-9A62-4503-92DD-25723F8EA56B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9947CE01-9A62-4503-92DD-25723F8EA56B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9947CE01-9A62-4503-92DD-25723F8EA56B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9947CE01-9A62-4503-92DD-25723F8EA56B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{62ABE4F3-41AB-4ADC-AF50-C77992E5846D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{62ABE4F3-41AB-4ADC-AF50-C77992E5846D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{62ABE4F3-41AB-4ADC-AF50-C77992E5846D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{62ABE4F3-41AB-4ADC-AF50-C77992E5846D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{02B40D5D-6A53-442A-9A5E-C51043592558}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{02B40D5D-6A53-442A-9A5E-C51043592558}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{02B40D5D-6A53-442A-9A5E-C51043592558}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{02B40D5D-6A53-442A-9A5E-C51043592558}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C3832E91-A2D7-412B-9861-895E8848B16F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C3832E91-A2D7-412B-9861-895E8848B16F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C3832E91-A2D7-412B-9861-895E8848B16F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C3832E91-A2D7-412B-9861-895E8848B16F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A9929DF4-5FC7-4EA0-82E7-EBDFC1E6928C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A9929DF4-5FC7-4EA0-82E7-EBDFC1E6928C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A9929DF4-5FC7-4EA0-82E7-EBDFC1E6928C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A9929DF4-5FC7-4EA0-82E7-EBDFC1E6928C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6421523A-29C6-46E9-BCE7-D38CAAC4B94E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6421523A-29C6-46E9-BCE7-D38CAAC4B94E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6421523A-29C6-46E9-BCE7-D38CAAC4B94E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6421523A-29C6-46E9-BCE7-D38CAAC4B94E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3B4345FC-28F9-4016-8FB3-E87A70C78923}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3B4345FC-28F9-4016-8FB3-E87A70C78923}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3B4345FC-28F9-4016-8FB3-E87A70C78923}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3B4345FC-28F9-4016-8FB3-E87A70C78923}.Release|Any CPU.Build.0 = Release|Any CPU
+		{99D2C270-5AF9-482B-B8F4-780A6687554D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{99D2C270-5AF9-482B-B8F4-780A6687554D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{99D2C270-5AF9-482B-B8F4-780A6687554D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{99D2C270-5AF9-482B-B8F4-780A6687554D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{840AE4B4-22C9-4943-AE94-16F9A2695537}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{840AE4B4-22C9-4943-AE94-16F9A2695537}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{840AE4B4-22C9-4943-AE94-16F9A2695537}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{840AE4B4-22C9-4943-AE94-16F9A2695537}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{94182C28-CC25-2F20-1763-F275AEB96267} = {525B29D4-743C-4A5B-BFB6-82A3F981495E}
+		{525B29D4-743C-4A5B-BFB6-82A3F981495E} = {F56CEF5B-4A0B-4494-8BFD-F6EC660B510E}
+		{7D103998-9A71-474A-A668-10311727E6E7} = {F56CEF5B-4A0B-4494-8BFD-F6EC660B510E}
+		{66EEF7A1-9E3D-4957-896A-394C6422F01F} = {F56CEF5B-4A0B-4494-8BFD-F6EC660B510E}
+		{12557834-2324-4DC8-8D79-A6CCAB71AB59} = {7D103998-9A71-474A-A668-10311727E6E7}
+		{9601662F-6D0C-4171-8EBE-329078BFE90A} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{93B5E5FE-F371-44BB-B01E-8577CBFCC4BA} = {66EEF7A1-9E3D-4957-896A-394C6422F01F}
+		{6B26F14D-4CF9-4A7E-A94E-1B2741CC627C} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{05CEF054-B8AC-4088-9117-B8F6A508E85C} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{9FEDDCAA-5911-471B-94CC-9913899B5AD7} = {8E91D1D2-8183-4A34-922F-5F702720EBD6}
+		{7EFC59C8-8037-4E5A-8B43-08273045AE64} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{A693A6A5-551E-46BB-AA3F-9F80323342E0} = {525B29D4-743C-4A5B-BFB6-82A3F981495E}
+		{72845E12-0BFD-4C14-93BF-4E005DE27554} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{17B715D3-353A-4370-9FBE-8A0F079F5D56} = {7D103998-9A71-474A-A668-10311727E6E7}
+		{AE1B7B00-6FC4-4385-8C69-CE3C4FFE2E4E} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{600A36AC-7B7F-44A9-9BDF-B9D86BB31E82} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{502C7577-7E31-4BAE-B259-E2EDC15CF541} = {525B29D4-743C-4A5B-BFB6-82A3F981495E}
+		{7A15D976-7395-4827-BB96-9362167C7D26} = {7D103998-9A71-474A-A668-10311727E6E7}
+		{9947CE01-9A62-4503-92DD-25723F8EA56B} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{62ABE4F3-41AB-4ADC-AF50-C77992E5846D} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{9253D26F-5A46-4EE3-B0B7-0097AB90384E} = {11479D8F-D8B6-4AD7-BC82-A423FCC30779}
+		{02B40D5D-6A53-442A-9A5E-C51043592558} = {66EEF7A1-9E3D-4957-896A-394C6422F01F}
+		{FED01F22-71C4-4504-9BC6-217F6DE9F152} = {8E91D1D2-8183-4A34-922F-5F702720EBD6}
+		{0C2EFAF7-B686-4373-A26C-34C93E963BFB} = {FED01F22-71C4-4504-9BC6-217F6DE9F152}
+		{C3832E91-A2D7-412B-9861-895E8848B16F} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{A46EACF8-629B-462D-B859-243C56ECB376} = {11479D8F-D8B6-4AD7-BC82-A423FCC30779}
+		{A9929DF4-5FC7-4EA0-82E7-EBDFC1E6928C} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{6421523A-29C6-46E9-BCE7-D38CAAC4B94E} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{3B4345FC-28F9-4016-8FB3-E87A70C78923} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{0C916905-AFCC-4C80-85FD-7D98DF5E6DE5} = {11479D8F-D8B6-4AD7-BC82-A423FCC30779}
+		{09CA340C-8754-4FCC-92DA-441D279C604C} = {0C916905-AFCC-4C80-85FD-7D98DF5E6DE5}
+		{DA3B55F8-FA18-4FF3-9221-F528D0501C72} = {09CA340C-8754-4FCC-92DA-441D279C604C}
+		{99D2C270-5AF9-482B-B8F4-780A6687554D} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{BF373F26-8DEF-486B-8AE7-C38420BF50C0} = {FED01F22-71C4-4504-9BC6-217F6DE9F152}
+		{B2C6492F-B0F0-4AF1-A4CF-730FF719DE16} = {FED01F22-71C4-4504-9BC6-217F6DE9F152}
+		{DC8F9FE8-87F3-45D1-B7A7-A87A4D2C82CE} = {FED01F22-71C4-4504-9BC6-217F6DE9F152}
+		{9ECF4CFF-05CD-43DA-9751-191FBE4A3B5C} = {FED01F22-71C4-4504-9BC6-217F6DE9F152}
+		{840AE4B4-22C9-4943-AE94-16F9A2695537} = {50795869-2933-430F-98BD-956C414ABBE4}
+		{F59B094D-9ABF-4617-AD00-3F789DC14E4C} = {11479D8F-D8B6-4AD7-BC82-A423FCC30779}
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {93B02B52-77CF-4BAA-AD7E-08960E6D6482}
+	EndGlobalSection
+EndGlobal

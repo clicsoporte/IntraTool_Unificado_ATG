@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <Company>Akram El Assas</Company>
+    <Version>10.1.0</Version>
+    <FileVersion>10.1.0.0</FileVersion>
+    <AssemblyVersion>10.1.0.0</AssemblyVersion>
+    <Copyright>Copyright © 2026 Akram El Assas. All rights reserved.</Copyright>
+
+    <!-- Globalization & Localization Optimizations -->
+    <NeutralResourcesLanguage>en</NeutralResourcesLanguage>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <AssemblyTitle>Servy.Service.UnitTests</AssemblyTitle>
+    <Description>Servy.Service unit tests</Description>
+    <Product>Servy.Service.UnitTests</Product>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Moq" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Servy.Service\Servy.Service.csproj" />
+    <ProjectReference Include="..\Servy.Testing\Servy.Testing.csproj" />
+  </ItemGroup>
+
+</Project>

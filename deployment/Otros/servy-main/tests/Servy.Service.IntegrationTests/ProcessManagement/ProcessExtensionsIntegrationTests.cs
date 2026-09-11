@@ -1,0 +1,459 @@
+using Servy.Service.ProcessManagement;
+using Servy.Testing;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Management;
+
+namespace Servy.Service.IntegrationTests.ProcessManagement
+{
+    /// <summary>
+    /// Integration tests for ProcessExtensions.
+    /// These tests execute real OS processes and evaluate native Toolhelp32 enumerations.
+    /// </summary>
+    [CollectionDefinition(Name, DisableParallelization = true)]
+    public class ProcessExtensionsIntegrationTestsCollection
+    {
+        /// <summary>Collection name; reference this instead of repeating the string literal.</summary>
+        public const string Name = "ProcessExtensionsIntegrationTests";
+
+        // Enforces strict sequential isolation across the execution suite
+    }
+
+    [Collection(ProcessExtensionsIntegrationTestsCollection.Name)]
+    public class ProcessExtensionsIntegrationTests : IDisposable
+    {
+        private readonly List<Process> _processesToCleanup = new List<Process>();
+
+        #region Format Tests
+
+        [Fact]
+        public void Format_ActiveProcess_ReturnsProcessNameAndId()
+        {
+            // Arrange
+            using (var currentProcess = Process.GetCurrentProcess())
+            {
+                // Act
+                string formatted = currentProcess.Format();
+
+                // Assert
+                Assert.Contains(currentProcess.ProcessName, formatted);
+                Assert.Contains(currentProcess.Id.ToString(), formatted);
+            }
+        }
+
+        [Fact]
+        public void Format_NoAssociatedProcess_CatchesInvalidOperationExceptionAndReturnsFallback()
+        {
+            // Arrange
+            using (var process = new Process())
+            {
+                // Act
+                // An unassociated Process object throws InvalidOperationException on property access,
+                // cascading down to the inner try-catch block and ultimately returning the exited process fallback.
+                string formatted = process.Format();
+
+                // Assert
+                Assert.Equal("(Exited Process)", formatted);
+            }
+        }
+
+        [Fact]
+        public void Format_AccessDeniedOnSystemProcess_CatchesWin32ExceptionAndReturnsFallback()
+        {
+            // Arrange
+            Process? systemProcess = null;
+            try { systemProcess = Process.GetProcessById(4); }
+            catch (ArgumentException) { /* Ignore */ }
+
+            Assert.SkipWhen(systemProcess is null, "PID 4 (System) is not resolvable on this host.");
+
+            using (systemProcess)
+            {
+                // Precondition: the property access must actually be denied, otherwise this
+                // test is exercising the success path, not the Win32Exception fallback.
+                var denied = Record.Exception(() => _ = systemProcess.ProcessName);
+                Assert.SkipWhen(!(denied is Win32Exception),
+                    $"ProcessName on PID 4 did not raise Win32Exception (got {denied?.GetType().Name ?? "no exception"}); runner is likely elevated.");
+
+                // Act & Assert
+                Assert.Equal($"(PID {systemProcess.Id})", systemProcess.Format());
+            }
+        }
+
+        #endregion
+
+        #region GetChildren & GetAllDescendants Boundary Tests
+
+        [Theory]
+        [InlineData(-1)]
+        [InlineData(0)]
+        public void GetChildren_InvalidPid_ThrowsArgumentOutOfRangeException(int invalidPid)
+        {
+            // Arrange, Act & Assert
+            Assert.Throws<ArgumentOutOfRangeException>(() => ProcessExtensions.GetChildren(invalidPid, DateTime.Now));
+        }
+
+        [Fact]
+        public void GetChildren_InvalidStartTime_ThrowsArgumentException()
+        {
+            // Arrange
+            var root = SpawnProcessTree(1);
+            List<Process> realChildren = new List<Process>();
+
+            try
+            {
+                // Control: children are visible with the genuine start time
+                realChildren = WaitForProcessName(root, "powershell", ProcessExtensions.GetChildren);
+                Assert.NotEmpty(realChildren);
+
+                // Act & Assert: DateTime.MinValue must suppress the same children
+                Assert.Throws<ArgumentException>(() => ProcessExtensions.GetChildren(root.Id, DateTime.MinValue));
+            }
+            finally
+            {
+                foreach (var child in realChildren) child.Dispose();
+            }
+        }
+
+        [Theory]
+        [InlineData(-1)]
+        [InlineData(0)]
+        public void GetAllDescendants_InvalidPid_ThrowsArgumentOutOfRangeException(int invalidPid)
+        {
+            // Arrange, Act & Assert
+            Assert.Throws<ArgumentOutOfRangeException>(() => ProcessExtensions.GetAllDescendants(invalidPid, DateTime.MinValue));
+        }
+
+        [Fact]
+        public void GetAllDescendants_InvalidStartDate_ThrowsArgumentException()
+        {
+            // Arrange, Act & Assert
+            Assert.Throws<ArgumentException>(() => ProcessExtensions.GetAllDescendants(111, DateTime.MinValue));
+        }
+
+        [Fact]
+        public void GetAllDescendants_InvalidStartTime_ThrowsArgumentException()
+        {
+            // Arrange
+            var root = SpawnProcessTree(1);
+            List<Process> descendants = new List<Process>();
+
+            try
+            {
+                // Control: descendants are visible with the genuine start time
+                descendants = WaitForProcessName(root, "powershell", ProcessExtensions.GetAllDescendants);
+                Assert.NotEmpty(descendants);
+
+                // Act & Assert: DateTime.MinValue must suppress the same descendants
+                Assert.Throws<ArgumentException>(() => ProcessExtensions.GetAllDescendants(root.Id, DateTime.MinValue));
+            }
+            finally
+            {
+                foreach (var d in descendants) d.Dispose();
+            }
+        }
+
+        [Fact]
+        public void GetChildren_ValidParent_ReturnsOnlyImmediateChildren()
+        {
+            // Arrange
+            // Explicitly spawn a depth-2 tree (Root -> Immediate Child -> Grandchild)
+            // to introduce an inner nested process boundary that must be excluded.
+            var root = SpawnProcessTree(2);
+            var children = new List<Process>();
+            var grandChildren = new List<Process>();
+
+            // Act
+            try
+            {
+                // Retrieve the direct children using the extension method under test via direct method-group mapping
+                children = WaitForProcessName(root, "powershell", ProcessExtensions.GetChildren);
+
+                // Assert
+                // 1. Core structural discovery checks
+                Assert.NotEmpty(children);
+
+                // 2. Immediate Child Verification: Verify the direct child is found and maps back to root
+                var directChild = children.FirstOrDefault(p =>
+                    GetSafeProcessName(p).Equals("powershell", StringComparison.OrdinalIgnoreCase) &&
+                    GetSafeParentPid(p) == root.Id);
+
+                Assert.NotNull(directChild);
+
+                // 3. Exclusion Boundary Assertion: Extract grandchildren via the same helper signature
+                // to explicitly prove they are completely absent from the direct children collection.
+                grandChildren = WaitForProcessName(directChild, "powershell", ProcessExtensions.GetChildren);
+                var psGrandchild = grandChildren.First(p =>
+                    GetSafeProcessName(p).Equals("powershell", StringComparison.OrdinalIgnoreCase));
+
+                Assert.DoesNotContain(children, c => c.Id == psGrandchild.Id);
+            }
+            finally
+            {
+                // Clean up unmanaged OS process handles to prevent system resource leaks
+                foreach (var child in children) child.Dispose();
+                foreach (var grandchild in grandChildren) grandchild.Dispose();
+            }
+        }
+
+        [Fact]
+        public void GetAllDescendants_ValidParent_ReturnsEntireTree()
+        {
+            // Arrange
+            var root = SpawnProcessTree(2);
+            List<Process> descendants = new List<Process>();
+
+            // Act
+            try
+            {
+                bool treeStabilized = SpinWait.SpinUntil(() =>
+                {
+                    if (root.HasExited) return true;
+
+                    foreach (var d in descendants) d.Dispose();
+                    descendants = ProcessExtensions.GetAllDescendants(root.Id, root.StartTime);
+
+                    // Robustness check: filter out names cleanly using exception isolation
+                    int psCount = descendants.Count(d => GetSafeProcessName(d).Equals("powershell", StringComparison.OrdinalIgnoreCase));
+                    return descendants.Count >= 2 && psCount >= 2;
+
+                }, TimeSpan.FromSeconds(TestTimeouts.ProcessTreeTimeoutSeconds));
+
+                if (root.HasExited)
+                {
+                    Assert.Fail($"Root process exited prematurely (ExitCode: {root.ExitCode}). Found: {string.Join(", ", descendants.Select(GetSafeProcessName))}");
+                }
+
+                // Assert
+                Assert.True(treeStabilized, $"Tree failed to stabilize within {TestTimeouts.ProcessTreeTimeoutSeconds}s. Found {descendants.Count} descendants.");
+
+                int finalPsCount = descendants.Count(d => GetSafeProcessName(d).Equals("powershell", StringComparison.OrdinalIgnoreCase));
+                Assert.True(finalPsCount >= 2, $"Expected at least 2 nested powershell processes. Found: {finalPsCount}");
+            }
+            finally
+            {
+                foreach (var d in descendants) d.Dispose();
+            }
+        }
+
+        [Fact]
+        public void GetChildren_SimulatedPidReuse_ReturnsEmptyList()
+        {
+            // Arrange
+            var root = SpawnProcessTree(1);
+
+            List<Process> realChildren = new List<Process>();
+            List<Process> childrenWithReusedPid = new List<Process>();
+
+            // Act & Assert - both fetches run inside the try, so the finally sees whatever was
+            // acquired even when the second snapshot throws
+            try
+            {
+                // Act (Control) - Retrieve children using the genuine parent start time to verify tree visibility
+                realChildren = WaitForProcessName(root, "powershell", ProcessExtensions.GetChildren);
+
+                // Act (Test Target) - Request children with a future parent start time to simulate PID reuse
+                childrenWithReusedPid = ProcessExtensions.GetChildren(root.Id, DateTime.Now.AddHours(1));
+
+                // Verify the Control state holds true (genuine children exist)
+                Assert.NotEmpty(realChildren);
+
+                // Verify the test target condition (reused PID should yield an empty list)
+                Assert.Empty(childrenWithReusedPid);
+            }
+            finally
+            {
+                // Cleanup transient child process handles
+                foreach (var c in realChildren)
+                {
+                    c.Dispose();
+                }
+                foreach (var c in childrenWithReusedPid)
+                {
+                    c.Dispose();
+                }
+            }
+        }
+
+        #endregion
+
+        #region TryResolveValidChild Private Method Reflection Tests
+
+        [Fact]
+        public void TryResolveValidChild_ArgumentExceptionThrown_ReturnsNullSafely()
+        {
+            // Arrange - Use a PID no process can hold (see TestProcessIds.NeverValid)
+            int nonExistentPid = TestProcessIds.NeverValid;
+
+            // Act
+            var result = TestReflection.InvokeNonPublicStatic(typeof(ProcessExtensions), "TryResolveValidChild", nonExistentPid, DateTime.Now, DateTime.UtcNow);
+
+            // Assert
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public void TryResolveValidChild_ProcessFailsLifetimeValidationBounds_ReturnsNull()
+        {
+            // Arrange - Use a guaranteed active process (current process)
+            using (var current = Process.GetCurrentProcess())
+            {
+                // Intentionally alter constraints layout: Pass an execution threshold time set completely in the future
+                // to force 'startedAfterParent' or 'startedBeforeSnapshot' conditional validations to return false.
+                var skewedParentTime = DateTime.Now.AddDays(10);
+                var snapshotTime = DateTime.UtcNow.AddDays(-10);
+
+                // Act
+                var result = TestReflection.InvokeNonPublicStatic(typeof(ProcessExtensions), "TryResolveValidChild", current.Id, skewedParentTime, snapshotTime);
+
+                // Assert
+                Assert.Null(result);
+            }
+        }
+
+        #endregion
+
+        #region Integration Test Helpers
+
+        /// <summary>
+        /// Orchestrates a guaranteed strict PPID native tree using PowerShell.
+        /// Uses Base64 EncodedCommands to allow infinite nesting depth without quote-escaping bugs.
+        /// </summary>
+        private Process SpawnProcessTree(int depth)
+        {
+            string BuildScript(int currentDepth)
+            {
+                if (currentDepth == 0)
+                    return $"Start-Sleep -Seconds {TestTimeouts.ChildSleepSeconds}";
+
+                string innerScript = BuildScript(currentDepth - 1);
+                string encodedInner = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(innerScript));
+
+                return $@"
+                    $psi = New-Object System.Diagnostics.ProcessStartInfo
+                    $psi.FileName = 'powershell.exe'
+                    $psi.Arguments = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand {encodedInner}'
+                    $psi.UseShellExecute = $false
+                    $psi.CreateNoWindow = $true
+                    $p = [System.Diagnostics.Process]::Start($psi)
+                    $p.WaitForExit()
+                ";
+            }
+
+            string rootScript = BuildScript(depth);
+            string encodedRoot = Convert.ToBase64String(System.Text.Encoding.Unicode.GetBytes(rootScript));
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand {encodedRoot}",
+                CreateNoWindow = true,
+                UseShellExecute = false,
+            };
+
+            var rootProcess = Process.Start(psi);
+            Assert.NotNull(rootProcess);
+
+            _processesToCleanup.Add(rootProcess);
+
+            return rootProcess;
+        }
+
+        private List<Process> WaitForProcessName(Process root, string targetName, Func<int, DateTime, List<Process>> fetchMethod)
+        {
+            List<Process> lastResults = new List<Process>();
+
+            bool found = SpinWait.SpinUntil(() =>
+            {
+                if (root.HasExited) return true;
+
+                foreach (var r in lastResults) r.Dispose();
+                lastResults = fetchMethod(root.Id, root.StartTime);
+
+                return lastResults.Any(p => GetSafeProcessName(p).Equals(targetName, StringComparison.OrdinalIgnoreCase));
+
+            }, TimeSpan.FromSeconds(TestTimeouts.ChildTimeoutSeconds));
+
+            if (root.HasExited || !found)
+            {
+                string foundNames = string.Join(", ", lastResults.Select(GetSafeProcessName));
+                foreach (var r in lastResults) r.Dispose();
+
+                if (root.HasExited)
+                {
+                    throw new InvalidOperationException(
+                        $"The root parent process exited prematurely (ExitCode: {root.ExitCode}). The process tree collapsed.");
+                }
+
+                throw new TimeoutException(
+                    $"Failed to find '{targetName}' child process within {TestTimeouts.ChildTimeoutSeconds} seconds. Found instead: [{foundNames}]");
+            }
+
+            return lastResults;
+        }
+
+        private int GetParentPidViaWmi(Process process)
+        {
+            using (var mo = new ManagementObject($"win32_process.handle='{process.Id}'"))
+            {
+                mo.Get();
+                return Convert.ToInt32(mo["ParentProcessId"]);
+            }
+        }
+
+        private int GetSafeParentPid(Process process)
+        {
+            try
+            {
+                return GetParentPidViaWmi(process);
+            }
+            catch (ManagementException)
+            {
+                return -1;
+            }
+            catch (InvalidOperationException)
+            {
+                return -1;
+            }
+        }
+
+        /// <summary>
+        /// Extracts the process name safely, protecting the integration test evaluation loops
+        /// from throwing unhandled state exceptions if an ephemeral process exits mid-iteration.
+        /// </summary>
+        private static string GetSafeProcessName(Process p)
+        {
+            try
+            {
+                return p.ProcessName;
+            }
+            catch (InvalidOperationException)
+            {
+                return string.Empty;
+            }
+            catch (Win32Exception)
+            {
+                return string.Empty;
+            }
+        }
+
+        #endregion
+
+        #region Cleanup
+
+        private void CleanupRoot(Process? root)
+        {
+            TestProcessCleanup.KillAndDispose(root);
+        }
+
+        public void Dispose()
+        {
+            foreach (var process in _processesToCleanup)
+            {
+                CleanupRoot(process);
+            }
+        }
+
+        #endregion
+    }
+}

@@ -1,0 +1,143 @@
+﻿#Requires -Version 5.0
+
+<#
+.SYNOPSIS
+    Main build script for generating the Servy self-contained installer.
+
+.DESCRIPTION
+    This script orchestrates the build process for Servy by invoking the internal
+    publish script:
+        - publish-sc.ps1   (self-contained bundle)
+
+.PARAMETER Tfm
+    The target framework moniker (TFM).
+
+.PARAMETER Version
+    The Servy version being packaged.
+
+.EXAMPLE
+    PS> .\publish.ps1 -Tfm "net10.0-windows" -Version "8.5"
+
+.NOTES
+    This script can be run from any working directory. It calculates elapsed time
+    and pauses at the end to allow double-click usage from Explorer.
+
+    Requirements:
+        1. .NET SDK (dotnet CLI must be available in PATH).
+        2. Inno Setup (ISCC.exe) installed and accessible.
+        3. 7-Zip installed with `7z` available in PATH.
+#>
+# publish.ps1
+# Main setup bundle script for building the self-contained installer.
+param(
+    [string]$Tfm     = "",
+    [string]$Version = ""
+)
+
+$ErrorActionPreference = "Stop"
+
+# Load central defaults
+$configPath = Join-Path $PSScriptRoot "build-config.ps1"
+if (Test-Path $configPath) {
+    $buildConfig = & $configPath
+    if (-not $Tfm) { $Tfm = $buildConfig.Tfm }
+    if (-not $Version) { $Version = $buildConfig.Version }
+} else {
+    throw "Central build configuration not found at $configPath"
+}
+
+# Import common build functions and validate version format
+. (Join-Path $PSScriptRoot "publish-common.ps1")
+Assert-ServyVersion -Version $Version
+
+$scriptHadError = $false
+
+try {
+    # Record start time
+    $startTime = Get-Date
+
+    # Script directory (so we can run from anywhere)
+    $scriptDir = $PSScriptRoot
+
+    function Invoke-Script {
+        param(
+            [string]$ScriptPath,
+            [hashtable]$Params
+        )
+
+        $fullPath = Join-Path $scriptDir $ScriptPath
+
+        if (-not (Test-Path $fullPath)) {
+            Write-Error "Script not found: $fullPath"
+        }
+
+        Write-Host "`n=== Running: $fullPath ==="
+
+        # Reset before invocation so a stale exit code from earlier work cannot fool us.
+        $global:LASTEXITCODE = 0
+
+        try {
+            & $fullPath @Params
+        }
+        catch {
+            # $ErrorActionPreference='Stop' in the child will land here.
+            throw "Script failed ($ScriptPath): $($_.Exception.Message)"
+        }
+
+        # Only meaningful if the child ended with a native command or an explicit 'exit N'.
+        if ($LASTEXITCODE -ne 0) {
+            throw "Script failed ($ScriptPath): native exit code $LASTEXITCODE"
+        }
+    }
+
+    # Build self-contained installer
+    Invoke-Script -ScriptPath "publish-sc.ps1" -Params @{
+        Version = $Version
+        Tfm     = $Tfm
+    }
+
+    # Calculate and display elapsed time
+    $elapsed = (Get-Date) - $startTime
+    Write-Host "`n=== Build complete in $($elapsed.ToString("hh\:mm\:ss")) ==="
+}
+catch {
+    $scriptHadError = $true
+    Write-Host "`nERROR OCCURRED:" -ForegroundColor Red
+    Write-Host $_
+}
+finally {
+    # ROBUSTNESS: Detect if running in a non-interactive environment (CI pipeline, automated task).
+    # If [Environment]::UserInteractive evaluates to false or no physical window is attached,
+    # bypass the ReadKey sequence entirely to prevent the process from hanging indefinitely.
+    $isInteractive = [Environment]::UserInteractive -and ($Host.Name -like '*Console*')
+
+    if ($isInteractive) {
+        # Pause by default (for double-click usage)
+        if ($scriptHadError) {
+            Write-Host "`nBuild failed. Press any key to exit..."
+        }
+        else {
+            Write-Host "`nPress any key to exit..."
+        }
+
+        try {
+            [void][System.Console]::ReadKey($true)
+        }
+        # ReadKey throws InvalidOperationException when standard input is redirected, a case the
+        # $isInteractive guard above is meant to exclude already, so this catch is a second net.
+        # The pause is cosmetic: a failure here is swallowed deliberately and the exit 1 below
+        # still enforces the build result.
+        catch { }
+    }
+    else {
+        if ($scriptHadError) {
+            Write-Warning "Build execution terminated with errors. Non-zero exit code enforced for automation handler."
+        }
+    }
+
+    # ROBUSTNESS: Ensure the orchestrator script exits cleanly with a non-zero code under a failure state.
+    # This guarantees that automated CI tools (GitHub Actions, Azure DevOps) successfully detect the failure.
+    if ($scriptHadError) {
+        exit 1
+    }
+}

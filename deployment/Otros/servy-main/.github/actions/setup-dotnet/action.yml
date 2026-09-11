@@ -1,0 +1,92 @@
+# ==========================================================================================
+# GitHub Composite Action - Setup Custom .NET
+# ------------------------------------------------------------------------------------------
+# Security: Enforces strict Authenticode signature validation and cryptographic
+# organizational attribute matching to prevent supply-chain vulnerabilities.
+# ==========================================================================================
+name: 'Setup Custom .NET'
+description: 'Installs a specific .NET SDK version using the dotnet-install script'
+
+inputs:
+  max_retries:
+    description: 'Number of retries after the initial attempt'
+    required: false
+    default: '4'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Download dotnet-install.ps1
+      uses: ./.github/actions/download-with-retry
+      with:
+        url: 'https://dot.net/v1/dotnet-install.ps1'
+        output_path: '${{ runner.temp }}/dotnet-install.ps1'
+        asset_name: 'dotnet-install.ps1'
+        max_retries: ${{ inputs.max_retries }}
+
+    - name: Install .NET SDK
+      shell: pwsh
+      run: |
+        $installDir = "$env:RUNNER_TEMP\dotnet"
+        # Path where the download step above placed dotnet-install.ps1 (kept out of the workspace)
+        $installerPath = Join-Path $env:RUNNER_TEMP "dotnet-install.ps1"
+
+        # --- SECURITY CHECK ---
+        Write-Host "Verifying Authenticode signature of dotnet-install.ps1..."
+        $sig = Get-AuthenticodeSignature $installerPath
+
+        if ($sig.Status -ne 'Valid') {
+          throw "dotnet-install.ps1 signature check failed: $($sig.Status). The file may be compromised or unsigned."
+        }
+
+        # Use structured X500 distinguished name parsing to isolate the organization attribute
+        # directly, preventing unanchored string injection or DN-aliasing exploits.
+        $cert = $sig.SignerCertificate
+        $x500Name = New-Object System.Security.Cryptography.X509Certificates.X500DistinguishedName($cert.SubjectName)
+
+        # Extract RDN components cleanly using the .NET crypto API format
+        $decodedSubject = $x500Name.Format($true)
+
+        # Validate that 'O=Microsoft Corporation' exists exactly as an independent structural attribute line
+        $isMatch = $false
+        foreach ($line in ($decodedSubject -split "`n")) {
+          if ($line.Trim() -eq "O=Microsoft Corporation") {
+            $isMatch = $true
+            break
+          }
+        }
+
+        if (-not $isMatch) {
+          throw "Security Exception: dotnet-install.ps1 signature organization attribute mismatch. Expected exact 'O=Microsoft Corporation' token field mapping."
+        }
+        Write-Host "Signature verified successfully."
+        # ----------------------
+
+        # Ensure the installation directory exists
+        New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+
+        # Executing the installer from its isolated path in $env:RUNNER_TEMP
+        # Using -JsonFile (global.json) instead of -Channel to ensure reproducibility
+        # Instructs the script to parse global.json and install whatever is in there
+        powershell -ExecutionPolicy Bypass -File $installerPath `
+          -JsonFile "$env:GITHUB_WORKSPACE\global.json" `
+          -InstallDir $installDir
+
+        if ($LASTEXITCODE -ne 0) {
+          throw "dotnet-install.ps1 failed with exit code $LASTEXITCODE"
+        }
+
+        $dotnet = Join-Path $installDir "dotnet.exe"
+
+        if (!(Test-Path $dotnet)) {
+          throw "dotnet was not installed correctly"
+        }
+
+        & $dotnet --version
+
+        Add-Content -Path $env:GITHUB_PATH -Value $installDir
+        Add-Content -Path $env:GITHUB_ENV -Value "DOTNET_ROOT=$installDir"
+
+    - name: Check .NET version
+      shell: pwsh
+      run: dotnet --version

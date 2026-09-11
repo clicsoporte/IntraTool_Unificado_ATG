@@ -1,0 +1,28 @@
+<service>
+  <id>IntraTool_Unificado_PROD</id>
+  <name>IntraTool Unificado (PRODUCCIÓN)</name>
+  <description>Servidor Web Oficial de IntraTool Unificado en Modo Producción en Node.js / Next.js (Puerto HTTP 9003)</description>
+
+  <!-- Ejecutable y Argumentos -->
+  <executable>npm.cmd</executable>
+  <arguments>run start</arguments>
+
+  <!-- Directorio de trabajo: Raíz del proyecto -->
+  <workingdirectory>%BASE%\..\..</workingdirectory>
+
+  <!-- Variables de Entorno -->
+  <env name="PORT" value="9003" />
+  <env name="NODE_ENV" value="production" />
+
+  <!-- Configuración de Logs (Archivos rotativos de 10 MB) -->
+  <logpath>%BASE%\..\..\logs</logpath>
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>8</keepFiles>
+  </log>
+
+  <!-- Política de Reinicio Automático por Fallos -->
+  <onfailure action="restart" delay="5 sec" />
+  <onfailure action="restart" delay="10 sec" />
+  <resetfailure>1 day</resetfailure>
+</service>

@@ -1,0 +1,457 @@
+using Moq;
+using Servy.Core.Config;
+using Servy.Core.Data;
+using Servy.Core.DTOs;
+using Servy.Core.Enums;
+using Servy.Core.Helpers;
+using Servy.Service.CommandLine;
+using System.Diagnostics;
+using System.Security;
+
+namespace Servy.Service.UnitTests.CommandLine
+{
+    public class StartOptionsParserTests
+    {
+        private readonly Mock<IServiceRepository> _mockRepository;
+        private readonly Mock<IProcessHelper> _mockProcessHelper;
+
+        public StartOptionsParserTests()
+        {
+            _mockRepository = new Mock<IServiceRepository>();
+            _mockProcessHelper = new Mock<IProcessHelper>();
+
+            // Setup default lenient path resolution to allow standard setup to pass cleanly
+            _mockProcessHelper
+                .Setup(p => p.ResolvePath(It.IsAny<string>()))
+                .Returns<string>(input => input);
+        }
+
+        #region Guard Clause & Argument Exception Tests
+
+        [Fact]
+        public void Parse_NullArguments_ThrowsArgumentException()
+        {
+            // Act & Assert
+            var ex = Assert.Throws<ArgumentException>(() =>
+                StartOptionsParser.Parse(_mockRepository.Object, _mockProcessHelper.Object, null!));
+
+            Assert.Contains("No arguments provided", ex.Message);
+        }
+
+        [Fact]
+        public void Parse_EmptyArgumentsArray_ThrowsArgumentException()
+        {
+            // Act & Assert
+            var ex = Assert.Throws<ArgumentException>(() =>
+                StartOptionsParser.Parse(_mockRepository.Object, _mockProcessHelper.Object, new string[0]));
+
+            Assert.Contains("No arguments provided", ex.Message);
+        }
+
+        [Fact]
+        public void Parse_ArgumentsLengthIsOne_ThrowsArgumentExceptionForEmptyServiceName()
+        {
+            // Arrange
+            // fullArgs[0] is typically the executable name. Missing fullArgs[1] means service name evaluates to string.Empty
+            string[] args = { "Servy.Service.exe" };
+
+            // Act & Assert
+            var ex = Assert.Throws<ArgumentException>(() =>
+                StartOptionsParser.Parse(_mockRepository.Object, _mockProcessHelper.Object, args));
+
+            Assert.Contains("Service name is empty!", ex.Message);
+        }
+
+        [Theory]
+        [InlineData(" ")]
+        [InlineData("\t")]
+        public void Parse_WhitespaceServiceName_ThrowsArgumentException(string invalidName)
+        {
+            // Arrange
+            string[] args = { "Servy.Service.exe", invalidName };
+
+            // Act & Assert
+            var ex = Assert.Throws<ArgumentException>(() =>
+                StartOptionsParser.Parse(_mockRepository.Object, _mockProcessHelper.Object, args));
+
+            Assert.Contains("Service name is empty!", ex.Message);
+        }
+
+        [Fact]
+        public void Parse_ServiceNotFoundInDatabase_ThrowsInvalidOperationException()
+        {
+            // Arrange
+            string serviceName = "MissingService";
+            string[] args = { "Servy.Service.exe", serviceName };
+
+            // Simply pass null directly.
+            // Moq's static typing will resolve this to the Returns(ServiceDto) overload.
+            _mockRepository
+                .Setup(r => r.GetByName(serviceName, true))
+                .Returns((ServiceDto)null!);
+
+            // Act & Assert
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                StartOptionsParser.Parse(_mockRepository.Object, _mockProcessHelper.Object, args));
+
+            Assert.Contains($"Service {serviceName} not found in the database!", ex.Message);
+        }
+
+        [Fact]
+        public void Parse_ReadsServiceDefinitionWithDecryptionEnabled()
+        {
+            // Arrange
+            string serviceName = "SecretsWorker";
+            string[] args = { "Servy.Service.exe", serviceName };
+            _mockRepository.Setup(r => r.GetByName(serviceName, true)).Returns(new ServiceDto());
+
+            // Act
+            StartOptionsParser.Parse(_mockRepository.Object, _mockProcessHelper.Object, args);
+
+            // Assert
+            _mockRepository.Verify(r => r.GetByName(serviceName, true), Times.Once);
+            _mockRepository.Verify(r => r.GetByName(It.IsAny<string>(), false), Times.Never);
+        }
+
+        #endregion
+
+        #region Happy Path & Fallback Ternary Mapping Tests
+
+        [Fact]
+        public void Parse_ValidDatabaseRecordWithValues_PopulatesStartOptionsCorrectly()
+        {
+            // Arrange
+            string serviceName = "ProductionWorker";
+            string[] args = { "Servy.Service.exe", serviceName };
+
+            var serviceDto = new ServiceDto
+            {
+                ExecutablePath = @"C:\App\worker.exe",
+                Parameters = @"--config C:\path\ --name \""svc\""",
+                StartupDirectory = @"C:\App",
+                Priority = 4, // High
+                CpuAffinity = "0,1",
+                EnableConsoleUI = true,
+                StdoutPath = @"C:\Logs\stdout.log",
+                StderrPath = @"C:\Logs\stderr.log",
+                RotationSize = 50, // 50 MB
+                UseLocalTimeForRotation = true,
+                EnableHealthMonitoring = true,
+                HeartbeatInterval = 15,
+                MaxFailedChecks = 3,
+                RecoveryAction = 2, // RestartProcess - deliberately not AppConfig.DefaultRecoveryAction (RestartService), so the mapping cannot be replaced by the bare default
+                RecoveryOnCleanExit = false,
+                MaxRestartAttempts = 5,
+                HeartbeatUrl = "https://hc.example.com/ping/abc",
+                HeartbeatUrlTimeoutSeconds = 7,
+                EnableHeartbeatUrlFlags = true,
+                EnvironmentVariables = "ENV=PROD;THEME=DARK",
+
+                // Pre-Launch variants
+                PreLaunchExecutablePath = @"C:\App\init.exe",
+                PreLaunchStartupDirectory = @"C:\App\init",
+                PreLaunchParameters = "--clean",
+                PreLaunchEnvironmentVariables = "INIT=TRUE",
+                PreLaunchStdoutPath = @"C:\Logs\init_out.log",
+                PreLaunchStderrPath = @"C:\Logs\init_err.log",
+                PreLaunchTimeoutSeconds = 45,
+                PreLaunchRetryAttempts = 2,
+                PreLaunchIgnoreFailure = true,
+
+                // Failure actions
+                FailureProgramPath = @"C:\App\alert.exe",
+                FailureProgramStartupDirectory = @"C:\App\alert",
+                FailureProgramParameters = "--notify admin",
+
+                // Post-Launch, Pre-Stop, Post-Stop metadata
+                PostLaunchExecutablePath = @"C:\App\post.exe",
+                PostLaunchStartupDirectory = @"C:\App\post_dir",
+                PostLaunchParameters = "--sync",
+                DateRotationType = 1, // Weekly - deliberately not AppConfig.DefaultDateRotationType (Daily), which is also default(DateRotationType)
+                EnableSizeRotation = true,
+                EnableDateRotation = true,
+                EnableDebugLogs = true,
+                MaxRotations = 10,
+                StartTimeout = 90,
+                StopTimeout = 60,
+                PreStopExecutablePath = @"C:\App\pre_stop.exe",
+                PreStopStartupDirectory = @"C:\App\pre_stop_dir",
+                PreStopParameters = "--tag\0end",
+                PreStopTimeoutSeconds = 20,
+                PreStopLogAsError = true,
+                PostStopExecutablePath = @"C:\App\post_stop.exe",
+                PostStopStartupDirectory = @"C:\App\post_stop_dir",
+                PostStopParameters = "--cleanup"
+            };
+
+            _mockRepository.Setup(r => r.GetByName(serviceName, true)).Returns(serviceDto);
+
+            // Act
+            var result = StartOptionsParser.Parse(_mockRepository.Object, _mockProcessHelper.Object, args);
+
+            // Assert main mappings
+            Assert.Equal(serviceName, result.ServiceName);
+            Assert.Equal(@"C:\App\worker.exe", result.ExecutablePath);
+            Assert.Equal(@"--config C:\path\ --name \\""svc\\""", result.ExecutableArgs);
+            Assert.Equal(@"C:\App", result.StartupDirectory);
+            Assert.Equal(ProcessPriorityClass.High, result.Priority);
+            Assert.Equal("0,1", result.CpuAffinity);
+            Assert.True(result.EnableConsoleUI);
+
+            // Assert Logging
+            Assert.Equal(@"C:\Logs\stdout.log", result.StdoutPath);
+            Assert.Equal(@"C:\Logs\stderr.log", result.StderrPath);
+            Assert.Equal(50 * 1024 * 1024L, result.RotationSizeInBytes); // ToBytes verification
+            Assert.True(result.UseLocalTimeForRotation);
+
+            // Assert Health Monitoring & Recovery Actions
+            Assert.True(result.EnableHealthMonitoring);
+            Assert.Equal(15, result.HeartbeatIntervalInSeconds);
+            Assert.Equal(3, result.MaxFailedChecks);
+            Assert.Equal(RecoveryAction.RestartProcess, result.RecoveryAction);
+            Assert.False(result.RecoveryOnCleanExit);
+            Assert.Equal(5, result.MaxRestartAttempts);
+
+            // Assert Heartbeat URL properties
+            Assert.Equal("https://hc.example.com/ping/abc", result.HeartbeatUrl);
+            Assert.Equal(7, result.HeartbeatUrlTimeoutInSeconds);
+            Assert.True(result.EnableHeartbeatUrlFlags);
+
+            // Assert Environment Variables
+            Assert.NotNull(result.EnvironmentVariables);
+            Assert.Equal(2, result.EnvironmentVariables.Count);
+
+            // Assert Pre-Launch block
+            Assert.Equal(@"C:\App\init.exe", result.PreLaunchExecutablePath);
+            Assert.Equal(@"C:\App\init", result.PreLaunchStartupDirectory);
+            Assert.Equal("--clean", result.PreLaunchExecutableArgs);
+            Assert.Equal(@"C:\Logs\init_out.log", result.PreLaunchStdoutPath);
+            Assert.Equal(@"C:\Logs\init_err.log", result.PreLaunchStderrPath);
+            Assert.Equal(45, result.PreLaunchTimeoutInSeconds);
+            Assert.Equal(2, result.PreLaunchRetryAttempts);
+            Assert.True(result.PreLaunchIgnoreFailure);
+            Assert.NotNull(result.PreLaunchEnvironmentVariables);
+            Assert.Single(result.PreLaunchEnvironmentVariables);
+
+            // Assert FailureProgram block
+            Assert.Equal(@"C:\App\alert.exe", result.FailureProgramPath);
+            Assert.Equal(@"C:\App\alert", result.FailureProgramStartupDirectory);
+            Assert.Equal("--notify admin", result.FailureProgramExecutableArgs);
+
+            // Assert Post-Launch block
+            Assert.Equal(@"C:\App\post.exe", result.PostLaunchExecutablePath);
+            Assert.Equal(@"C:\App\post_dir", result.PostLaunchStartupDirectory);
+            Assert.Equal("--sync", result.PostLaunchExecutableArgs);
+
+            // Assert Operational Toggles
+            Assert.True(result.EnableSizeRotation);
+            Assert.True(result.EnableDateRotation);
+            Assert.Equal(10, result.MaxRotations);
+            Assert.Equal(DateRotationType.Weekly, result.DateRotationType);
+            Assert.True(result.EnableDebugLogs);
+
+            // Assert Lifespan Timeouts
+            Assert.Equal(90, result.StartTimeoutInSeconds);
+            Assert.Equal(60, result.StopTimeoutInSeconds);
+
+            // Assert Pre-Stop block
+            Assert.Equal(@"C:\App\pre_stop.exe", result.PreStopExecutablePath);
+            Assert.Equal(@"C:\App\pre_stop_dir", result.PreStopStartupDirectory);
+            Assert.Equal(@"--tag\0end", result.PreStopExecutableArgs);
+            Assert.Equal(20, result.PreStopTimeoutInSeconds);
+            Assert.True(result.PreStopLogAsError);
+
+            // Assert Post-Stop block
+            Assert.Equal(@"C:\App\post_stop.exe", result.PostStopExecutablePath);
+            Assert.Equal(@"C:\App\post_stop_dir", result.PostStopStartupDirectory);
+            Assert.Equal("--cleanup", result.PostStopExecutableArgs);
+        }
+
+        [Fact]
+        public void Parse_DatabaseRecordContainsNulls_AppliesAppConfigDefaults()
+        {
+            // Arrange
+            string serviceName = "MinimalService";
+            string[] args = { "Servy.Service.exe", serviceName };
+
+            // Leaves all fields at their implicit object defaults so the AppConfig fallback paths are exercised
+            var sparseDto = new ServiceDto { Priority = null };
+            _mockRepository.Setup(r => r.GetByName(serviceName, true)).Returns(sparseDto);
+
+            // Act
+            var result = StartOptionsParser.Parse(_mockRepository.Object, _mockProcessHelper.Object, args);
+
+            // Assert fallbacks are activated correctly using AppConfig thresholds
+            Assert.Equal(StartOptionsParser.MapPriority(AppConfig.DefaultProcessPriority), result.Priority);
+            Assert.Equal(ProcessPriority.Normal, AppConfig.DefaultProcessPriority);
+            Assert.Equal(AppConfig.DefaultEnableConsoleUI, result.EnableConsoleUI);
+            Assert.Equal(AppConfig.DefaultUseLocalTimeForRotation, result.UseLocalTimeForRotation);
+            Assert.Equal(AppConfig.DefaultEnableHealthMonitoring, result.EnableHealthMonitoring);
+            Assert.Equal(AppConfig.DefaultHeartbeatInterval, result.HeartbeatIntervalInSeconds);
+            Assert.Equal(AppConfig.DefaultMaxFailedChecks, result.MaxFailedChecks);
+            Assert.Equal(AppConfig.DefaultRecoveryOnCleanExit, result.RecoveryOnCleanExit);
+            Assert.Equal(AppConfig.DefaultMaxRestartAttempts, result.MaxRestartAttempts);
+            Assert.Null(result.HeartbeatUrl);
+            Assert.Equal(AppConfig.DefaultHeartbeatUrlTimeoutSeconds, result.HeartbeatUrlTimeoutInSeconds);
+            Assert.Equal(AppConfig.DefaultEnableHeartbeatUrlFlags, result.EnableHeartbeatUrlFlags);
+            Assert.Equal(AppConfig.DefaultPreLaunchTimeoutSeconds, result.PreLaunchTimeoutInSeconds);
+            Assert.Equal(AppConfig.DefaultPreLaunchRetryAttempts, result.PreLaunchRetryAttempts);
+            Assert.Equal(AppConfig.DefaultPreLaunchIgnoreFailure, result.PreLaunchIgnoreFailure);
+            Assert.Equal(AppConfig.DefaultMaxRotations, result.MaxRotations);
+            Assert.Equal(AppConfig.DefaultEnableSizeRotation, result.EnableSizeRotation);
+            Assert.Equal(AppConfig.DefaultEnableDateRotation, result.EnableDateRotation);
+            Assert.Equal(AppConfig.DefaultEnableDebugLogs, result.EnableDebugLogs);
+            Assert.Equal(AppConfig.DefaultStartTimeout, result.StartTimeoutInSeconds);
+            Assert.Equal(AppConfig.DefaultStopTimeout, result.StopTimeoutInSeconds);
+            Assert.Equal(AppConfig.DefaultPreStopTimeoutSeconds, result.PreStopTimeoutInSeconds);
+            Assert.Equal(AppConfig.DefaultPreStopLogAsError, result.PreStopLogAsError);
+            Assert.Equal(AppConfig.DefaultDateRotationType, result.DateRotationType);
+            Assert.Equal(AppConfig.ToBytes(AppConfig.DefaultRotationSizeMB), result.RotationSizeInBytes);
+        }
+
+        [Fact]
+        public void Parse_HealthMonitoringEnabledWithNullRecoveryAction_AppliesAppConfigDefault()
+        {
+            // Arrange
+            // The RecoveryAction fallback sits behind the EnableHealthMonitoring ternary, and
+            // DefaultEnableHealthMonitoring is false, so the defaults test above takes the None arm
+            // and never reaches ParseEnum. This is the only arrangement that does.
+            string serviceName = "MonitoredService";
+            string[] args = { "Servy.Service.exe", serviceName };
+
+            var serviceDto = new ServiceDto { EnableHealthMonitoring = true, RecoveryAction = null };
+            _mockRepository.Setup(r => r.GetByName(serviceName, true)).Returns(serviceDto);
+
+            // Act
+            var result = StartOptionsParser.Parse(_mockRepository.Object, _mockProcessHelper.Object, args);
+
+            // Assert
+            Assert.Equal(AppConfig.DefaultRecoveryAction, result.RecoveryAction);
+        }
+
+        [Fact]
+        public void Parse_HealthMonitoringDisabled_OverridesRecoveryActionToNone()
+        {
+            // Arrange
+            string serviceName = "NoMonitorService";
+            string[] args = { "Servy.Service.exe", serviceName };
+
+            var serviceDto = new ServiceDto
+            {
+                EnableHealthMonitoring = false,
+                RecoveryAction = 1, // RestartService - Should be completely ignored because monitoring is off
+            };
+            _mockRepository.Setup(r => r.GetByName(serviceName, true)).Returns(serviceDto);
+
+            // Act
+            var result = StartOptionsParser.Parse(_mockRepository.Object, _mockProcessHelper.Object, args);
+
+            // Assert
+            // Short-circuit conditional block validation
+            Assert.False(result.EnableHealthMonitoring);
+            Assert.Equal(RecoveryAction.None, result.RecoveryAction);
+        }
+
+        #endregion
+
+        #region Exception Resiliency Filter Validation Blocks
+
+        [Fact]
+        public void Parse_MalformedEnvironmentVariables_ReturnsEmptyListInsteadOfThrowing()
+        {
+            // Arrange
+            string serviceName = "CorruptedEnvService";
+            string[] args = { "Servy.Service.exe", serviceName };
+
+            var serviceDto = new ServiceDto
+            {
+                // Passing an invalid environment format (missing variable payload values or malformed structural separators)
+                // ensures that the static EnvironmentVariableParser throws a FormatException.
+                EnvironmentVariables = "MALFORMED_VARIABLE_WITHOUT_EQUALS_SIGN_OR_VALUE_TOKEN_CONTEXT"
+            };
+            _mockRepository.Setup(r => r.GetByName(serviceName, true)).Returns(serviceDto);
+
+            // Act
+            var result = StartOptionsParser.Parse(_mockRepository.Object, _mockProcessHelper.Object, args);
+
+            // Assert
+            // The catch (FormatException) block intercepts the parsing failure, outputs an error trace,
+            // and returns an empty list, preventing the wrapper orchestration layout from crashing.
+            Assert.NotNull(result.EnvironmentVariables);
+            Assert.Empty(result.EnvironmentVariables);
+        }
+
+        [Theory]
+        // One row per arm of SafeResolvePath's catch filter. The last three were added by the
+        // #2188 fix and were never pinned, so narrowing the filter back to the first two left
+        // the suite green while a real Path.GetFullPath failure of those kinds would escape Parse.
+        [InlineData(typeof(ArgumentException))]
+        [InlineData(typeof(InvalidOperationException))]
+        [InlineData(typeof(NotSupportedException))]
+        [InlineData(typeof(PathTooLongException))]
+        [InlineData(typeof(SecurityException))]
+        public void Parse_PathResolutionThrows_FallsBackToRawConfiguredPath(Type exceptionType)
+        {
+            // Arrange
+            string serviceName = "FaultyPathService";
+            string[] args = { "Servy.Service.exe", serviceName };
+            string brokenPathInput = @"%INVALID_ENV_VAR_TOKEN%\target.exe";
+
+            var serviceDto = new ServiceDto
+            {
+                ExecutablePath = brokenPathInput
+            };
+
+            _mockRepository.Setup(r => r.GetByName(serviceName, true)).Returns(serviceDto);
+
+            // Force the injected path utility framework to throw targeted exceptions on matching executions
+            _mockProcessHelper
+                .Setup(p => p.ResolvePath(brokenPathInput))
+                .Throws((Exception)Activator.CreateInstance(exceptionType)!);
+
+            // Act
+            var result = StartOptionsParser.Parse(_mockRepository.Object, _mockProcessHelper.Object, args);
+
+            // Assert
+            // The catch filters handle the problem, log an error diagnostic, and return the raw configuration text string token intact.
+            Assert.Equal(brokenPathInput, result.ExecutablePath);
+        }
+
+        #endregion
+
+        #region ProcessPriority Switch Strategy Matrix
+
+        [Theory]
+        [InlineData(ProcessPriority.Idle, ProcessPriorityClass.Idle)]
+        [InlineData(ProcessPriority.BelowNormal, ProcessPriorityClass.BelowNormal)]
+        [InlineData(ProcessPriority.Normal, ProcessPriorityClass.Normal)]
+        [InlineData(ProcessPriority.AboveNormal, ProcessPriorityClass.AboveNormal)]
+        [InlineData(ProcessPriority.High, ProcessPriorityClass.High)]
+        [InlineData(ProcessPriority.RealTime, ProcessPriorityClass.RealTime)]
+        public void MapPriority_ValidEnumStates_ReturnCorrectSystemClass(ProcessPriority input, ProcessPriorityClass expected)
+        {
+            // Act
+            var result = StartOptionsParser.MapPriority(input);
+
+            // Assert
+            Assert.Equal(expected, result);
+        }
+
+        [Fact]
+        public void MapPriority_UndefinedValueCast_ReturnsNormalDefaultClass()
+        {
+            // Arrange
+            // Force an undefined integer allocation state choice cast into the enum container structure
+            ProcessPriority corruptedPriority = (ProcessPriority)8888;
+
+            // Act
+            var result = StartOptionsParser.MapPriority(corruptedPriority);
+
+            // Assert
+            // Standard execution gracefully hits the fallback default condition path and returns Normal
+            Assert.Equal(ProcessPriorityClass.Normal, result);
+        }
+
+        #endregion
+    }
+}

@@ -1,0 +1,126 @@
+using Servy.Core.Enums;
+using Servy.Core.IO;
+using Servy.Service.StreamWriters;
+using Servy.Testing;
+
+namespace Servy.Service.UnitTests.StreamWriters
+{
+    public class RotatingStreamWriterAdapterTests : IDisposable
+    {
+        private readonly string _tempPath;
+
+        public RotatingStreamWriterAdapterTests()
+        {
+            // Create a unique temporary file path for every test to avoid file access conflicts
+            _tempPath = Path.Combine(Path.GetTempPath(), $"ServyTest_{Guid.NewGuid()}.log");
+        }
+
+        private RotatingStreamWriterAdapter CreateAdapter()
+        {
+            return new RotatingStreamWriterAdapter(
+                _tempPath,
+                enableSizeRotation: false,
+                rotationSizeInBytes: 1024,
+                enableDateRotation: false,
+                dateRotationType: DateRotationType.Daily,
+                maxRotations: 5,
+                useLocalTimeForRotation: false);
+        }
+
+        #region Constructor Parameter Forwarding Tests
+
+        [Theory]
+        [InlineData(true, false)]
+        [InlineData(false, true)]
+        public void Constructor_ForwardsAllParametersToInnerWriter(bool enableSize, bool enableDate)
+        {
+            // Arrange & Act
+            using (var adapter = new RotatingStreamWriterAdapter(
+                _tempPath,
+                enableSizeRotation: enableSize,
+                rotationSizeInBytes: 4096L,
+                enableDateRotation: enableDate,
+                dateRotationType: DateRotationType.Weekly,
+                maxRotations: 7,
+                useLocalTimeForRotation: true))
+            {
+                // Inspect the private _inner instance created inside the adapter
+                var inner = TestReflection.GetField<RotatingStreamWriter>(adapter, "_inner");
+
+                // Assert: Verify that every constructor parameter is accurately forwarded to RotatingStreamWriter
+                Assert.Equal(enableSize, TestReflection.GetField<bool>(inner, "_enableSizeRotation"));
+                Assert.Equal(4096L, TestReflection.GetField<long>(inner, "_rotationSizeInBytes"));
+                Assert.Equal(enableDate, TestReflection.GetField<bool>(inner, "_enableDateRotation"));
+                Assert.Equal(DateRotationType.Weekly, TestReflection.GetField<DateRotationType>(inner, "_dateRotationType"));
+                Assert.Equal(7, TestReflection.GetField<int>(inner, "_maxRotations"));
+                Assert.True(TestReflection.GetField<bool>(inner, "_useLocalTimeForRotation"));
+            }
+        }
+
+        #endregion
+
+        #region Disposal & Guard Clause Tests
+
+        [Fact]
+        public void Dispose_IsIdempotent()
+        {
+            // Arrange
+            var adapter = CreateAdapter();
+
+            // Act
+            adapter.Dispose();
+
+            // Assert: Second dispose should not throw
+            var ex = Record.Exception(() => adapter.Dispose());
+            Assert.Null(ex);
+        }
+
+        [Fact]
+        public void WriteLine_AfterDispose_ThrowsObjectDisposedException()
+        {
+            // Arrange
+            var adapter = CreateAdapter();
+            adapter.Dispose();
+
+            // Act & Assert
+            Assert.Throws<ObjectDisposedException>(() => adapter.WriteLine("Test line"));
+        }
+
+        #endregion
+
+        #region Functional Delegation Tests
+
+        [Fact]
+        public void WriteLine_WritesToStreamSuccessfully()
+        {
+            // Arrange
+            string testLine = "Log message content";
+
+            // Act
+            using (var adapter = CreateAdapter())
+            {
+                adapter.WriteLine(testLine);
+            }
+
+            // Assert
+            Assert.True(File.Exists(_tempPath));
+            string content = File.ReadAllText(_tempPath);
+            Assert.Contains(testLine, content);
+        }
+
+        #endregion
+
+        #region Teardown
+
+        public void Dispose()
+        {
+            // Clean up the temporary file created by the RotatingStreamWriter
+            if (File.Exists(_tempPath))
+            {
+                try { File.Delete(_tempPath); } catch { /* Ignore cleanup errors */ }
+            }
+        }
+
+        #endregion
+    }
+}

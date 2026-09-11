@@ -1,0 +1,68 @@
+# ==========================================================================================
+# GitHub Actions Composite Action - Resolve Version
+# ------------------------------------------------------------------------------------------
+# Deduplicates and centralizes the tag-resolution and semantic version
+# parsing logic across all automated release distribution paths.
+# Outputs standardized TAG and VERSION variables via GITHUB_ENV.
+# ==========================================================================================
+
+name: 'Resolve Version'
+description: 'Centralizes tag lookup and extracts semantic version data'
+
+inputs:
+  manual_tag:
+    description: 'Manual trigger tag input from workflow_dispatch context (e.g. v8.4)'
+    required: false
+    default: ''
+  release_tag:
+    description: 'Automated workflow release event tag fallback name reference'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve Tag and Strip Prefix
+      shell: pwsh
+      env:
+        INPUT_MANUAL_TAG: ${{ inputs.manual_tag }}
+        INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        $tag = $null
+
+        if ($env:INPUT_MANUAL_TAG) {
+            $tag = $env:INPUT_MANUAL_TAG                         # Manual trigger input
+        } elseif ($env:INPUT_RELEASE_TAG) {
+            $tag = $env:INPUT_RELEASE_TAG                        # Release trigger
+        } elseif ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME) {
+            $tag = $env:GITHUB_REF_NAME                          # Fallback for tag push
+        } else {
+            # No tag from any event context: fall back to the latest published release
+            # (lets workflow_dispatch runs without a tag input resolve a real version).
+            Write-Host "No event tag found. Querying GitHub API for latest release..."
+            $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+            $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/latest"
+            try {
+                $response = Invoke-RestMethod -Uri $url -Headers $headers -MaximumRetryCount 3 -RetryIntervalSec 5
+                if ($response.tag_name) {
+                    $tag = $response.tag_name
+                }
+            }
+            catch {
+                Write-Warning "Failed to fetch latest release via API context: $_"
+            }
+        }
+
+        if (-not $tag) { throw "No tag provided or fallback found. Set tag via input, trigger a release, or push a tag." }
+
+        $version = $tag -replace '^[vV]', ''         # e.g. v1.1 / V1.1 -> 1.1
+        if ($version -notmatch '^\d+\.\d+$') {
+            throw "Resolved version '$version' (from tag '$tag') does not match the required Major.Minor format."
+        }
+        Write-Host "Using resolved tag: $tag"
+        Write-Host "Using computed version: $version"
+
+        # Populate GITHUB_ENV
+        Add-Content -Path $env:GITHUB_ENV -Value "TAG=$tag"
+        Add-Content -Path $env:GITHUB_ENV -Value "VERSION=$version"

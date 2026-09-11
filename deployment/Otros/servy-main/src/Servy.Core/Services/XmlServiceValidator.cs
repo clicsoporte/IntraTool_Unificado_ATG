@@ -1,0 +1,42 @@
+using Servy.Core.DTOs;
+using Servy.Core.Resources;
+using Servy.Core.Security;
+using Servy.Core.Validation;
+using System.Xml;
+using System.Xml.Serialization;
+
+namespace Servy.Core.Services
+{
+    /// <summary>
+    /// Validates XML input to ensure it can be deserialized into a <see cref="ServiceDto"/>
+    /// and meets strict Windows SCM and security rules before database persistence.
+    /// </summary>
+    public class XmlServiceValidator : ServiceDtoImportValidator<XmlException>, IXmlServiceValidator
+    {
+        /// <summary>
+        /// Initializes a new instance of the <see cref="XmlServiceValidator"/> class.
+        /// </summary>
+        /// <param name="serviceValidationRules">Provides rules for validating service properties.</param>
+        /// <exception cref="ArgumentNullException">Thrown if <paramref name="serviceValidationRules"/> is null.</exception>
+        public XmlServiceValidator(IServiceValidationRules serviceValidationRules)
+            : base(serviceValidationRules)
+        {
+        }
+
+        /// <inheritdoc />
+        protected override string FormatName => "XML";
+
+        /// <inheritdoc />
+        protected override ServiceDto? Parse(string content)
+        {
+            var serializer = SecureXml.CreateStrictServiceDtoSerializer();
+
+            // Prevent XXE attacks: SecureXml prohibits DTD processing and nulls the resolver.
+            using (var stringReader = new StringReader(content))
+            using (var xmlReader = SecureXml.CreateReader(stringReader))
+            {
+                return serializer.Deserialize(xmlReader) as ServiceDto;
+            }
+        }
+    }
+}

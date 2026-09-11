@@ -1,0 +1,276 @@
+using Servy.Core.Config;
+using Servy.Core.DTOs;
+using Servy.Core.Services;
+using Servy.Core.UnitTests.Helpers;
+
+namespace Servy.Core.UnitTests.Services
+{
+    public class XmlServiceSerializerTests
+    {
+        private readonly XmlServiceSerializer _serializer = new XmlServiceSerializer();
+
+        #region Deserialize Tests
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("    ")]
+        public void Deserialize_NullOrWhitespace_ReturnsNull(string? input)
+        {
+            // Arrange & Act
+            var result = _serializer.Deserialize(input);
+
+            // Assert
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public void Deserialize_PartialXml_AppliesDefaults()
+        {
+            // Arrange: Minimal valid XML
+            string xml = "<ServiceDto><Name>PartialXmlService</Name></ServiceDto>";
+
+            // Act
+            var result = _serializer.Deserialize(xml);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Equal("PartialXmlService", result.Name);
+
+            // Integration check: Verify hydration via ServiceDtoHelper.ApplyDefaultsAndResetIdentity
+            Assert.Equal(AppConfig.DefaultStartTimeout, result.StartTimeout);
+            Assert.Equal(AppConfig.DefaultStopTimeout, result.StopTimeout);
+            Assert.Equal(AppConfig.DefaultRunAsLocalSystem, result.RunAsLocalSystem);
+        }
+
+        [Fact]
+        public void Deserialize_AllFields_MapsCorrectly()
+        {
+            // Arrange: Create a DTO with specific values for every single field
+            var expected = ServiceDtoFactory.CreateFull("Xml");
+
+            // Convert to XML string using the product serializer, so the fixture carries the
+            // same preamble and indentation a real export file has
+            var xml = _serializer.Serialize(expected);
+
+            // Act
+            var actual = _serializer.Deserialize(xml);
+
+            // Assert
+            Assert.NotNull(actual);
+
+            // Reflection-driven comprehensive comparison of all properties mapped across serialization boundaries
+            ServiceDtoRoundTrip.AssertPropertiesSurvived(expected, actual);
+
+            // UserAccount and Password (sensitive data) are dropped by [XmlIgnore], while
+            // RunAsLocalSystem is reset to the configured default rather than omitted.
+            Assert.Null(actual.UserAccount);
+            Assert.Null(actual.Password);
+            Assert.Equal(AppConfig.DefaultRunAsLocalSystem, actual.RunAsLocalSystem);
+        }
+
+        [Fact]
+        public void Deserialize_HostileXmlPayloadWithCredentials_IgnoresSensitiveFields()
+        {
+            // Arrange
+            string xmlPayload = "<ServiceDto>" +
+                                "<Name>MaliciousService</Name>" +
+                                "<UserAccount>TargetDomain\\Administrator</UserAccount>" +
+                                "<Password>RoguePassword123!</Password>" +
+                                "</ServiceDto>";
+
+            // Act
+            var actual = _serializer.Deserialize(xmlPayload);
+
+            // Assert
+            Assert.NotNull(actual);
+            Assert.Equal("MaliciousService", actual.Name);
+            Assert.Null(actual.UserAccount);
+            Assert.Null(actual.Password);
+        }
+
+        [Fact]
+        public void Deserialize_XsiNilRoot_ReturnsNull()
+        {
+            // Arrange: well-formed XML representing an explicit null object (XML's analogue of the JSON "null" literal)
+            string xml = "<ServiceDto xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" xsi:nil=\"true\" />";
+
+            // Act
+            var result = _serializer.Deserialize(xml);
+
+            // Assert
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public void Deserialize_MalformedXml_ReturnsNull()
+        {
+            // Arrange: Invalid XML structure
+            string malformedXml = "<ServiceDto><Name>UnclosedTag";
+
+            // Act & Assert
+            Assert.Null(_serializer.Deserialize(malformedXml));
+        }
+
+        [Fact]
+        public void Deserialize_WellFormedXmlWithUnconvertibleValue_ReturnsNull()
+        {
+            // Arrange: FormatException (not XmlException) path: no line info available,
+            // exercises the generic error-log branch of ServiceDtoSerializer.Deserialize.
+            string xml = "<ServiceDto><Name>S</Name><StartTimeout>abc</StartTimeout></ServiceDto>";
+
+            // Assert
+            Assert.Null(_serializer.Deserialize(xml));
+        }
+
+        [Fact]
+        public void Deserialize_UnknownElement_ReturnsNull()
+        {
+            // Arrange: XML containing an unknown member element
+            string xmlWithUnknownElement = "<ServiceDto><Name>TestService</Name><UnknownElement>Value</UnknownElement></ServiceDto>";
+
+            // Act
+            var result = _serializer.Deserialize(xmlWithUnknownElement);
+
+            // Assert
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public void Deserialize_UnknownAttribute_ReturnsNull()
+        {
+            // Arrange: XML containing an unknown attribute on the root tag
+            string xmlWithUnknownAttribute = "<ServiceDto UnknownAttribute=\"Value\"><Name>TestService</Name></ServiceDto>";
+
+            // Act
+            var result = _serializer.Deserialize(xmlWithUnknownAttribute);
+
+            // Assert
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public void Deserialize_EmptyRoot_ReturnsHydratedDto()
+        {
+            // Arrange: Valid XML structure but NO properties set
+            string emptyXml = "<ServiceDto />";
+
+            // Act
+            var result = _serializer.Deserialize(emptyXml);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Equal(AppConfig.DefaultStopTimeout, result.StopTimeout);
+            Assert.Equal(AppConfig.DefaultRotationSizeMB, result.RotationSize);
+            Assert.Equal((int)AppConfig.DefaultStartupType, result.StartupType);
+        }
+
+        #endregion
+
+        #region Serialize Tests
+
+        [Fact]
+        public void Serialize_NullDto_ReturnsNull()
+        {
+            // Arrange & Act
+            var result = _serializer.Serialize(null);
+
+            // Assert
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public void Serialize_ValidDto_ReturnsFormattedXmlWithCorrectPreamble()
+        {
+            // Arrange
+            var dto = new ServiceDto
+            {
+                Name = "XmlSerializationService",
+                DisplayName = "Friendly Name",
+                StartTimeout = 30
+            };
+
+            // Act
+            var xmlResult = _serializer.Serialize(dto);
+
+            // Assert
+            Assert.NotNull(xmlResult);
+
+            // Check that it contains indented properties and tags
+            Assert.Contains(Environment.NewLine + "  <Name>", xmlResult); // newline + indentation before child elements
+            Assert.Contains("<Name>XmlSerializationService</Name>", xmlResult);
+            Assert.Contains("<StartTimeout>30</StartTimeout>", xmlResult);
+
+            // Verify Utf8StringWriter integration: ensures encoding reflects lowercase 'utf-8' without BOM corruptions
+            Assert.StartsWith("<?xml version=\"1.0\" encoding=\"utf-8\"?>", xmlResult);
+        }
+
+        [Fact]
+        public void Serialize_PopulatedDto_ExcludesSensitiveFields()
+        {
+            // Arrange
+            var dto = ServiceDtoFactory.CreateFull("Xml");
+            dto.UserAccount = "Domain\\Admin";
+            dto.Password = "SuperSecret123!";
+
+            // Act
+            var xml = _serializer.Serialize(dto);
+
+            // Assert
+            Assert.NotNull(xml);
+            Assert.DoesNotContain("UserAccount", xml);
+            Assert.DoesNotContain("Password", xml);
+            Assert.DoesNotContain("Domain\\Admin", xml);
+            Assert.DoesNotContain("SuperSecret123!", xml);
+        }
+
+        [Fact]
+        public void SerializeAndDeserialize_RoundTripSymmetry_MaintainsObjectIntegrity()
+        {
+            // Arrange
+            var original = ServiceDtoFactory.CreateFull("Xml");
+            original.UserAccount = "Domain\\Admin";
+            original.Password = "SuperSecret123!";
+
+            // Act
+            var xml = _serializer.Serialize(original);
+            var deserialized = _serializer.Deserialize(xml);
+
+            // Assert
+            Assert.NotNull(xml);
+            Assert.NotNull(deserialized);
+
+            ServiceDtoRoundTrip.AssertPropertiesSurvived(original, deserialized);
+
+            Assert.Null(deserialized.UserAccount);
+            Assert.Null(deserialized.Password);
+            Assert.Equal(AppConfig.DefaultRunAsLocalSystem, deserialized.RunAsLocalSystem);
+        }
+
+        [Fact]
+        public void Serialize_InvalidDtoStateOrSerializationFailure_CatchesExceptionAndReturnsNull()
+        {
+            // Arrange
+            // Passing an undeclared derived type through an XmlSerializer instantiated for the base type
+            // natively forces an InvalidOperationException, exercising the internal try-catch fallback block.
+            var invalidDto = new InvalidServiceDtoMock();
+
+            // Act
+            var result = _serializer.Serialize(invalidDto);
+
+            // Assert
+            Assert.Null(result);
+        }
+
+        #endregion
+    }
+
+    /// <summary>
+    /// Derived class designed to simulate an unexpected serialization type.
+    /// Serializing this runtime subtype through a standard base XmlSerializer(typeof(ServiceDto))
+    /// throws an InvalidOperationException because it lacks explicit XmlInclude configuration declarations.
+    /// </summary>
+    public class InvalidServiceDtoMock : ServiceDto
+    {
+    }
+}

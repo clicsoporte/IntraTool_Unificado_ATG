@@ -1,0 +1,519 @@
+using CommandLine;
+using Servy.Core.Config;
+
+namespace Servy.CLI.Options
+{
+    /// <summary>
+    /// Command options for <c>install</c> command.
+    /// Installs a new Windows service with specified parameters.
+    /// </summary>
+    [Verb("install", HelpText = "Install a Windows service.")]
+    public class InstallServiceOptions : GlobalOptionsBase
+    {
+        private const string SecurityWarningPrefix = " SECURITY WARNING: Use the ";
+        private const string SecurityWarningSuffixParams = " environment variable instead to avoid exposing sensitive parameters in OS process listings.";
+        private const string SecurityWarningSuffixCreds = " environment variable instead to avoid exposing credentials in OS process listings.";
+        private const string EnvVarEscapingRecipe = "Enter variables in the format varName=varValue separated by semicolons (;). Use \\= to escape '=', \\\" to escape '\"', \\; to escape ';', \\\\ to escape '\\', and %% to escape '%' (collapses to a single '%'). Supports environment variable expansion, example: VAR1=%ProgramData%\\MyApp; VAR2=%VAR1%\\bin.";
+
+        /// <summary>
+        /// Gets or sets the service name.
+        /// This option is required and specifies the unique name of the service to install.
+        /// </summary>
+        [Option('n', "name", Required = true, HelpText = "Unique service name to install.")]
+        public string? ServiceName { get; set; }
+
+        /// <summary>
+        /// Gets or sets the service display name.
+        /// </summary>
+        [Option("displayName", HelpText = "The human-readable name shown in the Windows Services console (services.msc). If left empty, the service name will be used instead.")]
+        public string? ServiceDisplayName { get; set; }
+
+        /// <summary>
+        /// Gets or sets the service description.
+        /// Optional descriptive text about the service.
+        /// </summary>
+        [Option('d', "description", HelpText = "Description of the service.")]
+        public string? ServiceDescription { get; set; }
+
+        /// <summary>
+        /// Gets or sets the path to the executable process to run as service.
+        /// This option is required.
+        /// </summary>
+        [Option('p', "path", Required = true, HelpText = "Path to the executable process. Supports environment variable expansion, example: %JAVA_HOME%\\bin\\java.exe")]
+        public string? ProcessPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the working directory for the service process.
+        /// Optional.
+        /// </summary>
+        [Option("startupDir", HelpText = "Startup directory for the process. Supports environment variable expansion, example: %PROGRAMDATA%\\MyApp")]
+        public string? StartupDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets additional command-line parameters for the process.
+        /// Optional.
+        /// </summary>
+        /// <remarks>
+        /// Passing parameters via CLI flags is insecure as they are visible
+        /// in process listings and shell history. Use the <see cref="AppConfig.ProcessParametersEnvVarName"/> environment
+        /// variable instead.
+        /// </remarks>
+        [Sensitive]
+        [Option("params", HelpText = "Additional parameters for the process. Supports environment variable expansion, example: --params=\"--data %ProgramData%\\MyApp --bin %MY_VAR%\\bin\"." + SecurityWarningPrefix + AppConfig.ProcessParametersEnvVarName + SecurityWarningSuffixParams)]
+        public string? ProcessParameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets the startup type of the service.
+        /// Possible values:
+        /// <list type="bullet">
+        /// <item><description>Automatic - Service starts automatically during system startup.</description></item>
+        /// <item><description>AutomaticDelayedStart - Service starts automatically with a short delay after system startup.</description></item>
+        /// <item><description>Manual - Service must be started manually.</description></item>
+        /// <item><description>Disabled - Service is disabled and cannot be started.</description></item>
+        /// </list>
+        /// </summary>
+        [Option("startupType", HelpText = "Service startup type. Options: Automatic, AutomaticDelayedStart, Manual, Disabled. Defaults to Automatic.")]
+        public string? ServiceStartType { get; set; }
+
+        /// <summary>
+        /// Gets or sets the process priority for the service.
+        /// Possible values:
+        /// <list type="bullet">
+        /// <item><description>Idle</description></item>
+        /// <item><description>BelowNormal</description></item>
+        /// <item><description>Normal</description></item>
+        /// <item><description>AboveNormal</description></item>
+        /// <item><description>High</description></item>
+        /// <item><description>RealTime</description></item>
+        /// </list>
+        /// </summary>
+        [Option("priority", HelpText = "Process priority level. Options: Idle, BelowNormal, Normal, AboveNormal, High, RealTime. Defaults to Normal.")]
+        public string? ProcessPriority { get; set; }
+
+        /// <summary>
+        /// Gets or sets the logical CPUs the process may run on (e.g., '0-3,8' or '0xFF00').
+        /// </summary>
+        [Option('a', "cpuAffinity", Required = false, HelpText = "Logical CPUs the process may run on (e.g., '0-3,8' or '0xFF00').")]
+        public string? CpuAffinity { get; set; }
+
+        /// <summary>
+        /// Gets or sets timeout in seconds to wait for the process to start successfully before considering the startup as failed.
+        /// Must be between <see cref="AppConfig.MinStartTimeout"/> and <see cref="AppConfig.MaxStartTimeout"/> seconds.
+        /// Optional. Defaults to 10 seconds.
+        /// </summary>
+        [Option("startTimeout", HelpText = "Timeout in seconds to wait for the process to start successfully before considering the startup as failed. Must be between 1 and 86400 seconds. Defaults to 10 seconds.")]
+        public string? StartTimeout { get; set; }
+
+        /// <summary>
+        /// Gets or sets timeout in seconds to wait for the process to exit.
+        /// Must be between <see cref="AppConfig.MinStopTimeout"/> and <see cref="AppConfig.MaxStopTimeout"/> seconds.
+        /// Optional. Defaults to 5 seconds.
+        /// </summary>
+        [Option("stopTimeout", HelpText = "Timeout in seconds to wait for the process to exit. Must be between 1 and 86400 seconds. Defaults to 5 seconds.")]
+        public string? StopTimeout { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to enable the console user interface for the service.
+        /// </summary>
+        [Option("enableConsoleUI", HelpText = "Enable console user interface for the service. When enabled, stdout/stderr redirection is disabled.")]
+        public bool EnableConsoleUI { get; set; }
+
+        /// <summary>
+        /// Gets or sets the file path to capture standard output logs.
+        /// Optional.
+        /// </summary>
+        [Option("stdout", HelpText = "Path to stdout log file.")]
+        public string? StdoutPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the file path to capture standard error logs.
+        /// Optional.
+        /// </summary>
+        [Option("stderr", HelpText = "Path to stderr log file.")]
+        public string? StderrPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether size-based log rotation is enabled.
+        /// This option is deprecated and is kept for backward compatibility. Use --enableSizeRotation instead.
+        /// </summary>
+        [Option("enableRotation", HelpText = "Deprecated. Enable size-based log rotation. This option is kept only for backward compatibility. Use --enableSizeRotation instead.")]
+        public bool EnableRotation { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether size-based log rotation is enabled.
+        /// </summary>
+        [Option("enableSizeRotation", HelpText = "Enable size-based log rotation.")]
+        public bool EnableSizeRotation { get; set; }
+
+        /// <summary>
+        /// Gets or sets the rotation size in megabytes (MB) for log files.
+        /// Must be between <see cref="AppConfig.MinRotationSize"/> and <see cref="AppConfig.MaxRotationSize"/> MB if rotation is enabled.
+        /// </summary>
+        [Option("rotationSize", HelpText = "Log rotation size in Megabytes (MB). Must be between 1 and 10240 MB.")]
+        public string? RotationSize { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether date-based log rotation is enabled based on the date interval specified by --dateRotationType.
+        /// </summary>
+        [Option("enableDateRotation", HelpText = "Enable date-based log rotation based on the date interval specified by --dateRotationType. When both size-based and date-based rotation are enabled, size rotation takes precedence.")]
+        public bool EnableDateRotation { get; set; }
+
+        /// <summary>
+        /// Gets or sets the date rotation type.
+        /// Possible values:
+        /// <list type="bullet">
+        /// <item><description>Daily</description></item>
+        /// <item><description>Weekly</description></item>
+        /// <item><description>Monthly</description></item>
+        /// <item><description>None - Disables date-based rotation; use when only size rotation is desired.</description></item>
+        /// </list>
+        /// </summary>
+        [Option("dateRotationType", HelpText = "Date rotation type. Options: Daily, Weekly, Monthly, None (None disables date-based rotation; use when only size rotation is desired).")]
+        public string? DateRotationType { get; set; }
+
+        /// <summary>
+        /// Gets or sets the maximum number of rotated log files to keep.
+        /// Must be between <see cref="AppConfig.MinMaxRotations"/> and <see cref="AppConfig.MaxMaxRotations"/>.
+        /// Set to 0 for unlimited.
+        /// </summary>
+        [Option("maxRotations", HelpText = "Maximum rotated log files to keep. Must be between 0 and 10000. Set to 0 or leave empty for unlimited.")]
+        public string? MaxRotations { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to use local system time for log rotation.
+        /// </summary>
+        /// <remarks>
+        /// <para>Default is <see cref="AppConfig.DefaultUseLocalTimeForRotation"/> (<c>false</c>).</para>
+        /// <para>When <c>true</c>, rotation occurs at local midnight. When <c>false</c>, rotation occurs at UTC midnight.</para>
+        /// </remarks>
+        [Option("useLocalTimeForRotation", HelpText = "Use local server time for log rotation instead of UTC. Default is false.")]
+        public bool UseLocalTimeForRotation { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether debug logs are enabled.
+        /// When enabled, environment variables and process parameters are recorded in the Servy.Service.log file.
+        /// Not recommended for production environments, as these logs may contain sensitive information.
+        /// </summary>
+        [Option("debug", HelpText = "Whether debug logs are enabled. When enabled, environment variables and process parameters are recorded in the Servy.Service.log file. Not recommended for production environments, as these logs may contain sensitive information.")]
+        public bool EnableDebugLogs { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether health monitoring is enabled.
+        /// </summary>
+        [Option("enableHealth", HelpText = "Enable health monitoring.")]
+        public bool EnableHealthMonitoring { get; set; }
+
+        /// <summary>
+        /// Gets or sets the heartbeat interval in seconds for health monitoring.
+        /// Must be between <see cref="AppConfig.MinHeartbeatInterval"/> and <see cref="AppConfig.MaxHeartbeatInterval"/> seconds if health monitoring is enabled.
+        /// </summary>
+        [Option("heartbeatInterval", HelpText = "Heartbeat interval in seconds. Must be between 5 and 86400 seconds.")]
+        public string? HeartbeatInterval { get; set; }
+
+        /// <summary>
+        /// Gets or sets the maximum number of failed health checks before recovery action.
+        /// Must be between <see cref="AppConfig.MinMaxFailedChecks"/> and <see cref="AppConfig.MaxMaxFailedChecks"/> if health monitoring is enabled.
+        /// </summary>
+        [Option("maxFailedChecks", HelpText = "Maximum allowed failed health checks. Must be between 1 and 100000.")]
+        public string? MaxFailedChecks { get; set; }
+
+        /// <summary>
+        /// Gets or sets the recovery action to perform on failure.
+        /// Possible values:
+        /// <list type="bullet">
+        /// <item><description>None - No action will be taken.</description></item>
+        /// <item><description>RestartService - Restart the service.</description></item>
+        /// <item><description>RestartProcess - Restart the process.</description></item>
+        /// <item><description>RestartComputer - Restart the computer.</description></item>
+        /// </list>
+        /// </summary>
+        [Option("recoveryAction", HelpText = "Recovery action on failure. Options: None, RestartService, RestartProcess, RestartComputer. Restart service and restart computer actions are not available if the service runs under NT AUTHORITY\\NetworkService, NT AUTHORITY\\LocalService, or a user account without the required privileges. Only the restart process action will be available for these accounts.")]
+        public string? RecoveryAction { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to run recovery action even if the process exits successfully.
+        /// </summary>
+        [Option("recoveryOnCleanExit", HelpText = "Enable running recovery action even if the process exits successfully. Default is false.")]
+        public bool RecoveryOnCleanExit { get; set; }
+
+        /// <summary>
+        /// Gets or sets the maximum number of restart attempts after failure.
+        /// Must be between <see cref="AppConfig.MinMaxRestartAttempts"/> and <see cref="AppConfig.MaxMaxRestartAttempts"/> if health monitoring is enabled.
+        /// Set to 0 for unlimited restart attempts.
+        /// </summary>
+        [Option("maxRestartAttempts", HelpText = "Maximum restart attempts on failure. Must be between 0 and 100000. Set to 0 for unlimited restart attempts.")]
+        public string? MaxRestartAttempts { get; set; }
+
+        /// <summary>
+        /// Gets or sets the absolute URL used to send out-of-band diagnostic heartbeat pings (e.g., healthchecks.io).
+        /// While the process is healthy, Servy periodically pings this endpoint to confirm service vitality.
+        /// </summary>
+        [Option("heartbeatUrl", HelpText = "Absolute URL for out-of-band diagnostic heartbeat pings. Only used when health monitoring is enabled.")]
+        public string? HeartbeatUrl { get; set; }
+
+        /// <summary>
+        /// Gets or sets the HTTP request timeout in seconds for external heartbeat URL pings.
+        /// Value must be between <see cref="AppConfig.MinHeartbeatUrlTimeoutSeconds"/> and <see cref="AppConfig.MaxHeartbeatUrlTimeoutSeconds"/>.
+        /// Default is <see cref="AppConfig.DefaultHeartbeatUrlTimeoutSeconds"/>.
+        /// </summary>
+        [Option("heartbeatUrlTimeoutSeconds", HelpText = "Timeout in seconds for external heartbeat URL requests. Must be between 2 and 30 seconds. Defaults to 10 seconds.")]
+        public string? HeartbeatUrlTimeoutSeconds { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether extended flags (/start, /fail) are appended to the heartbeat URL during service startup and failure events.
+        /// Default is <see cref="AppConfig.DefaultEnableHeartbeatUrlFlags"/>.
+        /// </summary>
+        [Option("enableHeartbeatUrlFlags", HelpText = "Append /start and /fail to the heartbeat URL on service start and failure.")]
+        public bool EnableHeartbeatUrlFlags { get; set; }
+
+        /// <summary>
+        /// Gets or sets the failure program path.
+        /// Optional.
+        /// </summary>
+        [Option("failureProgramPath", HelpText = "The failure program path. Configure a script or executable to run when the wrapped process exits with a non-zero exit code (recovery disabled) or after all recovery action retries have failed (recovery enabled). It is not run when the process fails to start; that path stops the service. Supports environment variable expansion, example: %JAVA_HOME%\\bin\\java.exe")]
+        public string? FailureProgramPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the failure program startup directory.
+        /// Optional. If not set, defaults to the service working directory.
+        /// </summary>
+        [Option("failureProgramStartupDir", HelpText = "Specifies the directory in which the failure program will start. If not set, defaults to the service working directory. Supports environment variable expansion, example: %PROGRAMDATA%\\MyApp")]
+        public string? FailureProgramStartupDir { get; set; }
+
+        /// <summary>
+        /// Gets or sets additional command-line parameters for the failure program.
+        /// Optional.
+        /// </summary>
+        /// <remarks>
+        /// Passing parameters via CLI flags is insecure as they are visible
+        /// in process listings and shell history. Use the <see cref="AppConfig.FailureProgramParametersEnvVarName"/> environment
+        /// variable instead.
+        /// </remarks>
+        [Sensitive]
+        [Option("failureProgramParams", HelpText = "Additional parameters for the failure program." + SecurityWarningPrefix + AppConfig.FailureProgramParametersEnvVarName + SecurityWarningSuffixParams)]
+        public string? FailureProgramParameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets environment variables for the process.
+        /// Optional.
+        /// </summary>
+        /// <remarks>
+        /// Passing environment variables via CLI flags is insecure as they are visible
+        /// in process listings and shell history. Use the <see cref="AppConfig.EnvironmentVariablesEnvVarName"/> environment
+        /// variable instead.
+        /// </remarks>
+        [Sensitive]
+        [Option("envVars", HelpText = "Environment variables for the process. " + EnvVarEscapingRecipe + SecurityWarningPrefix + AppConfig.EnvironmentVariablesEnvVarName + SecurityWarningSuffixParams)]
+        public string? EnvironmentVariables { get; set; }
+
+        /// <summary>
+        /// Gets or sets Windows service dependencies.
+        /// Optional.
+        /// </summary>
+        [Option("deps", HelpText = "Specify one or more Windows service names (not display names) that this service depends on separated with semicolons (;). Each service name must contain only letters, digits, hyphens, underscores, periods, spaces, and dollar signs ($), optionally preceded by '+' to reference a load-order group, and must not exceed 256 characters. Windows starts stopped dependencies automatically when this service starts; if a dependency is disabled or fails to start, this service will not start.")]
+        public string? ServiceDependencies { get; set; }
+
+        /// <summary>
+        /// Gets or sets the Windows service account username.
+        /// Optional.
+        /// </summary>
+        [Option(
+            "user",
+            HelpText = "The service account username (e.g., .\\username, DOMAIN\\username, DOMAIN\\gMSA$, or a built-in identity such as NT AUTHORITY\\LocalService, NT AUTHORITY\\NetworkService, NT SERVICE\\MyService or IIS APPPOOL\\MyPool). " +
+                       "Leave the --password option or SERVY_PASSWORD environment variable empty for built-in, virtual and gMSA accounts. " +
+                       "If this option is not set, the service runs under Local System. " +
+                       "If the service runs under an account other than Local System, " +
+                       "you must grant Modify access to %ProgramData%\\Servy for the account running " +
+                       "the service and execute the mandatory hardening script: " +
+                       "Set-ServyExePermissions.ps1 -TargetAccount \"domain\\user\" to prevent unprivileged " +
+                       "binary tampering and local privilege escalation. See the wiki page Security, section " +
+                       "\"Executable permission hardening (mandatory)\"."
+        )]
+        public string? User { get; set; }
+
+        /// <summary>
+        /// Gets or sets the Windows service account password.
+        /// </summary>
+        /// <remarks>
+        /// Passing passwords via CLI flags is insecure as they are visible
+        /// in process listings and shell history. Use the <see cref="AppConfig.PasswordEnvVarName"/> environment
+        /// variable instead.
+        /// </remarks>
+        [Sensitive]
+        [Option("password", HelpText = "The service account password." + SecurityWarningPrefix + AppConfig.PasswordEnvVarName + SecurityWarningSuffixCreds)]
+        public string? Password { get; set; }
+
+        /// <summary>
+        /// Gets or sets the pre-launch executable path.
+        /// Optional.
+        /// </summary>
+        [Option("preLaunchPath", HelpText = "The pre-launch executable path. Configure an optional script or executable to run before the main service starts. This is useful for preparing configurations, fetching secrets, or other setup tasks. If the pre-launch script fails, the service will not start unless you enable --preLaunchIgnoreFailure. Supports environment variable expansion, example: %JAVA_HOME%\\bin\\java.exe")]
+        public string? PreLaunchPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the pre-launch startup directory.
+        /// Optional. If not set, defaults to the service working directory.
+        /// </summary>
+        [Option("preLaunchStartupDir", HelpText = "Specifies the directory in which the pre-launch executable will start. If not set, defaults to the service working directory. Supports environment variable expansion, example: %PROGRAMDATA%\\MyApp")]
+        public string? PreLaunchStartupDir { get; set; }
+
+        /// <summary>
+        /// Gets or sets additional parameters for the pre-launch executable.
+        /// Optional.
+        /// </summary>
+        /// <remarks>
+        /// Passing parameters via CLI flags is insecure as they are visible
+        /// in process listings and shell history. Use the <see cref="AppConfig.PreLaunchParametersEnvVarName"/> environment
+        /// variable instead.
+        /// </remarks>
+        [Sensitive]
+        [Option("preLaunchParams", HelpText = "Additional parameters for the pre-launch executable." + SecurityWarningPrefix + AppConfig.PreLaunchParametersEnvVarName + SecurityWarningSuffixParams)]
+        public string? PreLaunchParameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets environment variables for the pre-launch executable.
+        /// Optional.
+        /// </summary>
+        /// <remarks>
+        /// Passing environment variables via CLI flags is insecure as they are visible
+        /// in process listings and shell history. Use the <see cref="AppConfig.PreLaunchEnvironmentVariablesEnvVarName"/> environment
+        /// variable instead.
+        /// </remarks>
+        [Sensitive]
+        [Option("preLaunchEnv", HelpText = "Environment variables for the pre-launch executable. " + EnvVarEscapingRecipe + SecurityWarningPrefix + AppConfig.PreLaunchEnvironmentVariablesEnvVarName + SecurityWarningSuffixParams)]
+        public string? PreLaunchEnvironmentVariables { get; set; }
+
+        /// <summary>
+        /// Gets or sets the file path to capture standard output logs.
+        /// Optional.
+        /// </summary>
+        [Option("preLaunchStdout", HelpText = "Path to stdout log file of the pre-launch executable.")]
+        public string? PreLaunchStdoutPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the file path to capture standard error logs.
+        /// Optional.
+        /// </summary>
+        [Option("preLaunchStderr", HelpText = "Path to stderr log file of the pre-launch executable.")]
+        public string? PreLaunchStderrPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the timeout for the pre-launch executable.
+        /// Must be between <see cref="AppConfig.MinPreLaunchTimeoutSeconds"/> and <see cref="AppConfig.MaxPreLaunchTimeoutSeconds"/> seconds.
+        /// Optional.
+        /// </summary>
+        [Option("preLaunchTimeout", HelpText = "Timeout for the pre-launch executable. Must be between 0 and 86400 seconds. Set the timeout to 0 to run the pre-launch hook in fire-and-forget mode. When set to 0, the hook is started and the service is launched immediately without waiting for completion. Use this only for tasks that do not affect the service's ability to start or run correctly. Stdout/Stderr redirection and retries are not available in fire-and-forget mode.")]
+        public string? PreLaunchTimeout { get; set; }
+
+        /// <summary>
+        /// Gets or sets the pre-launch retry attempts.
+        /// Must be between <see cref="AppConfig.MinPreLaunchRetryAttempts"/> and <see cref="AppConfig.MaxPreLaunchRetryAttempts"/>.
+        /// Optional.
+        /// </summary>
+        [Option("preLaunchRetryAttempts", HelpText = "Number of retry attempts for the pre-launch executable if it fails. Must be between 0 and 100000.")]
+        public string? PreLaunchRetryAttempts { get; set; }
+
+        /// <summary>
+        /// Gets or sets the pre-launch ignore failure flag.
+        /// Optional.
+        /// </summary>
+        [Option("preLaunchIgnoreFailure", HelpText = "Ignore failure and start service even if pre-launch executable fails.")]
+        public bool PreLaunchIgnoreFailure { get; set; }
+
+        /// <summary>
+        /// Gets or sets the post-launch executable path.
+        /// Optional.
+        /// </summary>
+        [Option("postLaunchPath", HelpText = "The post-launch executable path. Configure an optional script or executable to run after the process starts successfully. Supports environment variable expansion, example: %JAVA_HOME%\\bin\\java.exe")]
+        public string? PostLaunchPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the post-launch startup directory.
+        /// Optional. If not set, defaults to the service working directory.
+        /// </summary>
+        [Option("postLaunchStartupDir", HelpText = "Specifies the directory in which the post-launch executable will start. If not set, defaults to the service working directory. Supports environment variable expansion, example: %PROGRAMDATA%\\MyApp")]
+        public string? PostLaunchStartupDir { get; set; }
+
+        /// <summary>
+        /// Gets or sets additional parameters for the post-launch executable.
+        /// Optional.
+        /// </summary>
+        /// <remarks>
+        /// Passing parameters via CLI flags is insecure as they are visible
+        /// in process listings and shell history. Use the <see cref="AppConfig.PostLaunchParametersEnvVarName"/> environment
+        /// variable instead.
+        /// </remarks>
+        [Sensitive]
+        [Option("postLaunchParams", HelpText = "Additional parameters for the post-launch executable." + SecurityWarningPrefix + AppConfig.PostLaunchParametersEnvVarName + SecurityWarningSuffixParams)]
+        public string? PostLaunchParameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets the pre-stop executable path.
+        /// Optional.
+        /// </summary>
+        [Option("preStopPath", HelpText = "The pre-stop executable path. Configure an optional script or executable to run before the main service stops. This can be used for graceful shutdown tasks such as notifying external systems or draining resources. The pre-stop process runs synchronously and extends the service stop timeout while it is running. Set the timeout to 0 to run the pre-stop process in fire-and-forget mode. Supports environment variable expansion, example: %JAVA_HOME%\\bin\\java.exe")]
+        public string? PreStopPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the pre-stop startup directory.
+        /// Optional. If not set, defaults to the service working directory.
+        /// </summary>
+        [Option("preStopStartupDir", HelpText = "Specifies the directory in which the pre-stop executable will start. If not set, defaults to the service working directory. Supports environment variable expansion, example: %PROGRAMDATA%\\MyApp")]
+        public string? PreStopStartupDir { get; set; }
+
+        /// <summary>
+        /// Gets or sets additional parameters for the pre-stop executable.
+        /// Optional.
+        /// </summary>
+        /// <remarks>
+        /// Passing parameters via CLI flags is insecure as they are visible
+        /// in process listings and shell history. Use the <see cref="AppConfig.PreStopParametersEnvVarName"/> environment
+        /// variable instead.
+        /// </remarks>
+        [Sensitive]
+        [Option("preStopParams", HelpText = "Additional parameters for the pre-stop executable." + SecurityWarningPrefix + AppConfig.PreStopParametersEnvVarName + SecurityWarningSuffixParams)]
+        public string? PreStopParameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets the timeout for the pre-stop executable.
+        /// Must be between <see cref="AppConfig.MinPreStopTimeoutSeconds"/> and <see cref="AppConfig.MaxPreStopTimeoutSeconds"/> seconds.
+        /// Optional.
+        /// </summary>
+        [Option("preStopTimeout", HelpText = "Timeout for the pre-stop executable. Set the timeout to 0 to run the pre-stop process in fire-and-forget mode. Must be between 0 and 86400 seconds.")]
+        public string? PreStopTimeout { get; set; }
+
+        /// <summary>
+        /// Gets or sets a flag to log pre-stop failure as error.
+        /// Optional.
+        /// </summary>
+        [Option("preStopLogAsError", HelpText = "Log pre-stop failure as error.")]
+        public bool PreStopLogAsError { get; set; }
+
+        /// <summary>
+        /// Gets or sets the post-stop executable path.
+        /// Optional.
+        /// </summary>
+        [Option("postStopPath", HelpText = "The post-stop executable path. Configure an optional script or executable to run after the wrapped process and all of its child processes have exited. The post-stop process is started in fire-and-forget mode and does not block service shutdown. Supports environment variable expansion, example: %JAVA_HOME%\\bin\\java.exe")]
+        public string? PostStopPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the post-stop startup directory.
+        /// Optional. If not set, defaults to the service working directory.
+        /// </summary>
+        [Option("postStopStartupDir", HelpText = "Specifies the directory in which the post-stop executable will start. If not set, defaults to the service working directory. Supports environment variable expansion, example: %PROGRAMDATA%\\MyApp")]
+        public string? PostStopStartupDir { get; set; }
+
+        /// <summary>
+        /// Gets or sets additional parameters for the post-stop executable.
+        /// Optional.
+        /// </summary>
+        /// <remarks>
+        /// Passing parameters via CLI flags is insecure as they are visible
+        /// in process listings and shell history. Use the <see cref="AppConfig.PostStopParametersEnvVarName"/> environment
+        /// variable instead.
+        /// </remarks>
+        [Sensitive]
+        [Option("postStopParams", HelpText = "Additional parameters for the post-stop executable." + SecurityWarningPrefix + AppConfig.PostStopParametersEnvVarName + SecurityWarningSuffixParams)]
+        public string? PostStopParameters { get; set; }
+    }
+}

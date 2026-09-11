@@ -1,0 +1,659 @@
+using Servy.Core.Common;
+using Servy.Core.Config;
+using Servy.Core.Enums;
+using Servy.Core.Services;
+using System.ComponentModel;
+using System.ServiceProcess;
+#if !DEBUG
+using Servy.Core.Logging;
+#endif
+
+namespace Servy.Core.Domain
+{
+    /// <summary>
+    /// Represents a Windows service to be managed by Servy.
+    /// Contains configuration, execution, and pre-launch settings.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Hook Execution Logic:</b>
+    /// </para>
+    /// <list type="bullet">
+    /// <item>
+    /// <description>
+    /// <b>Pre-Launch (Synchronous):</b> By default, these are "Gatekeepers." They block service startup,
+    /// support Stdout/Stderr capture, Retries, and Managed Timeouts.
+    /// </description>
+    /// </item>
+    /// <item>
+    /// <description>
+    /// <b>Pre-Launch (Asynchronous):</b> If <see cref="PreLaunchTimeoutSeconds"/> is set to 0,
+    /// the hook transitions to fire-and-forget mode. It will not block startup, and supervisor
+    /// features (logging/retries) are disabled.
+    /// </description>
+    /// </item>
+    /// <item>
+    /// <description>
+    /// <b>Post-Launch (Asynchronous):</b> Always "Sidecars." These run in a fire-and-forget manner
+    /// after the main process starts and do not support supervisor features.
+    /// </description>
+    /// </item>
+    /// <item>
+    /// <description>
+    /// <b>Pre-Stop (Synchronous, advisory):</b> Runs before the child process tree is terminated and is
+    /// bounded by <see cref="PreStopTimeoutSeconds"/>, but it is not a gatekeeper: a failure never cancels
+    /// the stop, and <see cref="PreStopLogAsError"/> only decides whether it is logged as an error or a
+    /// warning.
+    /// </description>
+    /// </item>
+    /// <item>
+    /// <description>
+    /// <b>Post-Stop (Asynchronous):</b> A "Sidecar" like Post-Launch. It runs fire-and-forget after the
+    /// process tree is gone, is not tracked, and supports no supervisor features - so it has no timeout
+    /// property of its own.
+    /// </description>
+    /// </item>
+    /// </list>
+    /// </remarks>
+    public class Service
+    {
+        #region Private Fields
+
+        private readonly IServiceManager _serviceManager;
+
+        #endregion
+
+        #region Constructors
+
+        /// <summary>
+        /// Creates a new Service Domain.
+        /// </summary>
+        /// <param name="serviceManager">Service manager.</param>
+        public Service(IServiceManager serviceManager)
+        {
+            _serviceManager = serviceManager ?? throw new ArgumentNullException(nameof(serviceManager));
+        }
+
+        #endregion
+
+        #region Properties
+
+        /// <summary>
+        /// Gets or sets the child Process PID.
+        /// </summary>
+        public int? Pid { get; set; }
+
+        /// <summary>
+        /// Gets or sets the unique name of the service.
+        /// </summary>
+        public string Name { get; set; } = string.Empty;
+
+        /// <summary>
+        /// The <b>Display Name</b> of the service, shown in the Windows Services management console (<c>services.msc</c>).
+        /// </summary>
+        /// <remarks>
+        /// This name is human-readable, often includes prefixes for grouping, and can be changed
+        /// after the service has been installed.
+        /// </remarks>
+        public string DisplayName { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Gets or sets an optional description of the service.
+        /// </summary>
+        public string? Description { get; set; }
+
+        /// <summary>
+        /// Gets or sets the full path to the service executable.
+        /// </summary>
+        public string ExecutablePath { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Gets or sets the optional startup directory for the service process.
+        /// </summary>
+        public string? StartupDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets optional command-line parameters for the service executable.
+        /// </summary>
+        public string? Parameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets the startup type of the service (e.g., Automatic, Manual).
+        /// Default is <see cref="AppConfig.DefaultStartupType"/>.
+        /// </summary>
+        public ServiceStartType StartupType { get; set; } = AppConfig.DefaultStartupType;
+
+        /// <summary>
+        /// Gets or sets the process priority for the service.
+        /// Default is <see cref="AppConfig.DefaultProcessPriority"/>.
+        /// </summary>
+        public ProcessPriority Priority { get; set; } = AppConfig.DefaultProcessPriority;
+
+        /// <summary>
+        /// Gets or sets the logical CPUs the process may run on (e.g., '0-3,8' or '0xFF00').
+        /// </summary>
+        public string? CpuAffinity { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to enable the console user interface for the service.
+        /// When enabled, stdout/stderr redirection is disabled, and the service runs in a console window.
+        /// Default is <see cref="AppConfig.DefaultEnableConsoleUI"/>.
+        /// </summary>
+        public bool EnableConsoleUI { get; set; } = AppConfig.DefaultEnableConsoleUI;
+
+        /// <summary>
+        /// Gets or sets the optional file path for redirecting standard output.
+        /// </summary>
+        public string? StdoutPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the optional file path for redirecting standard error output.
+        /// </summary>
+        public string? StderrPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether size-based log rotation is enabled.
+        /// Default is <see cref="AppConfig.DefaultEnableSizeRotation"/>.
+        /// </summary>
+        public bool EnableSizeRotation { get; set; } = AppConfig.DefaultEnableSizeRotation;
+
+        /// <summary>
+        /// Gets or sets the rotation size in Megabytes (MB) for log files.
+        /// Values below 1 are raised to 1 MB on install; 0 does not mean "unlimited" here
+        /// (unlike <see cref="MaxRotations"/>).
+        /// Default is <see cref="AppConfig.DefaultRotationSizeMB"/>.
+        /// </summary>
+        public int RotationSize { get; set; } = AppConfig.DefaultRotationSizeMB;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether date-based log rotation is enabled.
+        /// Default is <see cref="AppConfig.DefaultEnableDateRotation"/>.
+        /// </summary>
+        public bool EnableDateRotation { get; set; } = AppConfig.DefaultEnableDateRotation;
+
+        /// <summary>
+        /// Gets or sets the date-based log rotation interval.
+        /// Default is <see cref="AppConfig.DefaultDateRotationType"/>.
+        /// </summary>
+        public DateRotationType DateRotationType { get; set; } = AppConfig.DefaultDateRotationType;
+
+        /// <summary>
+        /// Gets or sets the maximum number of rotated log files to keep.
+        /// Set to 0 for unlimited.
+        /// Default is <see cref="AppConfig.DefaultMaxRotations"/>.
+        /// </summary>
+        public int MaxRotations { get; set; } = AppConfig.DefaultMaxRotations;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to use local system time for log rotation.
+        /// </summary>
+        /// <remarks>
+        /// <para>Default is <see cref="AppConfig.DefaultUseLocalTimeForRotation"/> (UTC).</para>
+        /// <para>Set to <c>true</c> to rotate logs based on the server's local time (e.g., exactly at local midnight).
+        /// This is often preferred for manual log inspection but can be affected by Daylight Saving Time transitions.</para>
+        /// <para>Set to <c>false</c> to use Coordinated Universal Time (UTC).
+        /// This ensures a consistent, 24-hour rotation interval regardless of time zone or DST changes.</para>
+        /// </remarks>
+        public bool UseLocalTimeForRotation { get; set; } = AppConfig.DefaultUseLocalTimeForRotation;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether health monitoring is enabled.
+        /// Default is <see cref="AppConfig.DefaultEnableHealthMonitoring"/>.
+        /// </summary>
+        public bool EnableHealthMonitoring { get; set; } = AppConfig.DefaultEnableHealthMonitoring;
+
+        /// <summary>
+        /// Gets or sets the heartbeat interval in seconds for health monitoring.
+        /// Default is <see cref="AppConfig.DefaultHeartbeatInterval"/> seconds.
+        /// </summary>
+        public int HeartbeatInterval { get; set; } = AppConfig.DefaultHeartbeatInterval;
+
+        /// <summary>
+        /// Gets or sets the maximum number of failed health checks before taking recovery action.
+        /// Default is <see cref="AppConfig.DefaultMaxFailedChecks"/>.
+        /// </summary>
+        public int MaxFailedChecks { get; set; } = AppConfig.DefaultMaxFailedChecks;
+
+        /// <summary>
+        /// Gets or sets the recovery action to take when the service fails.
+        /// Default is <see cref="AppConfig.DefaultRecoveryAction"/>.
+        /// </summary>
+        public RecoveryAction RecoveryAction { get; set; } = AppConfig.DefaultRecoveryAction;
+
+        /// <summary>
+        /// Gets or sets a flag to run recovery action even if the process exits successfully.
+        /// Default is <see cref="AppConfig.DefaultRecoveryOnCleanExit"/>.
+        /// </summary>
+        public bool RecoveryOnCleanExit { get; set; } = AppConfig.DefaultRecoveryOnCleanExit;
+
+        /// <summary>
+        /// Gets or sets the maximum number of automatic restart attempts.
+        /// Default is <see cref="AppConfig.DefaultMaxRestartAttempts"/>.
+        /// </summary>
+        public int MaxRestartAttempts { get; set; } = AppConfig.DefaultMaxRestartAttempts;
+
+        /// <summary>
+        /// Gets or sets the absolute URL used to send out-of-band diagnostic heartbeat pings (e.g., dead man's switch platforms like healthchecks.io).
+        /// While the process is healthy, Servy periodically hits this endpoint to prove host and agent vitality.
+        /// </summary>
+        public string? HeartbeatUrl { get; set; }
+
+        /// <summary>
+        /// Gets or sets the maximum time in seconds allowed for the heartbeat URL request to complete before it is cancelled.
+        /// Value must be between <see cref="AppConfig.MinHeartbeatUrlTimeoutSeconds"/> and <see cref="AppConfig.MaxHeartbeatUrlTimeoutSeconds"/>;
+        /// values outside that range are rejected by <see cref="Servy.Core.Validation.IServiceValidationRules"/> at install time.
+        /// Default is <see cref="AppConfig.DefaultHeartbeatUrlTimeoutSeconds"/>.
+        /// </summary>
+        public int HeartbeatUrlTimeoutSeconds { get; set; } = AppConfig.DefaultHeartbeatUrlTimeoutSeconds;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether start/fail status suffixes are appended to the heartbeat URL.
+        /// When true, Servy appends <see cref="AppConfig.HeartbeatUrlStartFlag"/> on startup and <see cref="AppConfig.HeartbeatUrlFailFlag"/> on failure.
+        /// Default is <see cref="AppConfig.DefaultEnableHeartbeatUrlFlags"/>.
+        /// </summary>
+        public bool EnableHeartbeatUrlFlags { get; set; } = AppConfig.DefaultEnableHeartbeatUrlFlags;
+
+        /// <summary>
+        /// Gets or sets the path to the process to run on failure.
+        /// </summary>
+        public string? FailureProgramPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the working directory for the failure program.
+        /// </summary>
+        public string? FailureProgramStartupDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets the command-line parameters for the failure program.
+        /// </summary>
+        public string? FailureProgramParameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets environment variables for the service in the form "KEY=VALUE;KEY2=VALUE2".
+        /// </summary>
+        public string? EnvironmentVariables { get; set; }
+
+        /// <summary>
+        /// Gets or sets a semicolon- or newline-separated list of dependent service names.
+        /// </summary>
+        public string? ServiceDependencies { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the service should run as LocalSystem.
+        /// Default is <see cref="AppConfig.DefaultRunAsLocalSystem"/>.
+        /// </summary>
+        public bool RunAsLocalSystem { get; set; } = AppConfig.DefaultRunAsLocalSystem;
+
+        /// <summary>
+        /// Gets or sets the username for the service account (used if not running as LocalSystem).
+        /// </summary>
+        public string? UserAccount { get; set; }
+
+        /// <summary>
+        /// Gets or sets the password for the service account (used if not running as LocalSystem).
+        /// </summary>
+        public string? Password { get; set; }
+
+        /// <summary>
+        /// Gets or sets the full path to an optional pre-launch executable.
+        /// </summary>
+        public string? PreLaunchExecutablePath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the optional startup directory for the pre-launch executable.
+        /// </summary>
+        public string? PreLaunchStartupDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets optional command-line parameters for the pre-launch executable.
+        /// </summary>
+        public string? PreLaunchParameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets environment variables for the pre-launch executable.
+        /// </summary>
+        public string? PreLaunchEnvironmentVariables { get; set; }
+
+        /// <summary>
+        /// Gets or sets the optional file path for redirecting standard output of the pre-launch process.
+        /// </summary>
+        public string? PreLaunchStdoutPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the optional file path for redirecting standard error output of the pre-launch process.
+        /// </summary>
+        public string? PreLaunchStderrPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the timeout in seconds for the pre-launch process.
+        /// Default is <see cref="AppConfig.DefaultPreLaunchTimeoutSeconds"/> seconds.
+        /// </summary>
+        public int PreLaunchTimeoutSeconds { get; set; } = AppConfig.DefaultPreLaunchTimeoutSeconds;
+
+        /// <summary>
+        /// Gets or sets the number of retry attempts for the pre-launch process.
+        /// Default is <see cref="AppConfig.DefaultPreLaunchRetryAttempts"/>.
+        /// </summary>
+        public int PreLaunchRetryAttempts { get; set; } = AppConfig.DefaultPreLaunchRetryAttempts;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to ignore failures of the pre-launch process.
+        /// Default is <see cref="AppConfig.DefaultPreLaunchIgnoreFailure"/>.
+        /// </summary>
+        public bool PreLaunchIgnoreFailure { get; set; } = AppConfig.DefaultPreLaunchIgnoreFailure;
+
+        /// <summary>
+        /// Gets or sets an optional path to an executable that runs after the service starts.
+        /// </summary>
+        public string? PostLaunchExecutablePath { get; set; }
+
+        /// <summary>
+        /// Gets or sets an optional startup directory for the post-launch executable.
+        /// </summary>
+        public string? PostLaunchStartupDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets optional parameters for the post-launch executable.
+        /// </summary>
+        public string? PostLaunchParameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether debug logs are enabled.
+        /// When enabled, environment variables and process parameters are recorded in the local
+        /// log file at <c>%ProgramData%\Servy\logs\Servy.Service.log</c>. Sensitive data is
+        /// never written to the Windows Event Log or shown by the CLI / PowerShell module.
+        /// Not recommended for production environments, as these logs may contain sensitive information.
+        /// Default is <see cref="AppConfig.DefaultEnableDebugLogs"/>.
+        /// </summary>
+        public bool EnableDebugLogs { get; set; } = AppConfig.DefaultEnableDebugLogs;
+
+        /// <summary>
+        /// Gets or sets the timeout in seconds to wait for the process to start successfully before considering the startup as failed.
+        /// Default is <see cref="AppConfig.DefaultStartTimeout"/> seconds.
+        /// </summary>
+        public int StartTimeout { get; set; } = AppConfig.DefaultStartTimeout;
+
+        /// <summary>
+        /// Gets or sets the timeout in seconds to wait for the process to exit.
+        /// Default is <see cref="AppConfig.DefaultStopTimeout"/> seconds.
+        /// </summary>
+        public int StopTimeout { get; set; } = AppConfig.DefaultStopTimeout;
+
+        /// <summary>
+        /// Gets or sets the absolute file path where standard output is currently being redirected.
+        /// Returns <see langword="null"/> if the service is not redirected or not running.
+        /// </summary>
+        public string? ActiveStdoutPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the absolute file path where standard error output is currently being redirected.
+        /// Returns <see langword="null"/> if the service is not redirected or not running.
+        /// </summary>
+        public string? ActiveStderrPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets an optional path to an executable that runs before the service stops.
+        /// </summary>
+        public string? PreStopExecutablePath { get; set; }
+
+        /// <summary>
+        /// Gets or sets an optional startup directory for the pre-stop executable.
+        /// </summary>
+        public string? PreStopStartupDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets optional parameters for the pre-stop executable.
+        /// </summary>
+        public string? PreStopParameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets the maximum time in seconds to wait for the pre-stop executable to complete.
+        /// Default is <see cref="AppConfig.DefaultPreStopTimeoutSeconds"/> seconds.
+        /// </summary>
+        public int PreStopTimeoutSeconds { get; set; } = AppConfig.DefaultPreStopTimeoutSeconds;
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to log pre-stop failure as error.
+        /// Default is <see cref="AppConfig.DefaultPreStopLogAsError"/>.
+        /// </summary>
+        public bool PreStopLogAsError { get; set; } = AppConfig.DefaultPreStopLogAsError;
+
+        /// <summary>
+        /// Gets or sets an optional path to an executable that runs after the service stops.
+        /// </summary>
+        public string? PostStopExecutablePath { get; set; }
+
+        /// <summary>
+        /// Gets or sets an optional startup directory for the post-stop executable.
+        /// </summary>
+        public string? PostStopStartupDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets optional parameters for the post-stop executable.
+        /// </summary>
+        public string? PostStopParameters { get; set; }
+
+        #endregion
+
+        #region Public Methods
+
+        /// <summary>
+        /// Starts the Windows service represented by this instance.
+        /// </summary>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>
+        /// An <see cref="OperationResult"/> describing whether the start succeeded
+        /// (<see cref="OperationResult.Success"/>) along with any failure context.
+        /// </returns>
+        public async Task<OperationResult> StartAsync(CancellationToken cancellationToken = default)
+        {
+            return await _serviceManager.StartServiceAsync(Name, logSuccessfulStart: true, cancellationToken);
+        }
+
+        /// <summary>
+        /// Stops the Windows service represented by this instance.
+        /// </summary>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>
+        /// An <see cref="OperationResult"/> describing whether the stop succeeded
+        /// (<see cref="OperationResult.Success"/>) along with any failure context.
+        /// </returns>
+        public async Task<OperationResult> StopAsync(CancellationToken cancellationToken = default)
+        {
+            return await _serviceManager.StopServiceAsync(Name, logSuccessfulStop: true, cancellationToken);
+        }
+
+        /// <summary>
+        /// Restarts the Windows service represented by this instance.
+        /// </summary>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>
+        /// An <see cref="OperationResult"/> describing whether the restart succeeded
+        /// (<see cref="OperationResult.Success"/>) along with any failure context.
+        /// </returns>
+        public async Task<OperationResult> RestartAsync(CancellationToken cancellationToken = default)
+        {
+            return await _serviceManager.RestartServiceAsync(Name, logSuccessfulRestart: true, cancellationToken);
+        }
+
+        /// <summary>
+        /// Retrieves the current status of the Windows service represented by this instance.
+        /// </summary>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>
+        /// A <see cref="ServiceControllerStatus"/> value representing the current service status,
+        /// or <c>null</c> if the service is not installed.
+        /// </returns>
+        public ServiceControllerStatus? GetStatus(CancellationToken cancellationToken = default)
+        {
+            // Single-query path: returns null for missing services, avoiding a check-then-query TOCTOU window.
+            return _serviceManager.GetServiceStatus(Name, cancellationToken);
+        }
+
+        /// <summary>
+        /// Determines whether the Windows service represented by this instance is installed.
+        /// </summary>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>
+        /// <c>true</c> if the service is installed; otherwise, <c>false</c>.
+        /// </returns>
+        public bool IsInstalled(CancellationToken cancellationToken = default)
+        {
+            return _serviceManager.IsServiceInstalled(Name, cancellationToken);
+        }
+
+        /// <summary>
+        /// Gets the configured startup type of the Windows service represented by this instance.
+        /// </summary>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>
+        /// A <see cref="ServiceStartType"/> value representing the startup type,
+        /// or <c>null</c> if the service is not installed or the startup type cannot be determined.
+        /// </returns>
+        public ServiceStartType? GetServiceStartupType(CancellationToken cancellationToken = default)
+        {
+            return _serviceManager.GetServiceStartupType(Name, cancellationToken);
+        }
+
+        /// <summary>
+        /// Installs the Windows service using the configured domain properties.
+        /// </summary>
+        /// <remarks>
+        /// In <c>DEBUG</c> builds, the service wrapper executable is resolved from
+        /// <paramref name="wrapperExeDir"/> when provided, falling back to
+        /// <see cref="AppConfig.ProgramDataPath"/>. In <c>RELEASE</c> builds it is always
+        /// resolved from <see cref="AppConfig.ProgramDataPath"/> and the parameter is ignored.
+        /// <para>
+        /// This method passes all service configuration (paths, parameters, startup
+        /// settings, monitoring options, recovery actions, etc.) to the underlying
+        /// <see cref="IServiceManager"/> implementation.
+        /// </para>
+        /// </remarks>
+        /// <returns>
+        /// A task that represents the asynchronous install operation. The task result
+        /// is <see cref="OperationResult"/> describing whether the install succeeded
+        /// (<see cref="OperationResult.Success"/>) along with any failure context.
+        /// </returns>
+        /// <param name="wrapperExeDir">Wrapper exe parent directory.</param>
+        /// <param name="isCLI">Indicates if install is from the CLI.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <exception cref="ArgumentException">
+        /// Thrown if required properties such as <see cref="Name"/> or
+        /// <see cref="ExecutablePath"/> are null, empty, or whitespace.
+        /// </exception>
+        /// <exception cref="Win32Exception">
+        /// Thrown if the Service Control Manager cannot be accessed or the service
+        /// cannot be created/updated.
+        /// </exception>
+        public async Task<OperationResult> InstallAsync(string? wrapperExeDir = null, bool isCLI = false, CancellationToken cancellationToken = default)
+        {
+            var servyServiceFilename = isCLI ? AppConfig.ServyServiceCLIExe : AppConfig.ServyServiceUIExe;
+#if DEBUG
+            var wrapperExePath = Path.Combine(wrapperExeDir ?? AppConfig.ProgramDataPath, servyServiceFilename);
+#else
+            // SECURITY/STABILITY GUARD:
+            // In RELEASE builds, we enforce the standard ProgramData path.
+            // We warn the caller so they aren't wondering why their custom directory was ignored.
+            if (!string.IsNullOrWhiteSpace(wrapperExeDir))
+            {
+                Logger.Warn($"Install: The 'wrapperExeDir' parameter ('{wrapperExeDir}') is ignored in RELEASE builds. " +
+                            $"The service wrapper will be installed to the standard path: {AppConfig.ProgramDataPath}");
+            }
+            var wrapperExePath = Path.Combine(AppConfig.ProgramDataPath, servyServiceFilename);
+#endif
+
+            var options = new InstallServiceOptions
+            {
+                ServiceName = Name,
+                Description = Description ?? string.Empty,
+                WrapperExePath = wrapperExePath,
+                RealExePath = ExecutablePath,
+                StartupDirectory = StartupDirectory,
+                RealArgs = Parameters ?? string.Empty,
+                StartType = StartupType,
+                ProcessPriority = Priority,
+                CpuAffinity = CpuAffinity,
+                EnableConsoleUI = EnableConsoleUI,
+                StdoutPath = StdoutPath,
+                StderrPath = StderrPath,
+                EnableSizeRotation = EnableSizeRotation,
+                RotationSizeInBytes = AppConfig.ToBytes(Math.Max(1, RotationSize)),
+                EnableHealthMonitoring = EnableHealthMonitoring,
+                UseLocalTimeForRotation = UseLocalTimeForRotation,
+                HeartbeatInterval = HeartbeatInterval,
+                MaxFailedChecks = MaxFailedChecks,
+                RecoveryAction = RecoveryAction,
+                RecoveryOnCleanExit = RecoveryOnCleanExit,
+                MaxRestartAttempts = MaxRestartAttempts,
+                HeartbeatUrl = HeartbeatUrl,
+                HeartbeatUrlTimeoutSeconds = HeartbeatUrlTimeoutSeconds,
+                EnableHeartbeatUrlFlags = EnableHeartbeatUrlFlags,
+                EnvironmentVariables = EnvironmentVariables,
+                ServiceDependencies = ServiceDependencies,
+                Username = RunAsLocalSystem ? null : UserAccount,
+                Password = RunAsLocalSystem ? null : Password,
+
+                PreLaunchExePath = PreLaunchExecutablePath,
+                PreLaunchStartupDirectory = PreLaunchStartupDirectory,
+                PreLaunchArgs = PreLaunchParameters,
+                PreLaunchEnvironmentVariables = PreLaunchEnvironmentVariables,
+                PreLaunchStdoutPath = PreLaunchStdoutPath,
+                PreLaunchStderrPath = PreLaunchStderrPath,
+                PreLaunchTimeout = PreLaunchTimeoutSeconds,
+                PreLaunchRetryAttempts = PreLaunchRetryAttempts,
+                PreLaunchIgnoreFailure = PreLaunchIgnoreFailure,
+
+                FailureProgramPath = FailureProgramPath,
+                FailureProgramStartupDirectory = FailureProgramStartupDirectory,
+                FailureProgramExecutableArgs = FailureProgramParameters,
+
+                PostLaunchExePath = PostLaunchExecutablePath,
+                PostLaunchStartupDirectory = PostLaunchStartupDirectory,
+                PostLaunchArgs = PostLaunchParameters,
+
+                EnableDebugLogs = EnableDebugLogs,
+                DisplayName = DisplayName,
+                MaxRotations = MaxRotations,
+                EnableDateRotation = EnableDateRotation,
+                DateRotationType = DateRotationType,
+                StartTimeout = StartTimeout,
+                StopTimeout = StopTimeout,
+
+                PreStopExePath = PreStopExecutablePath,
+                PreStopStartupDirectory = PreStopStartupDirectory,
+                PreStopArgs = PreStopParameters,
+                PreStopTimeout = PreStopTimeoutSeconds,
+                PreStopLogAsError = PreStopLogAsError,
+
+                PostStopExePath = PostStopExecutablePath,
+                PostStopStartupDirectory = PostStopStartupDirectory,
+                PostStopArgs = PostStopParameters,
+            };
+
+            return await _serviceManager.InstallServiceAsync(options, cancellationToken);
+        }
+
+        /// <summary>
+        /// Uninstalls the Windows service with the configured <see cref="Name"/>.
+        /// </summary>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>
+        /// A task that represents the asynchronous uninstall operation. The task result
+        /// is <see cref="OperationResult"/> describing whether the uninstall succeeded
+        /// (<see cref="OperationResult.Success"/>) along with any failure context.
+        /// </returns>
+        /// <exception cref="ArgumentException">
+        /// Thrown if <see cref="Name"/> is null, empty, or whitespace.
+        /// </exception>
+        /// <exception cref="Win32Exception">
+        /// Thrown if the Service Control Manager cannot be accessed or the service
+        /// cannot be removed.
+        /// </exception>
+        public async Task<OperationResult> UninstallAsync(CancellationToken cancellationToken = default)
+        {
+            return await _serviceManager.UninstallServiceAsync(Name, cancellationToken);
+        }
+
+        #endregion
+    }
+}

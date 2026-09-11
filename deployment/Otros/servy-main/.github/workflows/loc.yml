@@ -1,0 +1,127 @@
+# ==========================================================================================
+# GitHub Actions Workflow - LoC
+# ------------------------------------------------------------------------------------------
+# Calculates lines of code for:
+# - Production code
+# - Test code
+# - Total code
+# Generates badges and deploys them to the "loc"
+# branch for README / documentation usage.
+# ==========================================================================================
+
+name: loc
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write  # Required to push badges to the loc branch
+
+env:
+  LOC_BADGE_COLOR: green
+
+jobs:
+  loc_job:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    name: Generate LoC badges
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 #v6.0.3
+
+      # ----------------------------
+      # Production LoC
+      # ----------------------------
+      - name: Create prod LoC badge
+        uses: shadowmoose/GHA-LoC-Badge@8c8191e02ebe2e4b4764f4711228bddcaeb88f19 #v1.0.0
+        id: loc_prod
+        with:
+          debug: true
+          directory: ./
+          badge_label: 'LoC prod'
+          badge_color: ${{ env.LOC_BADGE_COLOR }}
+          badge: ./output/loc-prod.svg
+          ignore: '.gitignore|*.txt|.github|setup|tests|bin|obj|*.ico|*.ps1|*.psm1|*.bat|*.csproj|*.sln|*.md|*.yml|*.pdb|*.dll|*.exe|*.Designer.cs|*.g.cs|*.resx|*.manifest|*.json|*.png'
+
+      # ----------------------------
+      # Tests LoC
+      # ----------------------------
+      - name: Create tests LoC badge
+        uses: shadowmoose/GHA-LoC-Badge@8c8191e02ebe2e4b4764f4711228bddcaeb88f19 #v1.0.0
+        id: loc_tests
+        with:
+          debug: true
+          directory: ./
+          badge_label: 'LoC tests'
+          badge_color: ${{ env.LOC_BADGE_COLOR }}
+          badge: ./output/loc-tests.svg
+          ignore: '.gitignore|*.txt|.github|setup|tests/data|src|bin|obj|*.ico|*.ps1|*.psm1|*.bat|*.csproj|*.sln|*.md|*.yml|*.pdb|*.dll|*.exe|*.Designer.cs|*.g.cs|*.resx|*.manifest|*.json|*.png'
+
+      # ----------------------------
+      # Total LoC
+      # ----------------------------
+      - name: Create total LoC badge
+        id: loc_total
+        env:
+          PROD_LINES: ${{ steps.loc_prod.outputs.total_lines }}
+          TESTS_LINES: ${{ steps.loc_tests.outputs.total_lines }}
+        shell: bash
+        run: |
+          # Compute total
+          TOTAL=$(( PROD_LINES + TESTS_LINES ))
+          echo "Total LoC: $TOTAL"
+
+          # Force locale for printf to add commas
+          export LC_ALL=en_US.UTF-8
+          TOTAL_COMMA=$(printf "%'d" $TOTAL)
+          echo "Formatted total: $TOTAL_COMMA"
+
+          # Set output for later steps
+          echo "total_lines=$TOTAL" >> $GITHUB_OUTPUT
+
+          # Ensure output directory exists
+          mkdir -p ./output
+
+          # Use shields.io static badge generation with URL-encoded label
+          # Percent-encode commas defensively so the badge message survives any URL handling verbatim
+          ENCODED_TOTAL=$(echo "$TOTAL_COMMA" | sed 's/,/%2C/g')
+
+          URL="https://img.shields.io/badge/LoC%20total-${ENCODED_TOTAL}-${LOC_BADGE_COLOR}"
+          echo "URL: ${URL}"
+
+          # Fail step on HTTP errors (-f) and show errors (-S) to prevent publishing garbage
+          curl -fsS --retry 3 --retry-delay 3 --retry-all-errors -o ./output/loc-total.svg "${URL}"
+
+      # ----------------------------
+      # Summary
+      # ----------------------------
+      - name: Summary
+        env:
+          PROD_SUMMARY: ${{ steps.loc_prod.outputs.total_lines }}
+          TESTS_SUMMARY: ${{ steps.loc_tests.outputs.total_lines }}
+          TOTAL_SUMMARY: ${{ steps.loc_total.outputs.total_lines }}
+        shell: bash
+        run: |
+          echo "### LoC Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Prod:  $PROD_SUMMARY lines" >> $GITHUB_STEP_SUMMARY
+          echo "- Tests: $TESTS_SUMMARY lines" >> $GITHUB_STEP_SUMMARY
+          echo "- Total: $TOTAL_SUMMARY lines" >> $GITHUB_STEP_SUMMARY
+
+      # ----------------------------
+      # Deploy badges (Native Git)
+      # ----------------------------
+      - name: Deploy to loc branch
+        shell: bash
+        run: |
+          cd ./output
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b loc
+          git add -A
+          git commit -m "update loc badges"
+          git push "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" loc --force

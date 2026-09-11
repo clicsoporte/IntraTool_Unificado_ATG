@@ -1,0 +1,137 @@
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+
+namespace Servy.UI.Helpers
+{
+    /// <summary>
+    /// Provides utility methods for WPF visual-tree traversal and for formatting durations, numbers, and row information.
+    /// </summary>
+    public static class Helper
+    {
+        /// <summary>
+        /// Recursively searches the WPF visual tree below <paramref name="parent"/> for the first
+        /// descendant of type <typeparamref name="T"/>, depth-first in child order.
+        /// Typical use: locating the <see cref="ScrollViewer"/> inside a templated list control.
+        /// </summary>
+        /// <typeparam name="T">The type of the visual child to find.</typeparam>
+        /// <param name="parent">The parent object to start the search from.</param>
+        /// <returns>The found child of type T, or null if not found.</returns>
+        public static T? GetVisualChild<T>(DependencyObject parent) where T : DependencyObject
+        {
+            for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+            {
+                var child = VisualTreeHelper.GetChild(parent, i);
+                if (child is T t) return t;
+                var res = GetVisualChild<T>(child);
+                if (res != null) return res;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Formats a <see cref="TimeSpan"/> into a human-readable string, omitting zero-value components.
+        /// Prepends a negative sign <c>-</c> for negative durations.
+        /// </summary>
+        /// <param name="duration">The duration to format.</param>
+        /// <returns>
+        /// A formatted string such as <c>1h 5s</c>, <c>15s</c>, <c>-3m 10s</c>, or <c>0ms</c> if the duration is zero.
+        /// </returns>
+        public static string FormatDuration(TimeSpan duration)
+        {
+            if (duration == TimeSpan.Zero)
+            {
+                return "0ms";
+            }
+
+            bool isNegative = duration < TimeSpan.Zero;
+            TimeSpan absDuration = duration.Duration(); // Gets absolute value
+
+            var parts = new List<string>();
+
+            // 1. Capture total hours (handling durations > 24h)
+            if ((int)absDuration.TotalHours > 0)
+            {
+                parts.Add($"{(int)absDuration.TotalHours}h");
+            }
+
+            // 2. Capture minutes (0-59)
+            if (absDuration.Minutes > 0)
+            {
+                parts.Add($"{absDuration.Minutes}m");
+            }
+
+            // 3. Capture seconds (0-59)
+            if (absDuration.Seconds > 0)
+            {
+                parts.Add($"{absDuration.Seconds}s");
+            }
+
+            // 4. Capture milliseconds (0-999)
+            if (absDuration.Milliseconds > 0)
+            {
+                parts.Add($"{absDuration.Milliseconds}ms");
+            }
+
+            if (parts.Count == 0)
+            {
+                return "0ms";
+            }
+
+            string formatted = string.Join(" ", parts);
+            return isNegative ? $"-{formatted}" : formatted;
+        }
+
+        /// <summary>
+        /// Formats an integer with thousands separators.
+        /// </summary>
+        /// <param name="number">The number to format.</param>
+        /// <returns>
+        /// A string containing the formatted number.
+        /// For example: <c>1,234</c> or <c>1,000,000</c>.
+        /// </returns>
+        public static string FormatNumber(int number)
+        {
+            return number.ToString("N0", System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// Generates a message describing how many rows were processed within a given duration.
+        /// </summary>
+        /// <param name="count">The number of items processed.</param>
+        /// <param name="duration">The time taken for the operation.</param>
+        /// <param name="noneFormat">Template for zero items (e.g. "No services loaded in {1}").</param>
+        /// <param name="oneFormat">Template for one item (e.g. "Loaded 1 service in {1}").</param>
+        /// <param name="manyFormat">Template for multiple items (e.g. "Loaded {0} services in {1}").</param>
+        /// <returns>
+        /// A string such as:
+        /// <c>No services in 500ms</c>,
+        /// <c>1 service in 2s</c>,
+        /// <c>1,234 logs in 1m 20s</c>.
+        /// </returns>
+        public static string GetRowsInfo(
+            int count,
+            TimeSpan duration,
+            string noneFormat,
+            string oneFormat,
+            string manyFormat)
+        {
+            var durationText = FormatDuration(duration);
+            var countText = FormatNumber(count);
+
+            if (count == 0)
+            {
+                return string.Format(noneFormat, countText, durationText);
+            }
+
+            if (count == 1)
+            {
+                return string.Format(oneFormat, countText, durationText);
+            }
+
+            // Pass the formatted count and the duration to the plural template
+            return string.Format(manyFormat, countText, durationText);
+        }
+
+    }
+}

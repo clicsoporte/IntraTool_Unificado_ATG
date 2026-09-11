@@ -1,0 +1,254 @@
+using Moq;
+using Newtonsoft.Json;
+using Servy.Core.Config;
+using Servy.Core.DTOs;
+using Servy.Core.Helpers;
+using Servy.Core.Resources;
+using Servy.Core.Security;
+using Servy.Core.Services;
+using Servy.Core.Validation;
+
+namespace Servy.Core.UnitTests.Services
+{
+    public class JsonServiceValidatorTests
+    {
+        private readonly JsonServiceValidator _validator;
+        private readonly Mock<IProcessHelper> _processHelperMock;
+
+        public JsonServiceValidatorTests()
+        {
+            _processHelperMock = new Mock<IProcessHelper>();
+            _validator = new JsonServiceValidator(new ServiceValidationRules(_processHelperMock.Object));
+        }
+
+        #region Constructor Tests
+
+        [Fact]
+        public void Constructor_NullRules_ThrowsArgumentNullException()
+        {
+            // Arrange & Act & Assert
+            var ex = Assert.Throws<ArgumentNullException>(() => new JsonServiceValidator(null!));
+            Assert.Equal("serviceValidationRules", ex.ParamName);
+        }
+
+        #endregion
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("    ")]
+        public void TryValidate_NullOrEmptyJson_ReturnsFalse(string? input)
+        {
+            // Arrange
+            var expectedError = string.Format(Strings.Msg_ImportInputEmptyOrWhitespace, "JSON");
+
+            // Act
+            var result = _validator.TryValidate(input, out var error);
+
+            // Assert
+            Assert.False(result);
+            Assert.Equal(expectedError, error);
+        }
+
+        [Fact]
+        public void TryValidate_InvalidJsonFormat_ReturnsFalse()
+        {
+            // Arrange
+            // Structural JSON failure
+            var invalidJson = "{ 'invalid': 'json' ";
+            var expectedPrefix = string.Format(Strings.Msg_ImportInvalidStructure, "JSON", string.Empty).TrimEnd('.', ':', ' ');
+
+            // Act
+            var result = _validator.TryValidate(invalidJson, out var error);
+
+            // Assert
+            Assert.False(result);
+            Assert.StartsWith(expectedPrefix, error);
+        }
+
+        [Fact]
+        public void TryValidate_ValidJson_ButNullObject_ReturnsFalse()
+        {
+            // Arrange
+            // Valid JSON syntax for a null literal
+            var json = "null";
+            var expectedError = string.Format(Strings.Msg_ImportEmptyDefinition, "JSON");
+
+            // Act
+            var result = _validator.TryValidate(json, out var error);
+
+            // Assert
+            Assert.False(result);
+            Assert.Equal(expectedError, error);
+        }
+
+        [Fact]
+        public void TryValidate_DomainValidationFailure_ReturnsFalse()
+        {
+            // Arrange
+            // Testing the shared ServiceValidationRules.Validate branch via DisplayName length
+            var dto = new ServiceDto
+            {
+                Name = "TestService",
+                ExecutablePath = "C:\\path\\to\\exe.exe",
+                DisplayName = new string('A', AppConfig.MaxDisplayNameLength + 1)
+            };
+            var json = JsonConvert.SerializeObject(dto);
+
+            _processHelperMock.Setup(ph => ph.ValidatePath(dto.ExecutablePath, It.IsAny<bool>())).Returns(true);
+
+            // Act
+            var result = _validator.TryValidate(json, out var error);
+
+            // Assert
+            Assert.False(result);
+            Assert.Equal(string.Format(Strings.Msg_DisplayNameLengthReached, AppConfig.MaxDisplayNameLength), error);
+        }
+
+        [Theory]
+        [InlineData(0)]                                // below min
+        [InlineData(AppConfig.MaxStopTimeout + 1)]    // above max
+        public void TryValidate_InvalidStopTimeout_ReturnsFalse(int invalidTimeout)
+        {
+            // Arrange
+            var dto = new ServiceDto
+            {
+                Name = "TestService",
+                ExecutablePath = "C:\\path\\to\\exe.exe",
+                StopTimeout = invalidTimeout
+            };
+            var json = JsonConvert.SerializeObject(dto);
+
+            _processHelperMock.Setup(ph => ph.ValidatePath(dto.ExecutablePath, It.IsAny<bool>())).Returns(true);
+
+            // Act
+            var result = _validator.TryValidate(json, out var error);
+
+            // Assert
+            Assert.False(result);
+            Assert.Equal(string.Format(Strings.Msg_InvalidStopTimeout, AppConfig.MinStopTimeout, AppConfig.MaxStopTimeout), error);
+        }
+
+        [Fact]
+        public void TryValidate_InvalidExecutablePath_ReturnsFalse()
+        {
+            // Arrange
+            // Triggers the ProcessHelper.ValidatePath branch
+            var dto = new ServiceDto
+            {
+                Name = "TestService",
+                ExecutablePath = "C:\\Invalid|Chars\\test.exe"
+            };
+            var json = JsonConvert.SerializeObject(dto);
+
+            _processHelperMock.Setup(ph => ph.ValidatePath(dto.ExecutablePath, It.IsAny<bool>())).Returns(false);
+
+            // Act
+            var result = _validator.TryValidate(json, out var error);
+
+            // Assert
+            Assert.False(result);
+            Assert.Equal(Strings.Msg_InvalidPath, error);
+        }
+
+        [Fact]
+        public void TryValidate_JsonNotMatchingServiceDto_ReturnsFalse()
+        {
+            // Valid JSON, but the shape cannot bind to ServiceDto
+            var json = "[1, 2, 3]";
+            var expectedPrefix = string.Format(Strings.Msg_ImportInvalidStructure, "JSON", string.Empty).TrimEnd('.', ':', ' ');
+
+            var result = _validator.TryValidate(json, out var error);
+
+            Assert.False(result);
+            Assert.StartsWith(expectedPrefix, error);
+        }
+
+        [Fact]
+        public void TryValidate_ValidServiceDto_ReturnsTrue()
+        {
+            // Arrange
+            var dto = new ServiceDto
+            {
+                Name = "TestService",
+                ExecutablePath = "C:\\Windows\\System32\\calc.exe",
+                StopTimeout = 30
+            };
+            var json = JsonConvert.SerializeObject(dto);
+
+            _processHelperMock.Setup(ph => ph.ValidatePath(dto.ExecutablePath, It.IsAny<bool>())).Returns(true);
+
+            // Act
+            var result = _validator.TryValidate(json, out var error);
+
+            // Assert
+            Assert.True(result);
+            Assert.Null(error);
+        }
+
+        [Fact]
+        public void TryValidate_JsonWithUnknownMember_ReturnsFalse()
+        {
+            // Arrange
+            // MissingMemberHandling.Error in JsonSecurity.UntrustedDataSettings must reject a member
+            // that does not exist on ServiceDto, the way the XML twin rejects an unknown element.
+            // Everything else in this payload is valid, so the unknown member is the only reason to fail.
+            var json = "{\"Name\":\"TestService\",\"ExecutablePath\":\"C:\\\\Windows\\\\System32\\\\calc.exe\",\"StopTimeout\":30,\"NotAServiceDtoMember\":123}";
+            var expectedPrefix = string.Format(Strings.Msg_ImportInvalidStructure, "JSON", string.Empty).TrimEnd('.', ':', ' ');
+
+            _processHelperMock.Setup(ph => ph.ValidatePath("C:\\Windows\\System32\\calc.exe", It.IsAny<bool>())).Returns(true);
+
+            // Act
+            var result = _validator.TryValidate(json, out var error);
+
+            // Assert
+            Assert.False(result);
+            Assert.StartsWith(expectedPrefix, error);
+            Assert.Contains("NotAServiceDtoMember", error);
+        }
+
+        [Fact]
+        public void UntrustedDataSettings_PinsDepthAndUnknownMemberHardening()
+        {
+            // Arrange & Act
+            // The MaxDepth guard cannot be reached through TryValidate: ServiceDto exposes only
+            // primitive properties, so a nested payload fails on the first structural mismatch (or on
+            // MissingMemberHandling) long before the reader descends 32 levels. Pin the settings
+            // object instead, which is what deleting either line would silently remove.
+            var settings = JsonSecurity.UntrustedDataSettings;
+
+            // Assert
+            Assert.Equal(AppConfig.UntrustedJsonMaxDepth, settings.MaxDepth);
+            Assert.Equal(MissingMemberHandling.Error, settings.MissingMemberHandling);
+        }
+
+        [Fact]
+        public void TryValidate_PayloadExceedsMaxConfigFileSize_ReturnsFalse()
+        {
+            // Arrange
+            var oversized = new string('x', (int)AppConfig.MaxConfigFileSizeBytes + 1);
+
+            // Act
+            var result = _validator.TryValidate(oversized, out var error);
+
+            // Assert
+            Assert.False(result);
+            Assert.Equal(string.Format(Strings.Msg_ImportPayloadTooLarge, "JSON", AppConfig.MaxConfigFileSizeMB), error);
+        }
+
+        [Fact]
+        public void TryValidate_MultibytePayloadOverByteLimitButUnderCharLimit_ReturnsFalse()
+        {
+            // Arrange
+            // 'é' is 2 bytes in UTF-8: half the char count, same byte count - must still be rejected
+            var oversized = new string('é', ((int)AppConfig.MaxConfigFileSizeBytes / 2) + 1);
+
+            // Act
+            var result = _validator.TryValidate(oversized, out var error);
+
+            // Assert
+            Assert.False(result);
+            Assert.Equal(string.Format(Strings.Msg_ImportPayloadTooLarge, "JSON", AppConfig.MaxConfigFileSizeMB), error);
+        }
+    }
+}

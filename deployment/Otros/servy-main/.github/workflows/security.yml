@@ -1,0 +1,168 @@
+# ==========================================================================================
+# GitHub Actions Workflow - Security Audit
+# ------------------------------------------------------------------------------------------
+# Performs security checks for the Servy project:
+# 1. Dependency Scanning (NuGet Audit)
+# 2. Static Analysis (CodeQL)
+# 3. Secret Scanning (Gitleaks)
+# ==========================================================================================
+
+name: security
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: '30 4 * * 1' # Runs every Monday at 04:30 UTC
+  workflow_dispatch:
+
+# Set base permissions for the entire workflow to read-only
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # 1. Dependency Scanning
+  # Uses native .NET NuGet Audit to check for vulnerable packages
+  dependency-scan:
+    timeout-minutes: 60
+    name: Dependency Scanning
+    runs-on: windows-latest
+
+    env:
+      MAX_RETRIES: 5 # Maximum retry attempts for resilient network down-stream downloads
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 #v6.0.3
+
+      - name: Setup .NET
+        uses: ./.github/actions/setup-dotnet
+        with:
+          max_retries: ${{ env.MAX_RETRIES }}
+
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 #v6.1.0
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore dependencies
+        shell: pwsh
+        run: |
+          dotnet restore Servy.sln
+          if ($LASTEXITCODE -ne 0) { throw "Restore failed for Servy.sln (exit $LASTEXITCODE)" }
+
+      - name: Scan for vulnerable packages
+        shell: pwsh
+        run: |
+          # Keep CLI messages in English so failure output in the log is consistent across runners
+          $env:DOTNET_CLI_UI_LANGUAGE = 'en'
+
+          # Fetch structured analysis data directly via JSON serialization to avoid brittle string matching
+          $rawJson = dotnet list Servy.sln package --vulnerable --include-transitive --format json
+
+          if ($LASTEXITCODE -ne 0) { throw "dotnet list package --vulnerable failed (exit $LASTEXITCODE)." }
+
+          # Pass the raw array through the pipeline instead of using -InputObject.
+          # The pipeline streams the strings sequentially, and ConvertFrom-Json automatically
+          # reassembles them into a single coherent JSON block.
+          $json = $rawJson | ConvertFrom-Json
+          $vuln = @()
+
+          if ($json -and $json.projects) {
+            foreach ($proj in $json.projects) {
+              foreach ($fw in $proj.frameworks) {
+                foreach ($set in @($fw.topLevelPackages, $fw.transitivePackages)) {
+                  foreach ($pkg in $set) {
+                    foreach ($v in $pkg.vulnerabilities) {
+                      $vuln += [PSCustomObject]@{
+                        Project  = Split-Path $proj.path -Leaf
+                        Package  = $pkg.id
+                        Version  = $pkg.resolvedVersion
+                        Severity = $v.severity
+                        Advisory = $v.advisoryurl
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          if ($vuln.Count -gt 0) {
+            $vuln | Format-Table -AutoSize | Out-String | Write-Host
+            throw "Vulnerable NuGet packages detected in Servy.sln - see the table above."
+          }
+          else {
+            Write-Host "No vulnerable NuGet packages found in Servy.sln." -ForegroundColor Green
+          }
+
+  # 2. Static Analysis (SAST)
+  # Uses GitHub CodeQL to find security vulnerabilities in the C# code
+  static-analysis:
+    timeout-minutes: 30
+    name: Static Analysis (CodeQL)
+    runs-on: windows-latest
+
+    env:
+      MAX_RETRIES: 5 # Maximum retry attempts for resilient network down-stream downloads
+
+    # Elevate permissions specifically for CodeQL to write security results
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 #v6.0.3
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@c10b8064de6f491fea524254123dbe5e09572f13 #v4.35.1
+        with:
+          languages: csharp
+          queries: security-extended,security-and-quality
+
+      - name: Setup .NET
+        uses: ./.github/actions/setup-dotnet
+        with:
+          max_retries: ${{ env.MAX_RETRIES }}
+
+      - name: Check .NET version
+        shell: pwsh
+        run: dotnet --version
+
+      - name: Build for Analysis
+        shell: pwsh
+        run: |
+          dotnet build Servy.sln --configuration Debug
+          if ($LASTEXITCODE -ne 0) { throw "Debug build failed for Servy.sln (exit $LASTEXITCODE)" }
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@c10b8064de6f491fea524254123dbe5e09572f13 #v4.35.1
+        with:
+          category: "/language:csharp" # This helps the UI link the report to the summary
+
+  # 3. Secret Scanning
+  # Checks the commit history for leaked credentials, API keys, and tokens
+  secret-scanning:
+    timeout-minutes: 30
+    name: Secret Scanning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 #v6.0.3
+        with:
+          fetch-depth: 0 # Full history is needed for secret scanning
+
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e #v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

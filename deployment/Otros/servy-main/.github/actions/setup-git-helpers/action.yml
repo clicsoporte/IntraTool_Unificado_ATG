@@ -1,0 +1,57 @@
+# ==========================================================================================
+# Composite Action - Setup Git Helpers
+# ------------------------------------------------------------------------------------------
+# Writes the shared git helper functions (Invoke-Git, Invoke-PushWithRetry) to a script in
+# RUNNER_TEMP so later steps in the same job can dot-source them instead of redefining them.
+# ==========================================================================================
+
+name: 'Setup Git Helpers'
+description: 'Writes shared git helper functions (Invoke-Git, Invoke-PushWithRetry) to a script in RUNNER_TEMP for later steps to dot-source.'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Write git helpers to disk
+      shell: pwsh
+      run: |
+        @'
+        # Helper: run git and abort the step immediately on any non-zero exit code.
+        # DO NOT use Invoke-Git for predicate probes where a non-zero exit code is an expected result
+        # (e.g. `rev-parse --verify`, `diff --quiet`, `show-ref --quiet`). Use bare `git` for those.
+        function Invoke-Git {
+            param([Parameter(Mandatory=$true,ValueFromRemainingArguments=$true)][string[]]$GitArgs)
+            & git @GitArgs
+            if ($LASTEXITCODE -ne 0) {
+                Write-Error "git $($GitArgs -join ' ') failed with exit $LASTEXITCODE"
+                exit $LASTEXITCODE
+            }
+        }
+
+        # Helper: pull --rebase then push, retried up to $MaxRetries times for push races.
+        function Invoke-PushWithRetry {
+            param([string]$PullRef, [string]$PushRef, [int]$MaxRetries = 5)
+            for ($i = 0; $i -lt $MaxRetries; $i++) {
+                try {
+                    git rebase --abort 2>$null
+                    git merge  --abort 2>$null
+                    Write-Host "Pull-rebase-push attempt $($i + 1) of $MaxRetries..."
+
+                    git pull --rebase=merges --autostash origin $PullRef
+                    if ($LASTEXITCODE -ne 0) { throw "git pull failed with exit code $LASTEXITCODE" }
+
+                    git push origin $PushRef
+                    if ($LASTEXITCODE -ne 0) { throw "git push failed with exit code $LASTEXITCODE" }
+
+                    Write-Host "Push operation completed successfully!"
+                    return
+                }
+                catch {
+                    if ($i -eq ($MaxRetries - 1)) {
+                        throw "Push operation failed critically after $MaxRetries attempts: $($_.Exception.Message)"
+                    }
+                    Write-Warning "$($_.Exception.Message). Retrying pull-rebase-push in 5 seconds..."
+                    Start-Sleep -Seconds 5
+                }
+            }
+        }
+        '@ | Out-File -FilePath "$env:RUNNER_TEMP\git-helpers.ps1" -Encoding utf8

@@ -1,0 +1,578 @@
+using Servy.Core.Config;
+using Servy.Core.EnvironmentVariables;
+using Servy.Core.Helpers;
+using Servy.Core.Logging;
+using Servy.Core.Validation;
+using System.Diagnostics;
+using System.Text;
+using System.Text.RegularExpressions;
+
+namespace Servy.Service.ProcessManagement
+{
+    /// <summary>
+    /// Provides a centralized utility for launching and monitoring external processes within a Windows Service context.
+    /// Handles environment variable expansion, runtime-specific encoding fixes, and Service Control Manager (SCM) heartbeats.
+    /// </summary>
+    public static class ProcessLauncher
+    {
+        /// <summary>
+        /// A compiled regular expression used to detect an existing <c>-Dfile.encoding</c> system property in Java arguments.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// The pattern <c>(^|\s)(-J)?-Dfile\.encoding([=\s]|$)</c> is designed to avoid false positives by ensuring the
+        /// flag is at the start of the string or preceded by whitespace, and followed by an assignment or a delimiter.
+        /// This prevents matching similar substrings inside file paths or JAR names.
+        /// </para>
+        /// <para>
+        /// The optional <c>(-J)?</c> prefix group handles compiler contexts, ensuring that the alternative
+        /// <c>javac</c> parameter format (<c>-J-Dfile.encoding</c>) is successfully intercepted.
+        /// </para>
+        /// <para>
+        /// This regex uses <see cref="RegexOptions.Compiled"/> for performance during process startup and
+        /// <see cref="AppConfig.InputRegexTimeout"/> to prevent potential Denial of Service (DoS) from backtracking
+        /// on malformed user input.
+        /// </para>
+        /// </remarks>
+        private static readonly Regex JavaFileEncodingRegex = new Regex(
+            @"(^|\s)(-J)?-Dfile\.encoding([=\s]|$)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant, // Java property names are case-sensitive
+            AppConfig.InputRegexTimeout);
+
+        /// <summary>
+        /// Matches canonical Python launcher executable names strictly.
+        /// Evaluates patterns such as 'python', 'pythonw', 'python2', 'python3', 'python3.x', 'py', or 'pyw' without capturing arbitrary prefixes.
+        /// </summary>
+        private static readonly Regex PythonExeRegex = new Regex(
+             @"^(python(w|\d+(\.\d+)?)?|pyw?)$",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,
+            AppConfig.InputRegexTimeout);
+
+        /// <summary>
+        /// Instantiates and configures a standard <see cref="ProcessStartInfo"/> with service-safe defaults,
+        /// environment block expansion, and cross-runtime language infrastructure corrections.
+        /// </summary>
+        /// <param name="executablePath">The full path or binary name of the external executable file to spawn.</param>
+        /// <param name="arguments">The raw command-line arguments to pass to the executable; can be null or empty.</param>
+        /// <param name="workingDirectory">The startup working directory for the process. If null or whitespace, defaults to the executable's directory location.</param>
+        /// <param name="environmentVariables">A list of <see cref="EnvironmentVariable"/> objects containing custom keys and values to inject into the execution scope.</param>
+        /// <param name="enableConsoleUI">If set to <c>true</c>, preserves standard I/O handles and shows the window; if <c>false</c>, hides the process window and redirects streams for logging capture.</param>
+        /// <param name="logger">The <see cref="IServyLogger"/> instance used to emit environmental auditing and telemetry data; can be null.</param>
+        /// <param name="auditContext">A descriptive keyword or method name specifying the operational scope to include in security audit trail logs.</param>
+        /// <returns>An initialized and configured <see cref="ProcessStartInfo"/> object ready to be passed to a process factory or wrapper instance.</returns>
+        public static ProcessStartInfo CreateStartInfo(
+            string executablePath,
+            string arguments,
+            string? workingDirectory,
+            List<EnvironmentVariable> environmentVariables,
+            bool enableConsoleUI,
+            IServyLogger? logger,
+            string auditContext)
+        {
+            // 1. Resolve environment variables and arguments
+            var (expandedEnv, finalArgs) = Helpers.ProcessHelper.ExpandAndAudit(environmentVariables, arguments ?? string.Empty, logger, auditContext);
+
+            // 2. Configure ProcessStartInfo with unified defaults
+            var psi = new ProcessStartInfo
+            {
+                FileName = executablePath,
+                Arguments = finalArgs,
+                WorkingDirectory = string.IsNullOrWhiteSpace(workingDirectory)
+                    ? Path.GetDirectoryName(executablePath) ?? string.Empty
+                    : workingDirectory,
+                UseShellExecute = false,
+                CreateNoWindow = !enableConsoleUI,
+                RedirectStandardOutput = !enableConsoleUI,
+                RedirectStandardError = !enableConsoleUI,
+            };
+
+            if (!enableConsoleUI)
+            {
+                psi.StandardOutputEncoding = Encoding.UTF8;
+                psi.StandardErrorEncoding = Encoding.UTF8;
+            }
+
+            // 3. Apply the environment block
+            foreach (var envVar in expandedEnv)
+            {
+                psi.Environment[envVar.Key] = envVar.Value ?? string.Empty;
+            }
+
+            // 4. Apply runtime-specific fixes
+            ApplyLanguageFixes(psi, logger);
+
+            return psi;
+        }
+
+        /// <summary>
+        /// Orchestrates the initialization and startup of an external process based on the provided options.
+        /// </summary>
+        /// <remarks>
+        /// This implementation implements lazy-loading to prevent zero-byte log file sprawl
+        /// and uses local path captures to satisfy compiler null-safety analysis inside event handlers.
+        /// </remarks>
+        /// <param name="options">The configuration parameters for the process launch.</param>
+        /// <param name="factory">The factory used to create the process wrapper.</param>
+        /// <param name="logger">The logger instance for operational telemetry.</param>
+        /// <returns>An initialized and started <see cref="IProcessWrapper"/>.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="options"/> is null.</exception>
+        /// <exception cref="ArgumentException">Thrown when the executable path is empty, or a synchronous launch is requested with a non-positive TimeoutMs or WaitChunkMs.</exception>
+        /// <exception cref="System.ComponentModel.Win32Exception">Thrown when the OS refuses to start the executable, most commonly because the path does not exist or is not executable. <see cref="ProcessStartInfo.UseShellExecute"/> is false, so this is the failure mode for an unstartable executable.</exception>
+        /// <exception cref="TimeoutException">Thrown if a synchronous wait operation exceeds the configured timeout.</exception>
+        public static IProcessWrapper Start(
+            ProcessLaunchOptions options,
+            IProcessFactory factory,
+            IServyLogger logger)
+        {
+            // 0. Precondition Validation
+            if (options == null) throw new ArgumentNullException(nameof(options));
+
+            if (string.IsNullOrWhiteSpace(options.ExecutablePath))
+            {
+                throw new ArgumentException("Executable path must be provided.", nameof(options));
+            }
+
+            if (!options.FireAndForget && options.TimeoutMs <= 0)
+            {
+                throw new ArgumentException(
+                    "Synchronous launch requires TimeoutMs > 0. Set FireAndForget = true for unbounded launches.",
+                    nameof(options));
+            }
+
+            if (!options.FireAndForget && options.WaitChunkMs <= 0)
+            {
+                throw new ArgumentException(
+                    "Synchronous launch requires WaitChunkMs > 0.",
+                    nameof(options));
+            }
+
+            // 1. Delegate generation to our unified static factory step
+            var redirectOutput = !options.EnableConsoleUI && options.RedirectToWriters && !options.FireAndForget;
+            var psi = CreateStartInfo(
+                options.ExecutablePath,
+                options.Arguments ?? string.Empty,
+                options.StartupDirectory,
+                options.EnvironmentVariables,
+                options.EnableConsoleUI,
+                logger,
+                options.AuditContext);
+
+            // Re-derive redirection per stream: only redirect a stream whose target path is actually configured
+            psi.RedirectStandardOutput = redirectOutput && !string.IsNullOrWhiteSpace(options.StdoutPath);
+            psi.RedirectStandardError = redirectOutput && !string.IsNullOrWhiteSpace(options.StderrPath);
+
+            if (!psi.RedirectStandardOutput) psi.StandardOutputEncoding = null;
+            if (!psi.RedirectStandardError) psi.StandardErrorEncoding = null;
+
+            // 2. Launch the process
+            var process = factory.Create(psi, logger);
+
+            // ROBUSTNESS: Track ownership. If the method fails before returning,
+            // we must terminate the process and dispose the wrapper to prevent handle and process leaks.
+            bool returnedOwnership = false;
+
+            StreamWriter? stdoutWriter = null;
+            StreamWriter? stderrWriter = null;
+
+            DataReceivedEventHandler? outHandler = null;
+            DataReceivedEventHandler? errHandler = null;
+
+            // Failure latches to prevent log-spam if file access is denied
+            bool stdoutWriterFailed = false;
+            bool stderrWriterFailed = false;
+
+            string? normalizedOut = Helper.NormalizePath(options.StdoutPath);
+            string? normalizedErr = Helper.NormalizePath(options.StderrPath);
+
+            bool pathsMatch =
+                normalizedOut != null
+                && normalizedErr != null
+                && string.Equals(normalizedOut, normalizedErr, StringComparison.OrdinalIgnoreCase);
+
+            bool processStarted = false;
+            try
+            {
+                // UseShellExecute is false, so Start() cannot return false (there is no process to reuse):
+                // an unstartable executable surfaces as Win32Exception.
+                process.Start();
+                processStarted = true;
+
+                // 3. Handle execution mode
+                if (options.FireAndForget)
+                {
+                    returnedOwnership = true;
+                    return process;
+                }
+
+                // Sync objects with strong identity (local to this execution)
+                object stdoutLock = new object();
+                // If paths match, we must synchronize both streams on the exact same lock
+                object stderrLock = pathsMatch ? stdoutLock : new object();
+                var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
+                // Capture paths into local variables to satisfy null-safety analysis
+                // and ensure the closure uses a stable, non-null reference.
+                string? outPath = options.StdoutPath;
+                string? errPath = options.StderrPath;
+
+                // Setup StdOut Writer (Lazy Init)
+                if (psi.RedirectStandardOutput)
+                {
+                    outHandler = (_, e) =>
+                    {
+                        if (e.Data == null) return;
+
+                        try
+                        {
+                            lock (stdoutLock)
+                            {
+                                if (stdoutWriterFailed) return;
+
+                                if (stdoutWriter == null)
+                                {
+                                    stdoutWriter = TryOpenAppendWriter(outPath!, encoding, options.ExecutablePath, "stdout", logger);
+                                    if (stdoutWriter == null)
+                                    {
+                                        stdoutWriterFailed = true;
+                                        return;
+                                    }
+                                }
+                                stdoutWriter.WriteLine(e.Data);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            // Log via the supervisor's logger, never propagate out of the handler
+                            try { logger.Warn($"Failed to write stdout line for '{options.ExecutablePath}': {ex.Message}"); } catch { /* Fail-silent */ }
+                        }
+                    };
+                    process.OutputDataReceived += outHandler;
+                }
+
+                // Setup StdErr Writer (Lazy Init)
+                if (psi.RedirectStandardError)
+                {
+                    errHandler = (_, e) =>
+                    {
+                        if (e.Data == null) return;
+
+                        try
+                        {
+                            lock (stderrLock)
+                            {
+                                if (pathsMatch)
+                                {
+                                    // Multiplexing into the same file
+                                    if (stdoutWriterFailed) return;
+
+                                    if (stdoutWriter == null)
+                                    {
+                                        stdoutWriter = TryOpenAppendWriter(outPath!, encoding, options.ExecutablePath, "multiplexed stdout/stderr", logger);
+                                        if (stdoutWriter == null)
+                                        {
+                                            stdoutWriterFailed = true;
+                                            return;
+                                        }
+                                    }
+                                    stdoutWriter.WriteLine(e.Data);
+                                }
+                                else
+                                {
+                                    // Independent file
+                                    if (stderrWriterFailed) return;
+
+                                    if (stderrWriter == null)
+                                    {
+                                        stderrWriter = TryOpenAppendWriter(errPath!, encoding, options.ExecutablePath, "stderr", logger);
+                                        if (stderrWriter == null)
+                                        {
+                                            stderrWriterFailed = true;
+                                            return;
+                                        }
+                                    }
+                                    stderrWriter.WriteLine(e.Data);
+                                }
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            // Log via the supervisor's logger, never propagate out of the handler
+                            try { logger.Warn($"Failed to write stderr line for '{options.ExecutablePath}': {ex.Message}"); } catch { /* Fail-silent */ }
+                        }
+                    };
+                    process.ErrorDataReceived += errHandler;
+                }
+
+                if (psi.RedirectStandardOutput) process.BeginOutputReadLine();
+                if (psi.RedirectStandardError) process.BeginErrorReadLine();
+
+                // Synchronous mode: Wait for exit while pulsing the SCM
+                WaitForExitWithHeartbeat(process, options, logger);
+
+                // Drain async OutputDataReceived/ErrorDataReceived events with a bounded wait.
+                // Process is already exited; this only flushes the event queue.
+                try
+                {
+                    Task.Run(process.WaitForExit).Wait(AppConfig.OutputDrainTimeoutMs);
+                }
+                catch { /* fail-silent - drain is best-effort */ }
+
+                // Stop the pumps before the writers they close over are disposed in the finally block (#5628)
+                if (psi.RedirectStandardOutput)
+                {
+                    try { process.CancelOutputRead(); } catch { /* already stopped */ }
+                    if (outHandler != null) process.OutputDataReceived -= outHandler;
+                }
+                if (psi.RedirectStandardError)
+                {
+                    try { process.CancelErrorRead(); } catch { /* already stopped */ }
+                    if (errHandler != null) process.ErrorDataReceived -= errHandler;
+                }
+
+                returnedOwnership = true;
+                return process;
+            }
+            catch (TimeoutException)
+            {
+                throw; // already logged at the configured severity inside WaitForExitWithHeartbeat
+            }
+            catch (Exception ex)
+            {
+                string pathValue = options.ExecutablePath;
+                logger.Error($"Failed during synchronous execution or log flushing for '{pathValue}'.", ex);
+                throw;
+            }
+            finally
+            {
+                // Dispose writers safely to release file locks.
+                try { stdoutWriter?.Dispose(); }
+                catch (Exception ex) { logger.Warn($"Failed to dispose stdout writer: {ex.Message}"); }
+
+                if (!pathsMatch)
+                {
+                    try { stderrWriter?.Dispose(); }
+                    catch (Exception ex) { logger.Warn($"Failed to dispose stderr writer: {ex.Message}"); }
+                }
+
+                if (!returnedOwnership && process != null)
+                {
+                    // ROBUSTNESS: If we didn't successfully return ownership, the process is orphaned.
+                    // We must kill the process tree before disposing the wrapper to avoid leaking child processes.
+                    try
+                    {
+                        // Check if the process actually started and is still running.
+                        // process.Start() is the first entry in the try block; if any subsequent logic throws,
+                        // we must ensure the child does not remain active and unsupervised.
+                        if (processStarted && !process.HasExited)
+                            process.Kill(true);
+                    }
+                    catch (Exception killEx)
+                    {
+                        // Log but don't rethrow, as we need the original exception to propagate.
+                        logger.Warn($"Failed to kill orphaned child after launch failure: {killEx.Message}");
+                    }
+                    process.Dispose();   // always dispose the wrapper we own
+                }
+            }
+        }
+
+        /// <summary>
+        /// Performs a synchronous wait for process exit while periodically updating the Windows SCM to prevent service timeouts.
+        /// </summary>
+        private static void WaitForExitWithHeartbeat(IProcessWrapper process, ProcessLaunchOptions options, IServyLogger logger)
+        {
+            var sw = Stopwatch.StartNew();
+            while (true)
+            {
+                long remaining = options.TimeoutMs - sw.ElapsedMilliseconds;
+                if (remaining <= 0)
+                {
+                    // Final non-blocking poll
+                    if (process.WaitForExit(0)) return;
+
+                    var errorMsg = $"{options.ExecutablePath} timed out after {options.TimeoutMs}ms. Terminating process tree.";
+                    if (options.LogErrorAsWarning) logger.Warn(errorMsg); else logger.Error(errorMsg);
+                    process.Kill(true);
+                    throw new TimeoutException($"{options.ExecutablePath} exceeded the maximum allowed timeout of {options.TimeoutMs}ms.");
+                }
+
+                int chunk = (int)Math.Min(options.WaitChunkMs, remaining);
+                if (process.WaitForExit(chunk)) return;
+                options.OnScmHeartbeat?.Invoke(options.ScmAdditionalTimeMs);
+            }
+        }
+
+        /// <summary>
+        /// Applies environment variables and command-line flags to ensure consistent UTF-8 I/O behavior for known runtimes.
+        /// Detection matches the executable's filename stem (extension and directory are ignored) against anchored patterns,
+        /// so directory names containing 'python' or 'java' cannot trigger it. A shim whose stem is one of the recognised
+        /// names, such as java.cmd, is treated as the runtime itself.
+        /// </summary>
+        /// <param name="psi">The start info to modify.</param>
+        /// <param name="logger">The logger instance for operational telemetry.</param>
+        public static void ApplyLanguageFixes(ProcessStartInfo psi, IServyLogger? logger)
+        {
+            if (psi == null || string.IsNullOrEmpty(psi.FileName))
+            {
+                return;
+            }
+
+            string fileNameOnly = Path.GetFileNameWithoutExtension(psi.FileName);
+
+            // Python Logic:
+            // Matches 'python', 'pythonw', 'python2', 'python3', or 'python3.x' patterns.
+            bool isPython;
+            try { isPython = PythonExeRegex.IsMatch(fileNameOnly); }
+            catch (RegexMatchTimeoutException ex)
+            {
+                logger?.Warn($"ApplyLanguageFixes: Python detection regex timed out on '{fileNameOnly}' ({ex.Message}); assuming not Python.");
+                isPython = false;
+            }
+
+            if (isPython)
+            {
+                SetIfMissing(psi, "PYTHONLEGACYWINDOWSSTDIO", "0");
+                SetIfMissing(psi, "PYTHONIOENCODING", "utf-8");
+                SetIfMissing(psi, "PYTHONUTF8", "1");
+                SetIfMissing(psi, "PYTHONUNBUFFERED", "1");
+            }
+
+            // Java Logic:
+            // Separate 'javac' (Java Compiler) from 'java'/'javaw' (Java Runtime Engines)
+            // to support distinct flag formatting boundaries (-J-D vs -D).
+            bool isJavaRuntime =
+                string.Equals(fileNameOnly, "java", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(fileNameOnly, "javaw", StringComparison.OrdinalIgnoreCase);
+
+            bool isJavaCompiler = string.Equals(fileNameOnly, "javac", StringComparison.OrdinalIgnoreCase);
+
+            if (isJavaRuntime || isJavaCompiler)
+            {
+                string currentArgs = psi.Arguments ?? string.Empty;
+
+                bool hasEncoding;
+                try
+                {
+                    hasEncoding = JavaFileEncodingRegex.IsMatch(currentArgs);
+                }
+                catch (RegexMatchTimeoutException ex)
+                {
+                    logger?.Warn($"ApplyLanguageFixes: -Dfile.encoding detection regex timed out on Java arguments ({ex.Message}); assuming not present.");
+                    hasEncoding = false;
+                }
+
+                if (!hasEncoding)
+                {
+                    if (isJavaCompiler)
+                    {
+                        // Prepend with the critical -J flag to prevent javac from rejecting the system property flag option
+                        psi.Arguments = $"-J-Dfile.encoding=UTF-8 {currentArgs}".Trim();
+                    }
+                    else
+                    {
+                        // Standard bare declaration assignment for java/javaw
+                        psi.Arguments = $"-Dfile.encoding=UTF-8 {currentArgs}".Trim();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Sets an environment variable in the specified <see cref="ProcessStartInfo"/> only if
+        /// the key does not already exist in the current environment block.
+        /// </summary>
+        /// <remarks>
+        /// This utility ensures that default runtime settings do not overwrite
+        /// explicit user-defined environment configurations.
+        /// </remarks>
+        /// <param name="psi">The process start information containing the environment block to modify.</param>
+        /// <param name="key">The name of the environment variable key.</param>
+        /// <param name="value">The value to assign to the key if missing.</param>
+        private static void SetIfMissing(ProcessStartInfo psi, string key, string value)
+        {
+            // Perform a safe check against the existing environment dictionary
+            if (!psi.Environment.ContainsKey(key))
+            {
+                psi.Environment[key] = value;
+            }
+        }
+
+        /// <summary>
+        /// Attempts to initialize a file log writer in append mode with broad thread-sharing permissions.
+        /// Ensures the target directory exists and safely disposes file streams if opening fails.
+        /// Rejects paths traversing directory junctions or symbolic links to prevent privilege escalation attacks.
+        /// </summary>
+        /// <param name="path">The target destination absolute disk path for log output.</param>
+        /// <param name="encoding">The text encoding for the log file.</param>
+        /// <param name="exePath">The executable path, used only for log/error messages.</param>
+        /// <param name="scope">A label (e.g. 'stdout' or 'stderr') used in failure log messages.</param>
+        /// <param name="logger">The operational logging instance to output tracing to.</param>
+        /// <returns>An active autoflushing <see cref="StreamWriter"/> instance if initialization succeeds; otherwise, <c>null</c>.</returns>
+        private static StreamWriter? TryOpenAppendWriter(string path, Encoding encoding, string exePath, string scope, IServyLogger logger)
+        {
+            FileStream? fs = null;
+            try
+            {
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    logger.Error($"Disabling {scope} capture for '{exePath}': log path is empty.");
+                    return null;
+                }
+
+                string fullPath = Path.GetFullPath(path);
+
+                // 1. Check whether any parent or ancestor directory is a reparse point (junction/symlink)
+                if (Helper.HasAncestorReparsePoint(fullPath))
+                {
+                    logger.Error($"Refusing to write {scope} for '{exePath}': a directory in '{path}' is a junction, symbolic link, or mount point.");
+                    return null;
+                }
+
+                Helper.EnsureDirectoryExists(fullPath);
+
+                // Re-verify ancestor directories after EnsureDirectoryExists creates any missing paths
+                if (Helper.HasAncestorReparsePoint(fullPath))
+                {
+                    logger.Error($"Refusing to write {scope} for '{exePath}': a directory in '{path}' is a junction, symbolic link, or mount point.");
+                    return null;
+                }
+
+                // 2. Check if the target file itself is a reparse point
+                if (File.Exists(fullPath))
+                {
+                    var fileInfo = new FileInfo(fullPath);
+                    if (fileInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
+                    {
+                        logger.Error($"Refusing to write {scope} for '{exePath}': target file '{path}' is a junction, symbolic link, or mount point.");
+                        return null;
+                    }
+                }
+
+                fs = new FileStream(fullPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+
+                // 3. Verify the resolved handle path matches the intended target to defend against race conditions / symlink swaps
+                if (!PathSecurityGuard.TryGetFinalPathByHandle(fs.SafeFileHandle, out string handleFinalPath))
+                {
+                    logger.Error($"Refusing to write {scope} for '{exePath}': could not resolve the opened handle to a path.");
+                    fs.Dispose();
+                    return null;
+                }
+
+                if (!string.Equals(Path.GetFullPath(handleFinalPath), fullPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    logger.Error($"Refusing to write {scope} for '{exePath}': target handle path '{handleFinalPath}' does not match expected path '{fullPath}'.");
+                    fs.Dispose();
+                    return null;
+                }
+
+                return new StreamWriter(fs, encoding) { AutoFlush = true };
+            }
+            catch (Exception ex)
+            {
+                fs?.Dispose();
+                logger.Error($"Disabling {scope} capture for '{exePath}' after open failure.", ex);
+                return null;
+            }
+        }
+    }
+}

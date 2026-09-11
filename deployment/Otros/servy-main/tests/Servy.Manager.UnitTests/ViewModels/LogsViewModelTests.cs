@@ -1,0 +1,553 @@
+using Microsoft.Extensions.DependencyInjection;
+using Moq;
+using Servy.Core.DTOs;
+using Servy.Core.Enums;
+using Servy.Core.Helpers;
+using Servy.Core.Services;
+using Servy.Manager.Config;
+using Servy.Manager.Models;
+using Servy.Manager.Resources;
+using Servy.Manager.ViewModels;
+using Servy.Testing;
+using Servy.UI.Services;
+using Helper = Servy.Testing.Helper;
+
+namespace Servy.Manager.UnitTests.ViewModels
+{
+    [Collection(AmbientTestCollection.Name)]
+    public class LogsViewModelTests
+    {
+        private readonly Mock<IAppConfiguration> _appConfigurationMock;
+        private readonly Mock<IEventLogService> _eventLogServiceMock;
+        private readonly Mock<ICursorService> _cursorServiceMock;
+        private readonly Mock<IProcessKiller> _mockProcessKiller;
+        private readonly Mock<IMessageBoxService> _mockMessageBoxService;
+
+        public LogsViewModelTests()
+        {
+            _appConfigurationMock = new Mock<IAppConfiguration>();
+            _eventLogServiceMock = new Mock<IEventLogService>();
+            _cursorServiceMock = new Mock<ICursorService>();
+            _mockProcessKiller = new Mock<IProcessKiller>();
+            _mockMessageBoxService = new Mock<IMessageBoxService>();
+
+            _appConfigurationMock.Setup(c => c.LogsWindowDays).Returns(7);
+        }
+
+        private LogsViewModel CreateViewModel()
+        {
+            return new LogsViewModel(
+                _appConfigurationMock.Object,
+                _eventLogServiceMock.Object,
+                _cursorServiceMock.Object,
+                _mockMessageBoxService.Object);
+        }
+
+        #region Constructor Guard Clauses & Initialization Tests
+
+        [Fact]
+        public void Constructor_NullAppConfig_ThrowsArgumentNullException()
+        {
+            Assert.Throws<ArgumentNullException>("appConfig", () => new LogsViewModel(
+                null!, _eventLogServiceMock.Object, _cursorServiceMock.Object, _mockMessageBoxService.Object));
+        }
+
+        [Fact]
+        public void Constructor_NullEventLogService_ThrowsArgumentNullException()
+        {
+            Assert.Throws<ArgumentNullException>("eventLogService", () => new LogsViewModel(
+                _appConfigurationMock.Object, null!, _cursorServiceMock.Object, _mockMessageBoxService.Object));
+        }
+
+        [Fact]
+        public void Constructor_NullCursorService_ThrowsArgumentNullException()
+        {
+            Assert.Throws<ArgumentNullException>("cursorService", () => new LogsViewModel(
+                _appConfigurationMock.Object, _eventLogServiceMock.Object, null!, _mockMessageBoxService.Object));
+        }
+
+        [Fact]
+        public void Constructor_NullMessageBoxService_ThrowsArgumentNullException()
+        {
+            Assert.Throws<ArgumentNullException>("messageBoxService", () => new LogsViewModel(
+                _appConfigurationMock.Object, _eventLogServiceMock.Object, _cursorServiceMock.Object, null!));
+        }
+
+        [Fact]
+        public void Constructor_ShouldInitializeDefaults()
+        {
+            using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+            using (var vm = CreateViewModel())
+            {
+                // Assert
+                Assert.NotNull(vm.LogsView);
+                Assert.NotNull(vm.SearchCommand);
+                Assert.False(vm.IsBusy);
+                Assert.Equal(Strings.Button_Search, vm.SearchButtonText);
+                var expectedFrom = DateTime.Now.AddDays(-7);
+                Assert.NotNull(vm.FromDate);
+                Assert.NotNull(vm.ToDate);
+                Assert.True((vm.FromDate.Value - expectedFrom).Duration() < TimeSpan.FromMinutes(1));
+                Assert.True((vm.ToDate.Value - DateTime.Now).Duration() < TimeSpan.FromMinutes(1));
+                Assert.Equal(EventLogLevel.All, vm.SelectedLevel);
+            }
+        }
+
+        [Fact]
+        public void ResetDateWindowToNow_AfterConstruction_ReSeedsBothEndsOfTheWindow()
+        {
+            using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+            using (var vm = CreateViewModel())
+            {
+                // Arrange - a Manager left open long enough for the constructor's window to go stale
+                var stale = new DateTime(2020, 1, 1);
+                vm.FromDate = stale;
+                vm.ToDate = stale;
+
+                // Act
+                vm.ResetDateWindowToNow();
+
+                // Assert - the window now ends at "now" and spans LogsWindowDays (mocked to 7),
+                // which the constructor test cannot show because it starts from an unset window.
+                Assert.NotNull(vm.FromDate);
+                Assert.NotNull(vm.ToDate);
+                Assert.True((vm.ToDate.Value - DateTime.Now).Duration() < TimeSpan.FromMinutes(1));
+                Assert.True((vm.ToDate.Value - vm.FromDate.Value - TimeSpan.FromDays(7)).Duration() < TimeSpan.FromMinutes(1));
+            }
+        }
+
+        #endregion
+
+        #region Properties & Change Notification Validation Tests
+
+        [Fact]
+        public void PropertyChanged_IsRaised()
+        {
+            using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+            using (var vm = CreateViewModel())
+            {
+                // Arrange
+                string? propertyName = null;
+                vm.PropertyChanged += (s, e) => propertyName = e.PropertyName;
+
+                // Act
+                vm.IsBusy = true;
+
+                // Assert
+                Assert.Equal(nameof(LogsViewModel.IsBusy), propertyName);
+            }
+        }
+
+        [Fact]
+        public void Properties_DuplicateAssignments_DoNotRaisePropertyChanged()
+        {
+            using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+            using (var vm = CreateViewModel())
+            {
+                // Arrange
+                var staticDate = new DateTime(2026, 6, 8);
+                vm.FromDate = staticDate;
+                vm.ToDate = staticDate;
+                vm.SearchButtonText = "Search";
+                vm.Keyword = "Clean";
+                vm.FooterText = "Ready";
+
+                int notificationCount = 0;
+                vm.PropertyChanged += (s, e) => notificationCount++;
+
+                // Act
+                vm.IsBusy = false;
+                vm.FooterText = "Ready";
+                vm.SearchButtonText = "Search";
+                vm.FromDate = staticDate;
+                vm.FromDateMaxDate = vm.FromDateMaxDate;
+                vm.ToDate = staticDate;
+                vm.ToDateMinDate = vm.ToDateMinDate;
+                vm.Keyword = "Clean";
+                vm.SelectedLogMessage = null;
+
+                // Assert
+                Assert.Equal(0, notificationCount);
+            }
+        }
+
+        [Fact]
+        public void FromDate_ShouldUpdate_ToDateMinDate()
+        {
+            using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+            using (var vm = CreateViewModel())
+            {
+                // Arrange
+                var newDate = DateTime.Today.AddDays(-5);
+
+                // Act
+                vm.FromDate = newDate;
+
+                // Assert
+                Assert.Equal(newDate, vm.ToDateMinDate);
+            }
+        }
+
+        [Fact]
+        public void ToDate_ShouldUpdate_FromDateMaxDate()
+        {
+            using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+            using (var vm = CreateViewModel())
+            {
+                // Arrange
+                var newDate = DateTime.Today;
+
+                // Act
+                vm.ToDate = newDate;
+
+                // Assert
+                Assert.Equal(newDate, vm.FromDateMaxDate);
+            }
+        }
+
+        [Fact]
+        public void Keyword_PropertyMutates_RaisesNotificationCorrectly()
+        {
+            using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+            using (var vm = CreateViewModel())
+            {
+                // Arrange
+                string? changedProp = null;
+                vm.PropertyChanged += (s, e) => changedProp = e.PropertyName;
+
+                // Act
+                vm.Keyword = "ServyAgent";
+
+                // Assert
+                Assert.Equal("ServyAgent", vm.Keyword);
+                Assert.Equal(nameof(LogsViewModel.Keyword), changedProp);
+            }
+        }
+
+        [Fact]
+        public void SelectedLevel_PropertyMutates_RaisesNotificationCorrectly()
+        {
+            using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+            using (var vm = CreateViewModel())
+            {
+                // Arrange
+                string? changedProp = null;
+                vm.PropertyChanged += (s, e) => changedProp = e.PropertyName;
+
+                // Act
+                vm.SelectedLevel = EventLogLevel.Error;
+
+                // Assert
+                Assert.Equal(EventLogLevel.Error, vm.SelectedLevel);
+                Assert.Equal(nameof(LogsViewModel.SelectedLevel), changedProp);
+            }
+        }
+
+        [Fact]
+        public void FooterText_PropertyMutates_RaisesNotificationCorrectly()
+        {
+            using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+            using (var vm = CreateViewModel())
+            {
+                // Arrange
+                string? changedProp = null;
+                vm.PropertyChanged += (s, e) => changedProp = e.PropertyName;
+
+                // Act
+                vm.FooterText = "Rows processed cleanly";
+
+                // Assert
+                Assert.Equal("Rows processed cleanly", vm.FooterText);
+                Assert.Equal(nameof(LogsViewModel.FooterText), changedProp);
+            }
+        }
+
+        [Fact]
+        public void SelectedLog_SetToNull_ClearsSelectedLogMessage()
+        {
+            using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+            using (var vm = CreateViewModel())
+            {
+                // Arrange
+                vm.SelectedLog = new LogEntryModel { Message = "Error Context" };
+
+                // Act
+                vm.SelectedLog = null;
+
+                // Assert
+                Assert.Null(vm.SelectedLog);
+                Assert.Equal(string.Empty, vm.SelectedLogMessage);
+            }
+        }
+
+        [Fact]
+        public void LogLevels_Get_ExcludesCriticalAndVerbose()
+        {
+            // Arrange - derive the expectation from the enum itself, so a new EventLogLevel member
+            // forces a decision here instead of entering the dropdown unnoticed.
+            var excluded = new[] { EventLogLevel.Critical, EventLogLevel.Verbose };
+            var expected = Enum.GetValues(typeof(EventLogLevel))
+                .Cast<EventLogLevel>()
+                .Except(excluded)
+                .ToList();
+
+            // Act
+            var levels = LogsViewModel.LogLevels;
+
+            // Assert - pins content, order and count in one assertion
+            Assert.Equal(expected, levels);
+            Assert.All(excluded, level => Assert.DoesNotContain(level, levels));
+        }
+
+        #endregion
+
+        #region Search Pipeline Asynchronous Workflow & Exception Circuit Tests
+
+        [Fact]
+        public async Task SearchCommand_ShouldPopulateLogs_AndRaiseScrollEvent()
+        {
+            await Helper.RunOnSTA(async () =>
+            {
+                using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+                {
+                    // Arrange
+                    var entries = new List<ServyEventLogEntry>
+                    {
+                        new ServyEventLogEntry { EventId = 1, Time = DateTimeOffset.Now, Level = EventLogLevel.Information, Message = "test message" }
+                    };
+
+                    _eventLogServiceMock
+                        .Setup(s => s.SearchAsync(It.IsAny<EventLogLevel?>(), It.IsAny<DateTime?>(), It.IsAny<DateTime?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                        .ReturnsAsync(entries);
+
+                    using (var vm = CreateViewModel())
+                    {
+                        var scrollEventSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                        vm.ScrollLogsToTopRequested += () => scrollEventSource.TrySetResult(true);
+
+                        // Act
+                        var searchTask = vm.SearchCommand.ExecuteAsync(null);
+
+                        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(5));
+                        var completedTask = await Task.WhenAny(scrollEventSource.Task, timeoutTask);
+
+                        if (completedTask == timeoutTask)
+                        {
+                            throw new TimeoutException("The ScrollLogsToTopRequested event failed to fire within the allocated safety window.");
+                        }
+
+                        await searchTask;
+
+                        // Assert
+                        using (var enumerator = vm.LogsView.SourceCollection.Cast<LogEntryModel>().GetEnumerator())
+                        {
+                            Assert.True(enumerator.MoveNext());
+                            Assert.False(enumerator.MoveNext());
+                            Assert.True(scrollEventSource.Task.Result);
+                            Assert.Equal(Strings.Button_Search, vm.SearchButtonText);
+                            Assert.False(vm.IsBusy);
+
+                            _cursorServiceMock.Verify(c => c.SetWaitCursor(), Times.Once);
+                            _cursorServiceMock.Verify(c => c.ResetCursor(), Times.Once);
+                        }
+                    }
+                }
+            }, createApp: true);
+        }
+
+        [Fact]
+        public async Task Search_PrivateMethodInvokedTwice_CancelsPreviousCts()
+        {
+            await Helper.RunOnSTA(async () =>
+            {
+                using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+                using (var vm = CreateViewModel())
+                {
+                    // Arrange
+                    var firstSearchTcs = new TaskCompletionSource<IEnumerable<ServyEventLogEntry>>();
+                    var secondSearchTcs = new TaskCompletionSource<IEnumerable<ServyEventLogEntry>>();
+
+                    var searchCallCount = 0;
+                    _eventLogServiceMock
+                        .Setup(s => s.SearchAsync(It.IsAny<EventLogLevel?>(), It.IsAny<DateTime?>(), It.IsAny<DateTime?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                        .Returns(() =>
+                        {
+                            searchCallCount++;
+                            return searchCallCount == 1 ? firstSearchTcs.Task : secondSearchTcs.Task;
+                        });
+
+                    // Act - 1. Fire the first background lookup
+                    var firstSearchTask = (Task)TestReflection.InvokeNonPublic(vm, "Search", new object[] { null! })!;
+
+                    // 2. Poll until the first token reference is registered inside the model
+                    await Helper.WaitUntilAsync(
+                        () => TestReflection.GetField<CancellationTokenSource>(vm, "_searchCts") != null,
+                        TimeSpan.FromSeconds(2),
+                        TimeSpan.FromMilliseconds(10),
+                        TestContext.Current.CancellationToken);
+
+                    CancellationTokenSource firstCtsInstance = TestReflection.GetField<CancellationTokenSource>(vm, "_searchCts")!;
+                    Assert.NotNull(firstCtsInstance); // Guard rail assertion
+
+                    // 3. Invoke the private method directly a second time to force the atomic Interlocked swap loop
+                    var secondSearchTask = (Task)TestReflection.InvokeNonPublic(vm, "Search", new object[] { null! })!;
+
+                    // Assert - Verify that the original token was forced into a cancelled state immediately
+                    Assert.True(firstCtsInstance.IsCancellationRequested, "The previous CancellationTokenSource was not cancelled by the subsequent search.");
+                    Assert.Throws<ObjectDisposedException>(() => _ = firstCtsInstance.Token);
+
+                    // 4. Tear down task blocks cleanly
+                    firstSearchTcs.TrySetResult(Array.Empty<ServyEventLogEntry>());
+                    secondSearchTcs.TrySetResult(Array.Empty<ServyEventLogEntry>());
+
+                    await Task.WhenAll(firstSearchTask, secondSearchTask);
+                }
+            }, createApp: true);
+        }
+
+        [Fact]
+        public async Task SearchCommand_ServiceThrowsException_RestoresCursorState()
+        {
+            await Helper.RunOnSTA(async () =>
+            {
+                using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+                {
+                    // Arrange
+                    _eventLogServiceMock
+                        .Setup(s => s.SearchAsync(It.IsAny<EventLogLevel?>(), It.IsAny<DateTime?>(), It.IsAny<DateTime?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                        .ThrowsAsync(new InvalidOperationException("WMI Repository Event log corruption detected"));
+
+                    using (var vm = CreateViewModel())
+                    {
+                        // Act
+                        await vm.SearchCommand.ExecuteAsync(null);
+
+                        // Assert
+                        _cursorServiceMock.Verify(c => c.ResetCursor(), Times.Once);
+                        Assert.False(vm.IsBusy);
+                        Assert.Equal(Strings.Button_Search, vm.SearchButtonText);
+                    }
+                }
+            }, createApp: true);
+        }
+
+        [Fact]
+        public async Task SearchCommand_OperationCanceledMidStream_ExitsGracefullyWithoutCrashing()
+        {
+            await Helper.RunOnSTA(async () =>
+            {
+                using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+                {
+                    // Arrange
+                    _eventLogServiceMock
+                        .Setup(s => s.SearchAsync(It.IsAny<EventLogLevel?>(), It.IsAny<DateTime?>(), It.IsAny<DateTime?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                        .ThrowsAsync(new OperationCanceledException());
+
+                    using (var vm = CreateViewModel())
+                    {
+                        // Act
+                        var exception = await Record.ExceptionAsync(() => vm.SearchCommand.ExecuteAsync(null));
+
+                        // Assert
+                        Assert.Null(exception); // The OperationCanceledException catch block handled it safely
+                        Assert.False(vm.IsBusy);
+                        Assert.Equal(Strings.Button_Search, vm.SearchButtonText);
+                        _cursorServiceMock.Verify(c => c.ResetCursor(), Times.Once);
+                    }
+                }
+            }, createApp: true);
+        }
+
+        #endregion
+
+        #region Resource Management, Cleanup & Disposal Tests
+
+        [Fact]
+        public async Task CancelSearch_ActiveSearchInFlight_CancelsAndDisposesToken()
+        {
+            using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+            {
+                // Arrange
+                CancellationToken capturedToken = TestContext.Current.CancellationToken;
+                var searchStartedTcs = new TaskCompletionSource<bool>();
+                var searchHangTcs = new TaskCompletionSource<IEnumerable<ServyEventLogEntry>>();
+
+                // Set up the mock event log service to capture the token and block execution to simulate an active search
+                _eventLogServiceMock
+                    .Setup(s => s.SearchAsync(It.IsAny<EventLogLevel?>(), It.IsAny<DateTime?>(), It.IsAny<DateTime?>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+                    .Callback<EventLogLevel?, DateTime?, DateTime?, string, CancellationToken>((level, from, to, keyword, token) =>
+                    {
+                        capturedToken = token;
+                        searchStartedTcs.SetResult(true);
+                    })
+                    .Returns(searchHangTcs.Task);
+
+                using (var vm = CreateViewModel())
+                {
+                    // Start the search process asynchronously without awaiting its completion yet
+                    var searchTask = vm.SearchCommand.ExecuteAsync(null);
+
+                    // Wait until the pipeline executes and hits our service callback to ensure the token has been generated
+                    await searchStartedTcs.Task;
+
+                    // Capture the active CancellationTokenSource instance prior to cancellation
+                    var cts = TestReflection.GetField<CancellationTokenSource>(vm, "_searchCts");
+                    Assert.NotNull(cts);
+
+                    // Validate the initial state of the active search operation token
+                    Assert.NotEqual(TestContext.Current.CancellationToken, capturedToken);
+                    Assert.False(capturedToken.IsCancellationRequested);
+                    Assert.False(cts.IsCancellationRequested);
+
+                    // Act
+                    vm.CancelSearch();
+
+                    // Assert
+                    // Pin the cancel and dispose contract: verify token cancellation and CTS disposal
+                    Assert.True(capturedToken.IsCancellationRequested);
+                    Assert.True(cts.IsCancellationRequested);
+                    Assert.Throws<ObjectDisposedException>(() => _ = cts.Token);
+
+                    // Unblock the hanging task to allow the pipeline to run its finalizer blocks cleanly
+                    searchHangTcs.TrySetCanceled(TestContext.Current.CancellationToken);
+                    await Record.ExceptionAsync(() => searchTask);
+
+                    // Idempotency verification: a second call to clean up or cancel should safely bypass without throwing exceptions
+                    var exception = Record.Exception(() => vm.CancelSearch());
+                    Assert.Null(exception);
+                }
+            }
+        }
+
+        [Fact]
+        public void Dispose_InvokedMultipleTimes_ExitsEarlyThroughDisposedValueGuard()
+        {
+            using (new AmbientAppServicesScope(sc => sc.AddSingleton(_mockProcessKiller.Object)))
+            {
+                // Arrange
+                var vm = CreateViewModel();
+
+                // Act - Verify initial state before disposal context
+                int isDisposedBefore = TestReflection.GetField<int>(vm, "_isDisposed");
+                Assert.Equal(0, isDisposedBefore);
+
+                // Act - First explicit teardown execution context
+                vm.Dispose();
+
+                // Assert - Guard must be active after primary disposal loop pass
+                int isDisposedAfterFirst = TestReflection.GetField<int>(vm, "_isDisposed");
+                Assert.Equal(1, isDisposedAfterFirst);
+
+                // Reset the guard so the second Dispose exercises the full dispose body again
+                TestReflection.SetField(vm, "_isDisposed", 0);
+                var doubleDisposeException = Record.Exception(vm.Dispose);
+
+                // Assert
+                Assert.Null(doubleDisposeException);
+                Assert.Equal(1, TestReflection.GetField<int>(vm, "_isDisposed"));
+            }
+        }
+
+        #endregion
+    }
+}

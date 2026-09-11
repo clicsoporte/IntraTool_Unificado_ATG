@@ -1,0 +1,596 @@
+using Moq;
+using Servy.Manager.Models;
+using Servy.Manager.Services;
+using Servy.Manager.ViewModels;
+using Servy.Testing;
+using Servy.UI.Constants;
+using Servy.UI.Services;
+using System.ComponentModel;
+using System.Windows.Threading;
+
+namespace Servy.Manager.UnitTests.ViewModels
+{
+    public class MonitoringViewModelBaseTests : IDisposable
+    {
+        private readonly Mock<ICursorService> _cursorServiceMock;
+        private readonly Mock<IUiDispatcher> _uiDispatcherMock;
+        private readonly Mock<IServiceCommands> _serviceCommandsMock;
+
+        // Track created view models so the fixture can dispose them all
+        private readonly TrackedViewModels _allocatedViewModels = new TrackedViewModels();
+
+        public MonitoringViewModelBaseTests()
+        {
+            _cursorServiceMock = new Mock<ICursorService>();
+            _uiDispatcherMock = new Mock<IUiDispatcher>();
+            _serviceCommandsMock = new Mock<IServiceCommands>();
+        }
+
+        #region Test Class Implementation
+
+        private class TestMonitoringViewModel : MonitoringViewModelBase
+        {
+            public Func<CancellationToken, Task> OnTickHandler { get; set; }
+            protected override int RefreshIntervalMs { get; }
+
+            public bool IsOnMonitoringStoppedCalled { get; private set; }
+
+            // Value returned by the SelectedServiceItem override
+            public ServiceItemBase? MockedSelectedService { get; set; }
+
+            public bool IsResetMonitoringStateCalled { get; private set; }
+            public ServiceItemBase? LastAppliedSelection { get; private set; }
+
+            public TestMonitoringViewModel(
+                ICursorService cursorService,
+                IUiDispatcher uiDispatcher,
+                IServiceCommands serviceCommands,
+                int refreshIntervalMs,
+                Func<CancellationToken, Task> onTickHandler)
+                : base(cursorService, uiDispatcher, serviceCommands)
+            {
+                RefreshIntervalMs = refreshIntervalMs;
+                OnTickHandler = onTickHandler;
+            }
+
+            public void ExposeInitTimer() => InitTimer();
+            public DispatcherTimer? ExposeTimer => TestReflection.GetField<DispatcherTimer>(this, "_timer");
+            public CancellationTokenSource? ExposeCts => TestReflection.GetField<CancellationTokenSource>(this, "_monitoringCts");
+            public CancellationToken ExposeCurrentToken() => GetCurrentMonitoringToken();
+            public int ExposeIsMonitoringFlag => TestReflection.GetField<int>(this, "_isMonitoringFlag");
+            public int ExposeIsTickRunningFlag => TestReflection.GetField<int>(this, "_isTickRunningFlag");
+
+            // Connect the base abstraction hook to our local test control field
+            protected override ServiceItemBase? SelectedServiceItem => MockedSelectedService;
+
+            public void ExposeOnTick()
+            {
+                TestReflection.InvokeNonPublic(this, "OnTick", this, EventArgs.Empty);
+            }
+
+            public void ExposeSetPidText(ServiceItemBase? service)
+            {
+                TestReflection.InvokeNonPublic(this, "SetPidText", new object?[] { service });
+            }
+
+            protected override void OnMonitoringStopped()
+            {
+                IsOnMonitoringStoppedCalled = true;
+                base.OnMonitoringStopped();
+            }
+
+            protected override void ResetMonitoringState()
+            {
+                IsResetMonitoringStateCalled = true;
+            }
+
+            protected override async Task ApplyTickAsync(ServiceItemBase selection, CancellationToken token)
+            {
+                LastAppliedSelection = selection;
+                await OnTickHandler(token);
+            }
+
+            public void ExposeDispose(bool disposing)
+            {
+                TestReflection.InvokeNonPublic(this, "Dispose", disposing);
+            }
+
+            protected override ServiceItemBase CreateServiceItem(Service? service)
+            {
+                return null!; // Not relevant for these tests
+            }
+        }
+
+        private class ConcreteServiceItem : ServiceItemBase
+        {
+            // Concrete stub implementation for validation
+        }
+
+        #endregion
+
+        #region Factory Method
+
+        private TestMonitoringViewModel CreateViewModel(int interval = 100, Func<CancellationToken, Task>? onTick = null)
+        {
+            var vm = new TestMonitoringViewModel(
+                _cursorServiceMock.Object,
+                _uiDispatcherMock.Object,
+                _serviceCommandsMock.Object,
+                interval,
+                onTick ?? (_ => Task.CompletedTask)
+            );
+
+            _allocatedViewModels.Track(vm);
+            return vm;
+        }
+
+        /// <summary>
+        /// The single definition of "a valid selection" for the tick-path tests: a service item
+        /// whose <see cref="ServiceItemBase.Pid"/> passes the CopyPid CanExecute check.
+        /// </summary>
+        private static ConcreteServiceItem CreateLiveService() =>
+            new ConcreteServiceItem { Name = "LiveService", Pid = 9999 };
+
+        #endregion
+
+        #region Unit Tests
+
+        [Fact]
+        public void InitTimer_CreatesTimerWithCorrectInterval()
+        {
+            // Arrange
+            var vm = CreateViewModel(interval: 250);
+
+            // Act
+            vm.ExposeInitTimer();
+
+            // Assert
+            Assert.NotNull(vm.ExposeTimer);
+            Assert.Equal(TimeSpan.FromMilliseconds(250), vm.ExposeTimer.Interval);
+            Assert.False(vm.ExposeTimer.IsEnabled);
+        }
+
+        [Fact]
+        public void StartMonitoring_InitializesTimerAndSetsActiveFlags()
+        {
+            // Arrange
+            var vm = CreateViewModel();
+
+            // Act
+            vm.StartMonitoring();
+
+            // Assert
+            Assert.Equal(1, vm.ExposeIsMonitoringFlag);
+            Assert.NotNull(vm.ExposeTimer);
+            Assert.True(vm.ExposeTimer.IsEnabled);
+            Assert.NotNull(vm.ExposeCts);
+            Assert.False(vm.ExposeCts.IsCancellationRequested);
+        }
+
+        [Fact]
+        public void StartMonitoring_WhenDisposed_DoesNotStartMonitoringOrCreateTimer()
+        {
+            // Arrange
+            var vm = CreateViewModel();
+            vm.ExposeDispose(true);
+
+            // Act
+            vm.StartMonitoring();
+
+            // Assert
+            Assert.Equal(0, vm.ExposeIsMonitoringFlag);
+            Assert.Null(vm.ExposeTimer);
+            Assert.Null(vm.ExposeCts);
+        }
+
+        [Fact]
+        public void StopMonitoring_HaltsTimerCancelsCtsAndNotifiesDerivedClasses()
+        {
+            // Arrange
+            var vm = CreateViewModel();
+            vm.StartMonitoring();
+            var previousCts = vm.ExposeCts;
+
+            // Act
+            vm.StopMonitoring();
+
+            // Assert
+            Assert.Equal(0, vm.ExposeIsMonitoringFlag);
+            Assert.False(vm.ExposeTimer!.IsEnabled);
+            Assert.True(previousCts!.IsCancellationRequested);
+            Assert.True(vm.IsOnMonitoringStoppedCalled);
+        }
+
+        [Fact]
+        public async Task StopMonitoring_DuringInFlightTick_DoesNotResurrectTheTimer()
+        {
+            // Arrange
+            var tcs = new TaskCompletionSource<object?>();
+            var vm = CreateViewModel(onTick: async _ => await tcs.Task);
+            vm.MockedSelectedService = CreateLiveService();
+            vm.StartMonitoring();
+
+            // Act - a tick is in flight (OnTick stopped the timer), then a stop is requested
+            vm.ExposeOnTick();
+            Assert.Equal(1, vm.ExposeIsTickRunningFlag);
+
+            vm.StopMonitoring();
+
+            // Act - let the in-flight tick complete so its finally block runs
+            tcs.SetResult(null);
+            await Helper.WaitUntilAsync(
+                () => vm.ExposeIsTickRunningFlag == 0,
+                TimeSpan.FromSeconds(5),
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            // Assert - the safety check must keep the timer stopped after the stop request
+            Assert.False(vm.ExposeTimer!.IsEnabled);
+            Assert.Equal(0, vm.ExposeIsMonitoringFlag);
+        }
+
+        [Fact]
+        public void StartMonitoring_CalledTwice_CancelsAndReplacesThePreviousSession()
+        {
+            // Arrange
+            var vm = CreateViewModel();
+            vm.StartMonitoring();
+            var firstCts = vm.ExposeCts;
+            var firstToken = vm.ExposeCurrentToken();
+
+            // Act
+            vm.StartMonitoring();
+
+            // Assert
+            Assert.NotSame(firstCts, vm.ExposeCts);
+            Assert.True(firstToken.IsCancellationRequested);
+            Assert.False(vm.ExposeCurrentToken().IsCancellationRequested);
+        }
+
+        [Fact]
+        public void GetCurrentMonitoringToken_LifecycleStates_ReturnsExpectedTokens()
+        {
+            // Arrange
+            var vm = CreateViewModel();
+
+            // Scenario 1: Not initialized yet -> Returns CancellationToken.None
+            // Act & Assert
+            Assert.Equal(CancellationToken.None, vm.ExposeCurrentToken());
+
+            // Scenario 2: Active monitoring session running -> Valid, live token
+            // Act
+            vm.StartMonitoring();
+            var activeToken = vm.ExposeCurrentToken();
+
+            // Assert
+            Assert.True(activeToken.CanBeCanceled);
+            Assert.False(activeToken.IsCancellationRequested);
+
+            // Scenario 3: Monitoring session explicitly stopped -> Token is explicitly cancelled
+            // Act
+            vm.StopMonitoring();
+
+            // Assert
+            Assert.True(activeToken.IsCancellationRequested);
+
+            // Scenario 4: After explicit Dispose -> Field becomes null, returns CancellationToken.None again
+            // Act
+            vm.ExposeDispose(true);
+            var postDisposeToken = vm.ExposeCurrentToken();
+
+            // Assert
+            Assert.Equal(CancellationToken.None, postDisposeToken);
+
+            // Scenario 5: Disposed CancellationTokenSource instance in _monitoringCts -> Catches ObjectDisposedException and returns canceled token
+            // Act
+            var deadCts = new CancellationTokenSource();
+            deadCts.Dispose();
+            TestReflection.SetField(vm, "_monitoringCts", deadCts);
+            var deadToken = vm.ExposeCurrentToken();
+
+            // Assert
+            Assert.True(deadToken.IsCancellationRequested);
+        }
+
+        [Fact]
+        public void OnTick_NotMonitoring_ExitsEarlyWithoutExecutingPayload()
+        {
+            // Arrange
+            bool tickExecuted = false;
+            var vm = CreateViewModel(onTick: _ =>
+            {
+                tickExecuted = true;
+                return Task.CompletedTask;
+            });
+
+            // A valid selection: the ONLY thing that may block the payload is _isMonitoringFlag == 0.
+            vm.MockedSelectedService = CreateLiveService();
+            vm.ExposeInitTimer();          // timer exists, but StartMonitoring() was never called
+
+            // Act
+            vm.ExposeOnTick();
+
+            // Assert
+            Assert.False(tickExecuted);
+            Assert.Equal(0, vm.ExposeIsTickRunningFlag);
+            Assert.False(vm.IsResetMonitoringStateCalled);   // OnTickAsync was never entered at all
+        }
+
+        [Fact]
+        public void OnTick_OverlappingTicks_EnforcesAtomicGuardAndPreventsConcurrentExecution()
+        {
+            // Arrange
+            int activeExecutionsCount = 0;
+            var tcs = new TaskCompletionSource<object?>();
+
+            var vm = CreateViewModel(onTick: async _ =>
+            {
+                Interlocked.Increment(ref activeExecutionsCount);
+                await tcs.Task;
+            });
+
+            // Set a valid selection so OnTickAsync forwards the tick to ApplyTickAsync
+            vm.MockedSelectedService = CreateLiveService();
+            vm.StartMonitoring();
+
+            try
+            {
+                // Act - Trigger initial tick execution flow
+                vm.ExposeOnTick();
+                Assert.Equal(1, activeExecutionsCount);
+                Assert.Equal(1, vm.ExposeIsTickRunningFlag);
+
+                // The tick must forward the current selection to ApplyTickAsync, not a stale or null one
+                Assert.Same(vm.MockedSelectedService, vm.LastAppliedSelection);
+
+                // Act - Concurrently trigger subsequent tick entry attempts while first loop is running
+                vm.ExposeOnTick();
+                vm.ExposeOnTick();
+
+                // Assert
+                Assert.Equal(1, activeExecutionsCount);
+                Assert.False(vm.ExposeTimer!.IsEnabled);
+            }
+            finally
+            {
+                // Teardown: release the in-flight tick even when an assert above fails,
+                // so no suspended async void operation survives the test.
+                tcs.TrySetResult(null);
+            }
+        }
+
+        [Fact]
+        public void OnTick_SelectionLostAfterBeingSet_ResetsMonitoringStateOnce()
+        {
+            // Arrange
+            var vm = CreateViewModel();
+            vm.MockedSelectedService = CreateLiveService();
+            vm.StartMonitoring();
+
+            // Act - a first tick with a selection latches _hadSelectedService
+            vm.ExposeOnTick();
+
+            // Assert - the latching tick must not report a lost selection
+            Assert.False(vm.IsResetMonitoringStateCalled);
+
+            // Act - the selection is lost before the next tick
+            vm.MockedSelectedService = null;
+            vm.ExposeOnTick();
+
+            // Assert
+            Assert.True(vm.IsResetMonitoringStateCalled);
+        }
+
+        [Fact]
+        public void OnTick_OperationCanceledException_ResetsRunningFlagAndRestartsTimer()
+        {
+            // Arrange
+            var vm = CreateViewModel(onTick: _ => throw new OperationCanceledException());
+            vm.MockedSelectedService = CreateLiveService();
+            vm.StartMonitoring();
+
+            // Pre-set error count to verify cancellation resets the consecutive error counter
+            TestReflection.SetField(vm, "_tickErrorCount", 5L);
+
+            // Act
+            vm.ExposeOnTick();
+
+            // Assert
+            Assert.Equal(0, vm.ExposeIsTickRunningFlag);
+            Assert.Equal(0L, TestReflection.GetField<long>(vm, "_tickErrorCount"));
+            Assert.True(vm.ExposeTimer!.IsEnabled);
+        }
+
+        [Fact]
+        public void OnTick_ConsecutiveFailures_IncrementsErrorCountAndResetsRunningFlag()
+        {
+            // Arrange
+            var vm = CreateViewModel(onTick: _ => throw new InvalidOperationException("SCM connection drop out panic."));
+            vm.MockedSelectedService = CreateLiveService();
+            vm.StartMonitoring();
+
+            // Act & Assert Loop Chain Simulation
+            for (int i = 1; i <= 21; i++)
+            {
+                // Act
+                vm.ExposeOnTick();
+
+                // Assert
+                long observedErrors = TestReflection.GetField<long>(vm, "_tickErrorCount");
+
+                Assert.Equal(i, observedErrors);
+                Assert.Equal(0, vm.ExposeIsTickRunningFlag);
+            }
+
+            // Verify a subsequent successful tick resets error count to 0
+            vm.OnTickHandler = _ => Task.CompletedTask;
+            vm.ExposeOnTick();
+            Assert.Equal(0L, TestReflection.GetField<long>(vm, "_tickErrorCount"));
+        }
+
+        [Fact]
+        public void Dispose_UnsubscribesEventsAndTearsDownFrameworkTimerReferences()
+        {
+            // Arrange
+            var vm = CreateViewModel();
+
+            vm.MockedSelectedService = CreateLiveService();
+            vm.StartMonitoring();
+
+            // Retain reference to the underlying DispatcherTimer object instance before it is wiped
+            var hostedTimerInstance = vm.ExposeTimer;
+            Assert.NotNull(hostedTimerInstance);
+
+            // Act
+            vm.ExposeDispose(true);
+
+            // Assert: Verify that references are safely torn down
+            Assert.Null(vm.ExposeCts);
+            Assert.Null(vm.ExposeTimer);
+
+            // Behavioral Event Disconnection Verification: Ensure the OnTick handler is detached from the timer.
+            // When Dispose removes the only subscriber, the field-like event's backing delegate evaluates to null.
+            var tickDelegate = TestReflection.GetField<Delegate?>(hostedTimerInstance, "Tick");
+
+            Assert.True(
+                tickDelegate is null || tickDelegate.GetInvocationList().All(d => d.Method.Name != "OnTick"),
+                "Dangling Event Leak: The OnTick event handler remains attached to the timer instance after disposal.");
+        }
+
+        [Fact]
+        public void CopyPidCommand_CanExecute_ReflectsSelectedServicePidAvailability()
+        {
+            // Arrange
+            var vm = CreateViewModel();
+
+            // Scenario 1: SelectedServiceItem is completely null
+            // Act & Assert
+            vm.MockedSelectedService = null;
+            Assert.False(vm.CopyPidCommand.CanExecute(null));
+
+            // Scenario 2: Service is set but Pid contains null value context
+            // Act & Assert
+            vm.MockedSelectedService = new ConcreteServiceItem { Pid = null };
+            Assert.False(vm.CopyPidCommand.CanExecute(null));
+
+            // Scenario 3: Service is active and has a valid tracked operating system ID
+            // Act & Assert
+            vm.MockedSelectedService = new ConcreteServiceItem { Pid = 4012 };
+            Assert.True(vm.CopyPidCommand.CanExecute(null));
+        }
+
+        [Fact]
+        public void SetPidText_VariousStates_CorrectlyUpdatesPropertyValues()
+        {
+            // Arrange
+            var vm = CreateViewModel();
+
+            // Branch 1: Null Service Item provided -> sets string text to N/A fallback string
+            // Act
+            vm.Pid = "InitialText";
+            vm.ExposeSetPidText(null);
+
+            // Assert
+            Assert.Equal(UiConstants.NotAvailable, vm.Pid);
+
+            // Branch 2: Valid Service Item but null numerical PID property
+            // Act
+            var itemWithNullPid = new ConcreteServiceItem { Pid = null };
+            vm.Pid = "SomeExistingPidValue";
+            vm.ExposeSetPidText(itemWithNullPid);
+
+            // Assert
+            Assert.Equal(UiConstants.NotAvailable, vm.Pid);
+
+            // Branch 3: Valid Service Item containing active numeric tracking integer value
+            // Act
+            var itemWithValidPid = new ConcreteServiceItem { Name = "Spooler", Pid = 1248 };
+            vm.Pid = "OldText";
+            vm.ExposeSetPidText(itemWithValidPid);
+
+            // Assert
+            Assert.Equal("1248", vm.Pid);
+
+            // Branch 4: Optimization match path logic -> Value stays same, skips redundant evaluations
+            // Arrange change tracking parameters
+            var propertyChangedFired = false;
+            PropertyChangedEventHandler handler = (sender, e) =>
+            {
+                if (e.PropertyName == nameof(vm.Pid))
+                {
+                    propertyChangedFired = true;
+                }
+            };
+            vm.PropertyChanged += handler;
+
+            try
+            {
+                // Act
+                vm.ExposeSetPidText(itemWithValidPid);
+
+                // Assert
+                Assert.Equal("1248", vm.Pid);
+                // The redundant assignment must not raise PropertyChanged
+                Assert.False(propertyChangedFired, "PropertyChanged was erroneously raised for an optimized redundant value assignment.");
+            }
+            finally
+            {
+                // Detach the handler so later asserts cannot observe stale events
+                vm.PropertyChanged -= handler;
+            }
+        }
+
+        [Fact]
+        public async Task CopyPidAsync_ValidServiceWithPid_DispatchesCommandInfrastructureAndExecutesSuccessfully()
+        {
+            // Arrange
+            var vm = CreateViewModel();
+            var serviceItem = new ConcreteServiceItem { Name = "ServyEngine", Pid = 5028 };
+            vm.MockedSelectedService = serviceItem;
+
+            _serviceCommandsMock
+                .Setup(c => c.CopyPidAsync(It.Is<Service>(s => s.Name == "ServyEngine" && s.Pid == 5028), It.IsAny<CancellationToken>()))
+                .Returns(Task.CompletedTask)
+                .Verifiable();
+
+            // Act
+            await vm.CopyPidCommand.ExecuteAsync(null);
+
+            // Assert
+            _serviceCommandsMock.Verify();
+        }
+
+        [Fact]
+        public async Task CopyPidAsync_NullOrMissingProperties_BypassesExecutionAndReturnsSilently()
+        {
+            // Arrange
+            var vm = CreateViewModel();
+
+            // Scenario 1: SelectedServiceItem is completely null -> bypasses invoke loop sequence
+            // Act
+            vm.MockedSelectedService = null;
+            await vm.CopyPidCommand.ExecuteAsync(null);
+
+            // Scenario 2: service assigned but its Pid is null
+            // Act
+            vm.MockedSelectedService = new ConcreteServiceItem { Pid = null };
+            await vm.CopyPidCommand.ExecuteAsync(null);
+
+            // Assert: Verify that no clipboard copy commands were dispatched to system channels
+            _serviceCommandsMock.Verify(c => c.CopyPidAsync(It.IsAny<Service>(), It.IsAny<CancellationToken>()), Times.Never);
+        }
+
+        #endregion
+
+        #region Teardown Lifecycle Execution
+
+        /// <summary>
+        /// Explicit test fixture teardown sequence to purge in-flight background CTS contexts safely.
+        /// </summary>
+        public void Dispose()
+        {
+            _allocatedViewModels.Dispose();
+        }
+
+        #endregion
+    }
+}

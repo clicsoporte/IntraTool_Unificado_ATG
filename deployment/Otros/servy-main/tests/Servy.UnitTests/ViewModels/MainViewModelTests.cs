@@ -1,0 +1,1133 @@
+using Moq;
+using Servy.Config;
+using Servy.Core.Data;
+using Servy.Core.DTOs;
+using Servy.Core.Enums;
+using Servy.Resources;
+using Servy.Services;
+using Servy.UI.Services;
+using Servy.ViewModels;
+using System.ComponentModel;
+using System.Windows.Input;
+using static Servy.Core.Config.AppConfig;
+
+namespace Servy.UnitTests.ViewModels
+{
+    public class MainViewModelTests : IDisposable
+    {
+        private readonly Mock<IFileDialogService> _dialogServiceMock;
+        private readonly Mock<IServiceCommands> _serviceCommandsMock;
+        private readonly Mock<IMessageBoxService> _messageBoxService;
+        private readonly Mock<IServiceRepository> _serviceRepository;
+        private readonly Mock<IHelpService> _helpService;
+        private readonly Mock<IAppConfiguration> _appConfigMock;
+        private readonly MainViewModel _viewModel;
+
+        public MainViewModelTests()
+        {
+            _dialogServiceMock = new Mock<IFileDialogService>();
+            _serviceCommandsMock = new Mock<IServiceCommands>();
+            _messageBoxService = new Mock<IMessageBoxService>();
+            _serviceRepository = new Mock<IServiceRepository>();
+            _helpService = new Mock<IHelpService>();
+
+            _appConfigMock = new Mock<IAppConfiguration>();
+            _appConfigMock.Setup(c => c.IsManagerAppAvailable).Returns(true);
+
+            _viewModel = new MainViewModel(
+                _dialogServiceMock.Object,
+                _serviceCommandsMock.Object,
+                _messageBoxService.Object,
+                _serviceRepository.Object,
+                _helpService.Object,
+                _appConfigMock.Object
+            );
+        }
+
+        public void Dispose()
+        {
+            _viewModel.Dispose();
+        }
+
+        #region Constructor Null-Guard Tests
+
+        [Fact]
+        public void Constructor_NullDialogService_ThrowsArgumentNullExceptionWithParamName()
+        {
+            // Act
+            var ex = Assert.Throws<ArgumentNullException>(() =>
+                new MainViewModel(null!, _serviceCommandsMock.Object, _messageBoxService.Object, _serviceRepository.Object, _helpService.Object, _appConfigMock.Object));
+
+            // Assert
+            Assert.Equal("dialogService", ex.ParamName);
+        }
+
+        [Fact]
+        public void Constructor_NullServiceCommands_ThrowsArgumentNullExceptionWithParamName()
+        {
+            // Act
+            var ex = Assert.Throws<ArgumentNullException>(() =>
+                new MainViewModel(_dialogServiceMock.Object, null!, _messageBoxService.Object, _serviceRepository.Object, _helpService.Object, _appConfigMock.Object));
+
+            // Assert
+            Assert.Equal("serviceCommands", ex.ParamName);
+        }
+
+        [Fact]
+        public void Constructor_NullMessageBoxService_ThrowsArgumentNullExceptionWithParamName()
+        {
+            // Act
+            var ex = Assert.Throws<ArgumentNullException>(() =>
+                new MainViewModel(_dialogServiceMock.Object, _serviceCommandsMock.Object, null!, _serviceRepository.Object, _helpService.Object, _appConfigMock.Object));
+
+            // Assert
+            Assert.Equal("messageBoxService", ex.ParamName);
+        }
+
+        [Fact]
+        public void Constructor_NullServiceRepository_ThrowsArgumentNullExceptionWithParamName()
+        {
+            // Act
+            var ex = Assert.Throws<ArgumentNullException>(() =>
+                new MainViewModel(_dialogServiceMock.Object, _serviceCommandsMock.Object, _messageBoxService.Object, null!, _helpService.Object, _appConfigMock.Object));
+
+            // Assert
+            Assert.Equal("serviceRepository", ex.ParamName);
+        }
+
+        [Fact]
+        public void Constructor_NullHelpService_ThrowsArgumentNullExceptionWithParamName()
+        {
+            // Act
+            var ex = Assert.Throws<ArgumentNullException>(() =>
+                new MainViewModel(_dialogServiceMock.Object, _serviceCommandsMock.Object, _messageBoxService.Object, _serviceRepository.Object, null!, _appConfigMock.Object));
+
+            // Assert
+            Assert.Equal("helpService", ex.ParamName);
+        }
+
+        [Fact]
+        public void Constructor_NullAppConfig_ThrowsArgumentNullExceptionWithParamName()
+        {
+            // Act
+            var ex = Assert.Throws<ArgumentNullException>(() =>
+                new MainViewModel(_dialogServiceMock.Object, _serviceCommandsMock.Object, _messageBoxService.Object, _serviceRepository.Object, _helpService.Object, null!));
+
+            // Assert
+            Assert.Equal("appConfig", ex.ParamName);
+        }
+
+        #endregion
+
+        #region Core Property Tests
+
+        [Fact]
+        public void PropertyChanged_Raised_When_ServiceName_Changed()
+        {
+            // Arrange
+            var raised = false;
+            _viewModel.PropertyChanged += (s, e) =>
+            {
+                if (e.PropertyName == nameof(MainViewModel.ServiceName))
+                    raised = true;
+            };
+
+            // Act
+            _viewModel.ServiceName = "NewService";
+
+            // Assert
+            Assert.True(raised);
+        }
+
+        [Fact]
+        public void AppConfig_PropertyChanged_Updates_IsManagerAppAvailable_Dynamically()
+        {
+            // Arrange
+            _appConfigMock.Setup(c => c.IsManagerAppAvailable).Returns(false);
+
+            // Act
+            _appConfigMock.Raise(c => c.PropertyChanged += null, new PropertyChangedEventArgs(nameof(IAppConfiguration.IsManagerAppAvailable)));
+
+            // Assert
+            Assert.False(_viewModel.IsManagerAppAvailable);
+        }
+
+        [Fact]
+        public void AppConfig_PropertyChanged_WithUnrelatedProperty_DoesNotUpdate_IsManagerAppAvailable()
+        {
+            // Arrange
+            // Initialize with the mock's default constructor setup value of 'true'
+            Assert.True(_viewModel.IsManagerAppAvailable);
+
+            // Setup the configuration mock to return 'false' for the actual target property.
+            // If the VM wrongly ignores the property name filter, it will read this new 'false' value.
+            _appConfigMock.Setup(c => c.IsManagerAppAvailable).Returns(false);
+
+            // Act
+            // Raise property changed on an unrelated configuration key
+            _appConfigMock.Raise(c => c.PropertyChanged += null, new PropertyChangedEventArgs(nameof(IAppConfiguration.ForceSoftwareRendering)));
+
+            // Assert
+            // Verifies that the VM ignored the event and did not pull/update the property value to 'false'
+            Assert.True(_viewModel.IsManagerAppAvailable, "The view model incorrectly reacted to an unrelated PropertyChanged event.");
+        }
+
+        [Theory]
+        [InlineData(false, false, false)]
+        [InlineData(true, false, true)]
+        [InlineData(false, true, true)]
+        [InlineData(true, true, true)]
+        public void EnableRotation_ReflectsSizeOrDateRotation(bool enableSize, bool enableDate, bool expected)
+        {
+            // Arrange & Act
+            _viewModel.EnableSizeRotation = enableSize;
+            _viewModel.EnableDateRotation = enableDate;
+
+            // Assert
+            // EnableRotation is the OR of the two operands; the full truth table pins the operator
+            // itself, which no test that only reads the operands can do.
+            Assert.Equal(expected, _viewModel.EnableRotation);
+        }
+
+        #endregion
+
+        #region Service Action Command Tests
+
+        [Fact]
+        public async Task InstallCommand_Calls_InstallService_With_Configuration()
+        {
+            // Arrange
+            ServiceDto? capturedDto = null;
+            string? capturedConfirmPassword = null;
+            bool? capturedRunAsLocalSystem = null;
+            bool wasBusyDuringExecution = false;
+
+            _serviceCommandsMock
+                .Setup(s => s.InstallServiceAsync(It.IsAny<ServiceDto>(), It.IsAny<string?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()))
+                .Callback<ServiceDto, string?, bool, CancellationToken>((dto, confirmPassword, runAsLocalSystem, _) =>
+                {
+                    capturedDto = dto;
+                    capturedConfirmPassword = confirmPassword;
+                    capturedRunAsLocalSystem = runAsLocalSystem;
+                    wasBusyDuringExecution = _viewModel.IsBusy;
+                })
+                .ReturnsAsync(true);
+
+            _viewModel.ServiceName = "TestService";
+            _viewModel.ServiceDisplayName = "TestServiceDisplayName";
+            _viewModel.ServiceDescription = "Desc";
+            _viewModel.ProcessPath = @"C:\app\test.exe";
+            _viewModel.StartupDirectory = @"C:\app";
+            _viewModel.ProcessParameters = "--flag";
+            _viewModel.CpuAffinity = "0x1";
+            _viewModel.StdoutPath = @"C:\logs\out.log";
+            _viewModel.StderrPath = @"C:\logs\err.log";
+            _viewModel.EnableSizeRotation = true;
+            _viewModel.RotationSize = "12345";
+            _viewModel.UseLocalTimeForRotation = true;
+            _viewModel.EnableHealthMonitoring = true;
+            _viewModel.HeartbeatInterval = "60";
+            _viewModel.MaxFailedChecks = "5";
+            _viewModel.MaxRestartAttempts = "3";
+            _viewModel.HeartbeatUrl = "https://example.com/heartbeat";
+            _viewModel.HeartbeatUrlTimeoutSeconds = "10";
+            _viewModel.EnableHeartbeatUrlFlags = true;
+            _viewModel.SelectedStartupType = ServiceStartType.Manual;
+            _viewModel.SelectedProcessPriority = ProcessPriority.High;
+            _viewModel.SelectedRecoveryAction = RecoveryAction.RestartService;
+            _viewModel.EnvironmentVariables = "var1=val1;var2=val2";
+            _viewModel.ServiceDependencies = "MongoDB";
+            _viewModel.RunAsLocalSystem = false;
+            _viewModel.UserAccount = @".\username";
+            _viewModel.Password = "password";
+            _viewModel.ConfirmPassword = "password";
+
+            _viewModel.PreLaunchExecutablePath = @"C:\pre-launch\pre-launch.exe";
+            _viewModel.PreLaunchStartupDirectory = @"C:\pre-launch";
+            _viewModel.PreLaunchParameters = "--pre-param val1";
+            _viewModel.PreLaunchEnvironmentVariables = "pvar1=pval1;";
+            _viewModel.PreLaunchStdoutPath = @"C:\logs\pre-launch-stdout.log";
+            _viewModel.PreLaunchStderrPath = @"C:\logs\pre-launch-stderr.log";
+            _viewModel.PreLaunchTimeoutSeconds = "40";
+            _viewModel.PreLaunchRetryAttempts = "3";
+            _viewModel.PreLaunchIgnoreFailure = true;
+
+            _viewModel.FailureProgramPath = @"C:\failureProgram\failureProgram.exe";
+            _viewModel.FailureProgramStartupDirectory = @"C:\failureProgramDir";
+            _viewModel.FailureProgramParameters = "--failureProgramParam1 val1";
+
+            _viewModel.PostLaunchExecutablePath = @"C:\post-launch\post-launch.exe";
+            _viewModel.PostLaunchStartupDirectory = @"C:\post-launch";
+            _viewModel.PostLaunchParameters = "--post-param val1";
+            _viewModel.MaxRotations = "5";
+            _viewModel.EnableDateRotation = true;
+            _viewModel.SelectedDateRotationType = DateRotationType.Weekly;
+
+            _viewModel.StartTimeout = "11";
+            _viewModel.StopTimeout = "6";
+
+            _viewModel.PreStopExecutablePath = @"C:\pre-stop\pre-stop.exe";
+            _viewModel.PreStopStartupDirectory = @"C:\pre-stop";
+            _viewModel.PreStopParameters = "--pre-stop-args";
+            _viewModel.PreStopTimeoutSeconds = "15";
+            _viewModel.PreStopLogAsError = true;
+
+            _viewModel.PostStopExecutablePath = @"C:\post-stop\post-stop.exe";
+            _viewModel.PostStopStartupDirectory = @"C:\post-stop";
+            _viewModel.PostStopParameters = "--post-stop-args";
+
+            _viewModel.EnableConsoleUI = true;
+            _viewModel.EnableDebugLogs = true;
+            _viewModel.RecoveryOnCleanExit = true;
+
+            // Act
+            await _viewModel.InstallCommand.ExecuteAsync(null);
+
+            // Assert
+            Assert.True(wasBusyDuringExecution, "IsBusy should be true while InstallServiceAsync is running.");
+            Assert.False(_viewModel.IsBusy, "IsBusy should be reset to false after execution completes.");
+
+            Assert.NotNull(capturedDto);
+            Assert.Equal("TestService", capturedDto.Name);
+            Assert.Equal("TestServiceDisplayName", capturedDto.DisplayName);
+            Assert.Equal("Desc", capturedDto.Description);
+            Assert.Equal(@"C:\app\test.exe", capturedDto.ExecutablePath);
+            Assert.Equal(@"C:\app", capturedDto.StartupDirectory);
+            Assert.Equal("--flag", capturedDto.Parameters);
+            Assert.Equal((int)ServiceStartType.Manual, capturedDto.StartupType);
+            Assert.Equal((int)ProcessPriority.High, capturedDto.Priority);
+            Assert.Equal("0x1", capturedDto.CpuAffinity);
+            Assert.Equal(@"C:\logs\out.log", capturedDto.StdoutPath);
+            Assert.Equal(@"C:\logs\err.log", capturedDto.StderrPath);
+            Assert.True(capturedDto.EnableSizeRotation);
+            Assert.Equal(12345, capturedDto.RotationSize);
+            Assert.True(capturedDto.EnableDateRotation);
+            Assert.Equal((int)DateRotationType.Weekly, capturedDto.DateRotationType);
+            Assert.Equal(5, capturedDto.MaxRotations);
+            Assert.True(capturedDto.UseLocalTimeForRotation);
+            Assert.True(capturedDto.EnableHealthMonitoring);
+            Assert.Equal(60, capturedDto.HeartbeatInterval);
+            Assert.Equal(5, capturedDto.MaxFailedChecks);
+            Assert.Equal((int)RecoveryAction.RestartService, capturedDto.RecoveryAction);
+            Assert.Equal(3, capturedDto.MaxRestartAttempts);
+            Assert.Equal("https://example.com/heartbeat", capturedDto.HeartbeatUrl);
+            Assert.Equal(10, capturedDto.HeartbeatUrlTimeoutSeconds);
+            Assert.True(capturedDto.EnableHeartbeatUrlFlags);
+            Assert.Equal(@"C:\failureProgram\failureProgram.exe", capturedDto.FailureProgramPath);
+            Assert.Equal(@"C:\failureProgramDir", capturedDto.FailureProgramStartupDirectory);
+            Assert.Equal("--failureProgramParam1 val1", capturedDto.FailureProgramParameters);
+            Assert.Equal("var1=val1;var2=val2", capturedDto.EnvironmentVariables);
+            Assert.Equal("MongoDB", capturedDto.ServiceDependencies);
+            Assert.False(capturedRunAsLocalSystem);
+            Assert.Equal(@".\username", capturedDto.UserAccount);
+            Assert.Equal("password", capturedDto.Password);
+            Assert.Equal("password", capturedConfirmPassword);
+            Assert.Equal(@"C:\pre-launch\pre-launch.exe", capturedDto.PreLaunchExecutablePath);
+            Assert.Equal(@"C:\pre-launch", capturedDto.PreLaunchStartupDirectory);
+            Assert.Equal("--pre-param val1", capturedDto.PreLaunchParameters);
+            Assert.Equal("pvar1=pval1;", capturedDto.PreLaunchEnvironmentVariables);
+            Assert.Equal(@"C:\logs\pre-launch-stdout.log", capturedDto.PreLaunchStdoutPath);
+            Assert.Equal(@"C:\logs\pre-launch-stderr.log", capturedDto.PreLaunchStderrPath);
+            Assert.Equal(40, capturedDto.PreLaunchTimeoutSeconds);
+            Assert.Equal(3, capturedDto.PreLaunchRetryAttempts);
+            Assert.True(capturedDto.PreLaunchIgnoreFailure);
+            Assert.Equal(@"C:\post-launch\post-launch.exe", capturedDto.PostLaunchExecutablePath);
+            Assert.Equal(@"C:\post-launch", capturedDto.PostLaunchStartupDirectory);
+            Assert.Equal("--post-param val1", capturedDto.PostLaunchParameters);
+            Assert.Equal(11, capturedDto.StartTimeout);
+            Assert.Equal(6, capturedDto.StopTimeout);
+            Assert.Equal(@"C:\pre-stop\pre-stop.exe", capturedDto.PreStopExecutablePath);
+            Assert.Equal(@"C:\pre-stop", capturedDto.PreStopStartupDirectory);
+            Assert.Equal("--pre-stop-args", capturedDto.PreStopParameters);
+            Assert.Equal(15, capturedDto.PreStopTimeoutSeconds);
+            Assert.True(capturedDto.PreStopLogAsError);
+            Assert.Equal(@"C:\post-stop\post-stop.exe", capturedDto.PostStopExecutablePath);
+            Assert.Equal(@"C:\post-stop", capturedDto.PostStopStartupDirectory);
+            Assert.Equal("--post-stop-args", capturedDto.PostStopParameters);
+            Assert.True(capturedDto.EnableConsoleUI);
+            Assert.True(capturedDto.EnableDebugLogs);
+            Assert.True(capturedDto.RecoveryOnCleanExit);
+
+            _serviceCommandsMock.Verify(s => s.InstallServiceAsync(It.IsAny<ServiceDto>(), It.IsAny<string?>(), It.IsAny<bool>(), It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task StartCommand_Calls_StartService()
+        {
+            _viewModel.ServiceName = "MyService";
+            await _viewModel.StartCommand.ExecuteAsync(null);
+            _serviceCommandsMock.Verify(s => s.StartServiceAsync("MyService", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task StopCommand_Calls_StopService()
+        {
+            _viewModel.ServiceName = "MyService";
+            await _viewModel.StopCommand.ExecuteAsync(null);
+            _serviceCommandsMock.Verify(s => s.StopServiceAsync("MyService", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task RestartCommand_Calls_RestartService()
+        {
+            _viewModel.ServiceName = "MyService";
+            await _viewModel.RestartCommand.ExecuteAsync(null);
+            _serviceCommandsMock.Verify(s => s.RestartServiceAsync("MyService", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task UninstallCommand_Calls_UninstallService()
+        {
+            _viewModel.ServiceName = "MyService";
+            await _viewModel.UninstallCommand.ExecuteAsync(null);
+            _serviceCommandsMock.Verify(s => s.UninstallServiceAsync("MyService", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task ManagerCommand_Calls_OpenManager()
+        {
+            await _viewModel.ManagerCommand.ExecuteAsync(null);
+            _serviceCommandsMock.Verify(s => s.OpenManagerAsync(It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        #endregion
+
+        #region Browse Method Tests
+
+        [Theory]
+        [InlineData(nameof(MainViewModel.BrowseProcessPathCommand), nameof(MainViewModel.ProcessPath), "C:\\App\\proc.exe", false)]
+        [InlineData(nameof(MainViewModel.BrowseStartupDirectoryCommand), nameof(MainViewModel.StartupDirectory), "C:\\AppDir", true)]
+        [InlineData(nameof(MainViewModel.BrowseFailureProgramPathCommand), nameof(MainViewModel.FailureProgramPath), "C:\\App\\fail.exe", false)]
+        [InlineData(nameof(MainViewModel.BrowseFailureProgramStartupDirectoryCommand), nameof(MainViewModel.FailureProgramStartupDirectory), "C:\\FailDir", true)]
+        [InlineData(nameof(MainViewModel.BrowsePreLaunchProcessPathCommand), nameof(MainViewModel.PreLaunchExecutablePath), "C:\\App\\pre.exe", false)]
+        [InlineData(nameof(MainViewModel.BrowsePreLaunchStartupDirectoryCommand), nameof(MainViewModel.PreLaunchStartupDirectory), "C:\\PreDir", true)]
+        [InlineData(nameof(MainViewModel.BrowsePostLaunchProcessPathCommand), nameof(MainViewModel.PostLaunchExecutablePath), "C:\\App\\post.exe", false)]
+        [InlineData(nameof(MainViewModel.BrowsePostLaunchStartupDirectoryCommand), nameof(MainViewModel.PostLaunchStartupDirectory), "C:\\PostDir", true)]
+        [InlineData(nameof(MainViewModel.BrowsePreStopProcessPathCommand), nameof(MainViewModel.PreStopExecutablePath), "C:\\App\\prestop.exe", false)]
+        [InlineData(nameof(MainViewModel.BrowsePreStopStartupDirectoryCommand), nameof(MainViewModel.PreStopStartupDirectory), "C:\\PreStopDir", true)]
+        [InlineData(nameof(MainViewModel.BrowsePostStopProcessPathCommand), nameof(MainViewModel.PostStopExecutablePath), "C:\\App\\poststop.exe", false)]
+        [InlineData(nameof(MainViewModel.BrowsePostStopStartupDirectoryCommand), nameof(MainViewModel.PostStopStartupDirectory), "C:\\PostStopDir", true)]
+        public void BrowseExecutableAndFolderCommands_Set_CorrectPaths_When_Selected(string commandName, string propertyName, string samplePath, bool isFolder)
+        {
+            // Arrange
+            if (isFolder)
+                _dialogServiceMock.Setup(d => d.OpenFolder(It.IsAny<string?>())).Returns(samplePath);
+            else
+                _dialogServiceMock.Setup(d => d.OpenExecutable(It.IsAny<string?>())).Returns(samplePath);
+
+            var command = (ICommand)typeof(MainViewModel).GetProperty(commandName)!.GetValue(_viewModel)!;
+            var property = typeof(MainViewModel).GetProperty(propertyName)!;
+
+            // Act
+            command.Execute(null);
+
+            // Assert
+            Assert.Equal(samplePath, property.GetValue(_viewModel));
+        }
+
+        [Theory]
+        [InlineData(nameof(MainViewModel.BrowseStdoutPathCommand), nameof(MainViewModel.StdoutPath))]
+        [InlineData(nameof(MainViewModel.BrowseStderrPathCommand), nameof(MainViewModel.StderrPath))]
+        [InlineData(nameof(MainViewModel.BrowsePreLaunchStdoutPathCommand), nameof(MainViewModel.PreLaunchStdoutPath))]
+        [InlineData(nameof(MainViewModel.BrowsePreLaunchStderrPathCommand), nameof(MainViewModel.PreLaunchStderrPath))]
+        public void BrowseSaveFileCommands_Set_CorrectPaths_When_Selected(string commandName, string propertyName)
+        {
+            // Arrange
+            var samplePath = $"C:\\Logs\\{propertyName}.log";
+            _dialogServiceMock.Setup(d => d.SaveFile(It.IsAny<string>())).Returns(samplePath);
+
+            var command = (ICommand)typeof(MainViewModel).GetProperty(commandName)!.GetValue(_viewModel)!;
+            var property = typeof(MainViewModel).GetProperty(propertyName)!;
+
+            // Act
+            command.Execute(null);
+
+            // Assert
+            Assert.Equal(samplePath, property.GetValue(_viewModel));
+        }
+
+        [Fact]
+        public void BrowseAndAssign_DoesNotOverwrite_ExistingPath_When_UserCancelsDialog()
+        {
+            // Arrange
+            _viewModel.ProcessPath = "C:\\Existing\\App.exe";
+            _dialogServiceMock.Setup(d => d.OpenExecutable(It.IsAny<string?>())).Returns((string?)null);
+
+            // Act
+            _viewModel.BrowseProcessPathCommand.Execute(null);
+
+            // Assert
+            Assert.Equal("C:\\Existing\\App.exe", _viewModel.ProcessPath);
+        }
+
+        #endregion
+
+        #region Form State Management & Clear Form Tests
+
+        [Fact]
+        public async Task ClearCommand_Resets_All_Fields_WhenUserConfirms()
+        {
+            // Arrange
+            _viewModel.ServiceName = "TestService";
+            _viewModel.ServiceDisplayName = "Display";
+            _viewModel.ServiceDescription = "Desc";
+            _viewModel.ProcessPath = "test.exe";
+            _viewModel.StartupDirectory = @"C:\App";
+            _viewModel.ProcessParameters = "--args";
+            _viewModel.SelectedStartupType = ServiceStartType.Disabled;
+            _viewModel.SelectedProcessPriority = ProcessPriority.RealTime;
+            _viewModel.CpuAffinity = "0x1";
+            _viewModel.EnableConsoleUI = !DefaultEnableConsoleUI;
+            _viewModel.EnableSizeRotation = !DefaultEnableSizeRotation;
+            _viewModel.RotationSize = "999";
+            _viewModel.MaxRotations = "888";
+            _viewModel.EnableDateRotation = !DefaultEnableDateRotation;
+            _viewModel.SelectedDateRotationType = DateRotationType.Monthly;
+            _viewModel.StdoutPath = "out.log";
+            _viewModel.StderrPath = "err.log";
+            _viewModel.EnableHealthMonitoring = !DefaultEnableHealthMonitoring;
+            _viewModel.SelectedRecoveryAction = RecoveryAction.RestartComputer;
+            _viewModel.RecoveryOnCleanExit = !DefaultRecoveryOnCleanExit;
+            _viewModel.UseLocalTimeForRotation = !DefaultUseLocalTimeForRotation;
+            _viewModel.HeartbeatInterval = "111";
+            _viewModel.MaxFailedChecks = "222";
+            _viewModel.MaxRestartAttempts = "333";
+            _viewModel.HeartbeatUrl = "https://example.com/heartbeat";
+            _viewModel.HeartbeatUrlTimeoutSeconds = "29";
+            _viewModel.EnableHeartbeatUrlFlags = !DefaultEnableHeartbeatUrlFlags;
+            _viewModel.FailureProgramPath = "fail.exe";
+            _viewModel.FailureProgramStartupDirectory = "fail_dir";
+            _viewModel.FailureProgramParameters = "fail_args";
+            _viewModel.EnvironmentVariables = "V=1";
+            _viewModel.ServiceDependencies = "DepX";
+            _viewModel.RunAsLocalSystem = !DefaultRunAsLocalSystem;
+            _viewModel.UserAccount = "User";
+            _viewModel.Password = "Pass";
+            _viewModel.ConfirmPassword = "Pass";
+            _viewModel.PreLaunchExecutablePath = "pre.exe";
+            _viewModel.PreLaunchStartupDirectory = "pre_dir";
+            _viewModel.PreLaunchParameters = "pre_args";
+            _viewModel.PreLaunchEnvironmentVariables = "PV=1";
+            _viewModel.PreLaunchStdoutPath = "pre_out.log";
+            _viewModel.PreLaunchStderrPath = "pre_err.log";
+            _viewModel.PreLaunchTimeoutSeconds = "444";
+            _viewModel.PreLaunchRetryAttempts = "555";
+            _viewModel.PreLaunchIgnoreFailure = !DefaultPreLaunchIgnoreFailure;
+            _viewModel.PostLaunchExecutablePath = "post.exe";
+            _viewModel.PostLaunchStartupDirectory = "post_dir";
+            _viewModel.PostLaunchParameters = "post_args";
+            _viewModel.EnableDebugLogs = !DefaultEnableDebugLogs;
+            _viewModel.StartTimeout = "666";
+            _viewModel.StopTimeout = "777";
+            _viewModel.PreStopExecutablePath = "pre_stop.exe";
+            _viewModel.PreStopStartupDirectory = "pre_stop_dir";
+            _viewModel.PreStopParameters = "pre_stop_args";
+            _viewModel.PreStopTimeoutSeconds = "1515";
+            _viewModel.PreStopLogAsError = !DefaultPreStopLogAsError;
+            _viewModel.PostStopExecutablePath = "post_stop.exe";
+            _viewModel.PostStopStartupDirectory = "post_stop_dir";
+            _viewModel.PostStopParameters = "post_stop_args";
+
+            _messageBoxService.Setup(ds => ds.ShowConfirmAsync(Strings.Confirm_ClearAll, UiAppConfig.Caption)).ReturnsAsync(true);
+
+            // Act
+            await _viewModel.ClearFormCommand.ExecuteAsync(null);
+
+            // Assert
+            // Core Identification & Process Fields
+            Assert.Equal(string.Empty, _viewModel.ServiceName);
+            Assert.Equal(string.Empty, _viewModel.ServiceDisplayName);
+            Assert.Equal(string.Empty, _viewModel.ServiceDescription);
+            Assert.Equal(string.Empty, _viewModel.ProcessPath);
+            Assert.Equal(string.Empty, _viewModel.StartupDirectory);
+            Assert.Equal(string.Empty, _viewModel.ProcessParameters);
+            Assert.Equal(DefaultStartupType, _viewModel.SelectedStartupType);
+            Assert.Equal(DefaultProcessPriority, _viewModel.SelectedProcessPriority);
+            Assert.Equal(string.Empty, _viewModel.CpuAffinity);
+            Assert.Equal(DefaultEnableConsoleUI, _viewModel.EnableConsoleUI);
+
+            // Rotation and Logs configuration
+            Assert.Equal(DefaultEnableSizeRotation, _viewModel.EnableSizeRotation);
+            Assert.Equal(DefaultRotationSizeMB.ToString(), _viewModel.RotationSize);
+            Assert.Equal(DefaultMaxRotations.ToString(), _viewModel.MaxRotations);
+            Assert.Equal(DefaultEnableDateRotation, _viewModel.EnableDateRotation);
+            Assert.Equal(DefaultDateRotationType, _viewModel.SelectedDateRotationType);
+            Assert.Equal(string.Empty, _viewModel.StdoutPath);
+            Assert.Equal(string.Empty, _viewModel.StderrPath);
+            Assert.Equal(DefaultUseLocalTimeForRotation, _viewModel.UseLocalTimeForRotation);
+
+            // Health and Recovery
+            Assert.Equal(DefaultEnableHealthMonitoring, _viewModel.EnableHealthMonitoring);
+            Assert.Equal(DefaultRecoveryAction, _viewModel.SelectedRecoveryAction);
+            Assert.Equal(DefaultRecoveryOnCleanExit, _viewModel.RecoveryOnCleanExit);
+            Assert.Equal(DefaultHeartbeatInterval.ToString(), _viewModel.HeartbeatInterval);
+            Assert.Equal(DefaultMaxFailedChecks.ToString(), _viewModel.MaxFailedChecks);
+            Assert.Equal(DefaultMaxRestartAttempts.ToString(), _viewModel.MaxRestartAttempts);
+            Assert.Equal(string.Empty, _viewModel.FailureProgramPath);
+            Assert.Equal(string.Empty, _viewModel.FailureProgramStartupDirectory);
+            Assert.Equal(string.Empty, _viewModel.FailureProgramParameters);
+            Assert.Equal(string.Empty, _viewModel.HeartbeatUrl);
+            Assert.Equal(DefaultHeartbeatUrlTimeoutSeconds.ToString(), _viewModel.HeartbeatUrlTimeoutSeconds);
+            Assert.Equal(DefaultEnableHeartbeatUrlFlags, _viewModel.EnableHeartbeatUrlFlags);
+
+            // Environment & Dependencies
+            Assert.Equal(string.Empty, _viewModel.EnvironmentVariables);
+            Assert.Equal(string.Empty, _viewModel.ServiceDependencies);
+
+            // Access Controls / Credentials
+            Assert.Equal(DefaultRunAsLocalSystem, _viewModel.RunAsLocalSystem);
+            Assert.Equal(string.Empty, _viewModel.UserAccount);
+            Assert.Equal(string.Empty, _viewModel.Password);
+            Assert.Equal(string.Empty, _viewModel.ConfirmPassword);
+
+            // Pre-Launch Hooks
+            Assert.Equal(string.Empty, _viewModel.PreLaunchExecutablePath);
+            Assert.Equal(string.Empty, _viewModel.PreLaunchStartupDirectory);
+            Assert.Equal(string.Empty, _viewModel.PreLaunchParameters);
+            Assert.Equal(string.Empty, _viewModel.PreLaunchEnvironmentVariables);
+            Assert.Equal(string.Empty, _viewModel.PreLaunchStdoutPath);
+            Assert.Equal(string.Empty, _viewModel.PreLaunchStderrPath);
+            Assert.Equal(DefaultPreLaunchTimeoutSeconds.ToString(), _viewModel.PreLaunchTimeoutSeconds);
+            Assert.Equal(DefaultPreLaunchRetryAttempts.ToString(), _viewModel.PreLaunchRetryAttempts);
+            Assert.Equal(DefaultPreLaunchIgnoreFailure, _viewModel.PreLaunchIgnoreFailure);
+
+            // Post-Launch Hooks
+            Assert.Equal(string.Empty, _viewModel.PostLaunchExecutablePath);
+            Assert.Equal(string.Empty, _viewModel.PostLaunchStartupDirectory);
+            Assert.Equal(string.Empty, _viewModel.PostLaunchParameters);
+
+            // Global Logging & System Lifecycles Timeouts
+            Assert.Equal(DefaultEnableDebugLogs, _viewModel.EnableDebugLogs);
+            Assert.Equal(DefaultStartTimeout.ToString(), _viewModel.StartTimeout);
+            Assert.Equal(DefaultStopTimeout.ToString(), _viewModel.StopTimeout);
+
+            // Pre-Stop Hooks
+            Assert.Equal(string.Empty, _viewModel.PreStopExecutablePath);
+            Assert.Equal(string.Empty, _viewModel.PreStopStartupDirectory);
+            Assert.Equal(string.Empty, _viewModel.PreStopParameters);
+            Assert.Equal(DefaultPreStopTimeoutSeconds.ToString(), _viewModel.PreStopTimeoutSeconds);
+            Assert.Equal(DefaultPreStopLogAsError, _viewModel.PreStopLogAsError);
+
+            // Post-Stop Hooks
+            Assert.Equal(string.Empty, _viewModel.PostStopExecutablePath);
+            Assert.Equal(string.Empty, _viewModel.PostStopStartupDirectory);
+            Assert.Equal(string.Empty, _viewModel.PostStopParameters);
+        }
+
+        [Fact]
+        public async Task ClearCommand_DoesNotReset_WhenUserCancels()
+        {
+            // Arrange
+            _viewModel.ServiceName = "TestService";
+            _viewModel.ProcessPath = "test.exe";
+            _viewModel.EnableSizeRotation = true;
+            _viewModel.RotationSize = "555";
+
+            _messageBoxService.Setup(ds => ds.ShowConfirmAsync(Strings.Confirm_ClearAll, UiAppConfig.Caption)).ReturnsAsync(false);
+
+            // Act
+            await _viewModel.ClearFormCommand.ExecuteAsync(null);
+
+            // Assert values remain unchanged
+            Assert.Equal("TestService", _viewModel.ServiceName);
+            Assert.Equal("test.exe", _viewModel.ProcessPath);
+            Assert.True(_viewModel.EnableSizeRotation);
+            Assert.Equal("555", _viewModel.RotationSize);
+        }
+
+        #endregion
+
+        #region Import/Export Configuration Tests
+
+        [Fact]
+        public async Task ExportXmlCommand_Calls_ExportXmlConfig_With_ConfirmPassword()
+        {
+            _viewModel.ConfirmPassword = "SecretPassword123";
+            await _viewModel.ExportXmlCommand.ExecuteAsync(null);
+            _serviceCommandsMock.Verify(m => m.ExportXmlConfigAsync("SecretPassword123", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task ExportJsonCommand_Calls_ExportJsonConfig_With_ConfirmPassword()
+        {
+            _viewModel.ConfirmPassword = "SecretPassword123";
+            await _viewModel.ExportJsonCommand.ExecuteAsync(null);
+            _serviceCommandsMock.Verify(m => m.ExportJsonConfigAsync("SecretPassword123", It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task ImportXmlCommand_Calls_ImportXmlConfig()
+        {
+            await _viewModel.ImportXmlCommand.ExecuteAsync(null);
+            _serviceCommandsMock.Verify(m => m.ImportXmlConfigAsync(It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        [Fact]
+        public async Task ImportJsonCommand_Calls_ImportJsonConfig()
+        {
+            await _viewModel.ImportJsonCommand.ExecuteAsync(null);
+            _serviceCommandsMock.Verify(m => m.ImportJsonConfigAsync(It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        #endregion
+
+        #region Help / Documentation / Updates / About Dialog Tests
+
+        [Fact]
+        public async Task OpenDocumentation_Calls_HelpService_With_Caption()
+        {
+            await _viewModel.OpenDocumentationCommand.ExecuteAsync(null);
+            _helpService.Verify(h => h.OpenDocumentationAsync(UiAppConfig.Caption), Times.Once);
+        }
+
+        [Fact]
+        public async Task CheckUpdatesAsync_Calls_HelpService_With_Caption()
+        {
+            await _viewModel.CheckUpdatesCommand.ExecuteAsync(null);
+            _helpService.Verify(h => h.CheckUpdatesAsync(UiAppConfig.Caption), Times.Once);
+        }
+
+        [Fact]
+        public async Task OpenAboutDialog_Calls_HelpService_With_FormattedText_And_Caption()
+        {
+            // Act
+            await _viewModel.OpenAboutDialogCommand.ExecuteAsync(null);
+
+            // Assert
+            _helpService.Verify(h => h.OpenAboutDialogAsync(
+                It.Is<string>(text =>
+                    text.Contains(Core.Config.AppConfig.Version) &&
+                    text.Contains(DateTime.Now.Year.ToString())
+                ),
+                UiAppConfig.Caption), Times.Once);
+        }
+
+        [Fact]
+        public async Task ShowRecoveryActionHelpAsync_Calls_MessageBoxService()
+        {
+            await _viewModel.ShowRecoveryActionHelpCommand.ExecuteAsync(null);
+            _messageBoxService.Verify(m => m.ShowInfoAsync(Strings.Info_RecoveryAction, UiAppConfig.Caption), Times.Once);
+        }
+
+        [Fact]
+        public async Task OpenSecurityHardeningGuideCommand_Calls_OpenSecurityHardeningGuide()
+        {
+            await _viewModel.OpenSecurityHardeningGuideCommand.ExecuteAsync(null);
+            _serviceCommandsMock.Verify(s => s.OpenSecurityHardeningGuideAsync(It.IsAny<CancellationToken>()), Times.Once);
+        }
+
+        #endregion
+
+        #region Service Configuration Repository & Lifecycles Tests
+
+        [Fact]
+        public async Task LoadServiceConfiguration_ValidName_Binds_TargetConfigurationDtoToModel()
+        {
+            // Arrange
+            var sampleDto = new ServiceDto
+            {
+                Name = "PolledService",
+                DisplayName = "Polled Service Display",
+                ExecutablePath = "C:\\Polled\\Service.exe",
+                StartupType = (int)ServiceStartType.AutomaticDelayedStart,
+                Priority = (int)ProcessPriority.BelowNormal
+            };
+
+            _serviceRepository.Setup(r => r.GetByNameAsync("PolledService", It.IsAny<bool>(), It.IsAny<CancellationToken>())).ReturnsAsync(sampleDto);
+
+            // Act
+            await _viewModel.LoadServiceConfigurationAsync("PolledService");
+
+            // Assert
+            Assert.Equal("PolledService", _viewModel.ServiceName);
+            Assert.Equal("Polled Service Display", _viewModel.ServiceDisplayName);
+            Assert.Equal("C:\\Polled\\Service.exe", _viewModel.ProcessPath);
+            Assert.Equal(ServiceStartType.AutomaticDelayedStart, _viewModel.SelectedStartupType);
+            Assert.Equal(ProcessPriority.BelowNormal, _viewModel.SelectedProcessPriority);
+        }
+
+        [Fact]
+        public async Task LoadServiceConfiguration_ServiceNotFound_ExitsWithErrorMessage()
+        {
+            // Arrange
+            _viewModel.ServiceName = "KeepThisName";
+            _serviceRepository.Setup(r => r.GetByNameAsync("MissingService", It.IsAny<bool>(), It.IsAny<CancellationToken>())).ReturnsAsync((ServiceDto?)null);
+
+            // Act
+            await _viewModel.LoadServiceConfigurationAsync("MissingService");
+
+            // Assert
+            Assert.Equal("KeepThisName", _viewModel.ServiceName);
+            _messageBoxService.Verify(m => m.ShowErrorAsync(Core.Resources.Strings.Msg_ServiceNotFound, UiAppConfig.Caption), Times.Once);
+        }
+
+        [Fact]
+        public async Task LoadServiceConfiguration_ExceptionBranch_DisplaysErrorMessageBox()
+        {
+            // Arrange
+            _serviceRepository.Setup(r => r.GetByNameAsync("ErrorService", It.IsAny<bool>(), It.IsAny<CancellationToken>())).ThrowsAsync(new InvalidOperationException("DB Corrupt"));
+
+            // Act
+            await _viewModel.LoadServiceConfigurationAsync("ErrorService");
+
+            // Assert
+            _messageBoxService.Verify(m => m.ShowErrorAsync(Strings.Msg_UnexpectedError, UiAppConfig.Caption), Times.Once);
+        }
+
+        #endregion
+
+        #region DTO Binding and Conversion Mapping Tests
+
+        [Fact]
+        public void BindServiceDtoToModel_Populates_All_Properties_Correctly()
+        {
+            // Arrange
+            var dto = new ServiceDto
+            {
+                Name = "DtoService",
+                DisplayName = "Dto Display",
+                Description = "Dto Desc",
+                ExecutablePath = "C:\\proc.exe",
+                StartupDirectory = "C:\\Start",
+                Parameters = "--args",
+                StartupType = (int)ServiceStartType.Disabled,
+                Priority = (int)ProcessPriority.RealTime,
+                CpuAffinity = "0x1",
+                EnableConsoleUI = true,
+                StdoutPath = "out.log",
+                StderrPath = "err.log",
+                EnableSizeRotation = true,
+                RotationSize = 50,
+                EnableDateRotation = true,
+                DateRotationType = (int)DateRotationType.Monthly,
+                MaxRotations = 10,
+                UseLocalTimeForRotation = true,
+                EnableHealthMonitoring = true,
+                HeartbeatInterval = 30,
+                MaxFailedChecks = 3,
+                RecoveryAction = (int)RecoveryAction.RestartProcess,
+                RecoveryOnCleanExit = true,
+                MaxRestartAttempts = 5,
+                HeartbeatUrl = "https://example.com/heartbeat",
+                HeartbeatUrlTimeoutSeconds = 10,
+                EnableHeartbeatUrlFlags = true,
+                FailureProgramPath = "fail.exe",
+                FailureProgramStartupDirectory = "fail_dir",
+                FailureProgramParameters = "--fail-args",
+                EnvironmentVariables = "A=1;b=2",
+                ServiceDependencies = "ServiceA;ServiceB",
+                RunAsLocalSystem = false,
+                UserAccount = "Admin",
+                Password = "ProtectedPassword",
+                PreLaunchExecutablePath = "pre.exe",
+                PreLaunchStartupDirectory = "pre_dir",
+                PreLaunchParameters = "--pre-args",
+                PreLaunchEnvironmentVariables = "X=9;Y=10",
+                PreLaunchStdoutPath = "pre_out.log",
+                PreLaunchStderrPath = "pre_err.log",
+                PreLaunchTimeoutSeconds = 15,
+                PreLaunchRetryAttempts = 2,
+                PreLaunchIgnoreFailure = true,
+                PostLaunchExecutablePath = "post.exe",
+                PostLaunchStartupDirectory = "post_dir",
+                PostLaunchParameters = "--post-args",
+                EnableDebugLogs = true,
+                StartTimeout = 45,
+                StopTimeout = 25,
+                PreStopExecutablePath = "pre_stop.exe",
+                PreStopStartupDirectory = "pre_stop_dir",
+                PreStopParameters = "--pre-stop-args",
+                PreStopTimeoutSeconds = 20,
+                PreStopLogAsError = true,
+                PostStopExecutablePath = "post_stop.exe",
+                PostStopStartupDirectory = "post_stop_dir",
+                PostStopParameters = "--post-stop-args"
+            };
+
+            // Act
+            _viewModel.BindServiceDtoToModel(dto);
+
+            // Assert
+            Assert.Equal(dto.Name, _viewModel.ServiceName);
+            Assert.Equal(dto.DisplayName, _viewModel.ServiceDisplayName);
+            Assert.Equal(dto.Description, _viewModel.ServiceDescription);
+            Assert.Equal(dto.ExecutablePath, _viewModel.ProcessPath);
+            Assert.Equal(dto.StartupDirectory, _viewModel.StartupDirectory);
+            Assert.Equal(dto.Parameters, _viewModel.ProcessParameters);
+            Assert.Equal(ServiceStartType.Disabled, _viewModel.SelectedStartupType);
+            Assert.Equal(ProcessPriority.RealTime, _viewModel.SelectedProcessPriority);
+            Assert.Equal(dto.CpuAffinity, _viewModel.CpuAffinity);
+            Assert.True(_viewModel.EnableConsoleUI);
+            Assert.Equal(dto.StdoutPath, _viewModel.StdoutPath);
+            Assert.Equal(dto.StderrPath, _viewModel.StderrPath);
+            Assert.True(_viewModel.EnableSizeRotation);
+            Assert.Equal("50", _viewModel.RotationSize);
+            Assert.True(_viewModel.EnableDateRotation);
+            Assert.Equal(DateRotationType.Monthly, _viewModel.SelectedDateRotationType);
+            Assert.Equal("10", _viewModel.MaxRotations);
+            Assert.True(_viewModel.UseLocalTimeForRotation);
+            Assert.True(_viewModel.EnableHealthMonitoring);
+            Assert.Equal("30", _viewModel.HeartbeatInterval);
+            Assert.Equal("3", _viewModel.MaxFailedChecks);
+            Assert.Equal(RecoveryAction.RestartProcess, _viewModel.SelectedRecoveryAction);
+            Assert.True(_viewModel.RecoveryOnCleanExit);
+            Assert.Equal("5", _viewModel.MaxRestartAttempts);
+            Assert.Equal(dto.HeartbeatUrl, _viewModel.HeartbeatUrl);
+            Assert.Equal("10", _viewModel.HeartbeatUrlTimeoutSeconds);
+            Assert.True(_viewModel.EnableHeartbeatUrlFlags);
+            Assert.Equal(dto.FailureProgramPath, _viewModel.FailureProgramPath);
+            Assert.Equal(dto.FailureProgramStartupDirectory, _viewModel.FailureProgramStartupDirectory);
+            Assert.Equal(dto.FailureProgramParameters, _viewModel.FailureProgramParameters);
+            Assert.Equal(dto.UserAccount, _viewModel.UserAccount);
+            Assert.Equal(dto.Password, _viewModel.Password);
+            Assert.Equal(string.Empty, _viewModel.ConfirmPassword); // Purposely wiped for safety checks
+            Assert.Equal(dto.PreLaunchExecutablePath, _viewModel.PreLaunchExecutablePath);
+            Assert.Equal(dto.PreLaunchStartupDirectory, _viewModel.PreLaunchStartupDirectory);
+            Assert.Equal(dto.PreLaunchParameters, _viewModel.PreLaunchParameters);
+            Assert.Equal(dto.PreLaunchStdoutPath, _viewModel.PreLaunchStdoutPath);
+            Assert.Equal(dto.PreLaunchStderrPath, _viewModel.PreLaunchStderrPath);
+            Assert.Equal("15", _viewModel.PreLaunchTimeoutSeconds);
+            Assert.Equal("2", _viewModel.PreLaunchRetryAttempts);
+            Assert.True(_viewModel.PreLaunchIgnoreFailure);
+            Assert.Equal(dto.PostLaunchExecutablePath, _viewModel.PostLaunchExecutablePath);
+            Assert.Equal(dto.PostLaunchStartupDirectory, _viewModel.PostLaunchStartupDirectory);
+            Assert.Equal(dto.PostLaunchParameters, _viewModel.PostLaunchParameters);
+            Assert.True(_viewModel.EnableDebugLogs);
+            Assert.Equal("45", _viewModel.StartTimeout);
+            Assert.Equal("25", _viewModel.StopTimeout);
+            Assert.Equal(dto.PreStopExecutablePath, _viewModel.PreStopExecutablePath);
+            Assert.Equal(dto.PreStopStartupDirectory, _viewModel.PreStopStartupDirectory);
+            Assert.Equal(dto.PreStopParameters, _viewModel.PreStopParameters);
+            Assert.Equal("20", _viewModel.PreStopTimeoutSeconds);
+            Assert.True(_viewModel.PreStopLogAsError);
+            Assert.Equal(dto.PostStopExecutablePath, _viewModel.PostStopExecutablePath);
+            Assert.Equal(dto.PostStopStartupDirectory, _viewModel.PostStopStartupDirectory);
+            Assert.Equal(dto.PostStopParameters, _viewModel.PostStopParameters);
+            // Asserted as literals rather than by calling the same helper the SUT calls, so a change
+            // of separator in the helper cannot move both sides of the comparison together.
+            Assert.Equal($"A=1{Environment.NewLine}b=2", _viewModel.EnvironmentVariables);
+            Assert.Equal($"ServiceA{Environment.NewLine}ServiceB", _viewModel.ServiceDependencies);
+            Assert.Equal($"X=9{Environment.NewLine}Y=10", _viewModel.PreLaunchEnvironmentVariables);
+            Assert.Equal(dto.RunAsLocalSystem, _viewModel.RunAsLocalSystem);
+        }
+
+        [Fact]
+        public void BindServiceDtoToModel_EnvironmentVariablesDoNotParse_FallsBackToRawValueAndCompletesBinding()
+        {
+            // Arrange - "novalue" carries no unescaped '=', the record shape
+            // EnvironmentVariableParser.Parse rejects with a FormatException per its own <exception>
+            // doc, so this is the stored value shape #5923 reported reaching BindServiceDtoToModel
+            // uncaught.
+            var dto = new ServiceDto
+            {
+                Name = "LegacyService",
+                ExecutablePath = "C:\\proc.exe",
+                EnvironmentVariables = "novalue",
+                UserAccount = "Admin"
+            };
+
+            // Act
+            _viewModel.BindServiceDtoToModel(dto);
+
+            // Assert - the raw text is shown so an operator can correct it, and binding continues
+            // past the failing field instead of leaving the form half-populated.
+            Assert.Equal("novalue", _viewModel.EnvironmentVariables);
+            Assert.Equal("Admin", _viewModel.UserAccount);
+        }
+
+        [Fact]
+        public void ModelToServiceDto_Converts_CurrentState_To_Dto_Correctly()
+        {
+            // Arrange
+            _viewModel.ServiceName = "ModelService";
+            _viewModel.ServiceDisplayName = "Model Display";
+            _viewModel.ServiceDescription = "Model Desc";
+            _viewModel.ProcessPath = "C:\\proc.exe";
+            _viewModel.StartupDirectory = "C:\\Dir";
+            _viewModel.ProcessParameters = "--run";
+            _viewModel.SelectedStartupType = ServiceStartType.Automatic;
+            _viewModel.SelectedProcessPriority = ProcessPriority.Normal;
+            _viewModel.CpuAffinity = "0x1";
+            _viewModel.EnableConsoleUI = false;
+            _viewModel.StdoutPath = "stdout.txt";
+            _viewModel.StderrPath = "stderr.txt";
+            _viewModel.EnableSizeRotation = false;
+            _viewModel.RotationSize = "25";
+            _viewModel.EnableDateRotation = false;
+            _viewModel.SelectedDateRotationType = DateRotationType.Daily;
+            _viewModel.MaxRotations = "5";
+            _viewModel.UseLocalTimeForRotation = false;
+            _viewModel.EnableHealthMonitoring = false;
+            _viewModel.HeartbeatInterval = "10";
+            _viewModel.MaxFailedChecks = "2";
+            _viewModel.SelectedRecoveryAction = RecoveryAction.None;
+            _viewModel.RecoveryOnCleanExit = false;
+            _viewModel.MaxRestartAttempts = "0";
+            _viewModel.HeartbeatUrl = "https://example.com/heartbeat";
+            _viewModel.HeartbeatUrlTimeoutSeconds = "10";
+            _viewModel.EnableHeartbeatUrlFlags = true;
+            _viewModel.FailureProgramPath = "kill.exe";
+            _viewModel.FailureProgramStartupDirectory = "kill_dir";
+            _viewModel.FailureProgramParameters = "--now";
+            _viewModel.EnvironmentVariables = $"A=1{Environment.NewLine}B=2";
+            _viewModel.ServiceDependencies = $"ServiceA{Environment.NewLine}ServiceB";
+            _viewModel.RunAsLocalSystem = true;
+            _viewModel.UserAccount = "LocalSystem";
+            _viewModel.Password = "Pass";
+            _viewModel.PreLaunchExecutablePath = "p.exe";
+            _viewModel.PreLaunchStartupDirectory = "p_dir";
+            _viewModel.PreLaunchParameters = "-p";
+            _viewModel.PreLaunchEnvironmentVariables = $"X=9{Environment.NewLine}Y=10";
+            _viewModel.PreLaunchStdoutPath = "p.log";
+            _viewModel.PreLaunchStderrPath = "p_err.log";
+            _viewModel.PreLaunchTimeoutSeconds = "5";
+            _viewModel.PreLaunchRetryAttempts = "1";
+            _viewModel.PreLaunchIgnoreFailure = false;
+            _viewModel.PostLaunchExecutablePath = "po.exe";
+            _viewModel.PostLaunchStartupDirectory = "po_dir";
+            _viewModel.PostLaunchParameters = "-po";
+            _viewModel.EnableDebugLogs = false;
+            _viewModel.StartTimeout = "30";
+            _viewModel.StopTimeout = "20";
+            _viewModel.PreStopExecutablePath = "ps.exe";
+            _viewModel.PreStopStartupDirectory = "ps_dir";
+            _viewModel.PreStopParameters = "-ps";
+            _viewModel.PreStopTimeoutSeconds = "10";
+            _viewModel.PreStopLogAsError = false;
+            _viewModel.PostStopExecutablePath = "pst.exe";
+            _viewModel.PostStopStartupDirectory = "pst_dir";
+            _viewModel.PostStopParameters = "-pst";
+
+            // Act
+            var dto = _viewModel.ModelToServiceDto();
+
+            // Assert
+            Assert.Equal(_viewModel.ServiceName, dto.Name);
+            Assert.Equal(_viewModel.ServiceDisplayName, dto.DisplayName);
+            Assert.Equal(_viewModel.ServiceDescription, dto.Description);
+            Assert.Equal(_viewModel.ProcessPath, dto.ExecutablePath);
+            Assert.Equal(_viewModel.StartupDirectory, dto.StartupDirectory);
+            Assert.Equal(_viewModel.ProcessParameters, dto.Parameters);
+            Assert.Equal((int)ServiceStartType.Automatic, dto.StartupType);
+            Assert.Equal((int)ProcessPriority.Normal, dto.Priority);
+            Assert.Equal(_viewModel.CpuAffinity, dto.CpuAffinity);
+            Assert.False(dto.EnableConsoleUI);
+            Assert.Equal(_viewModel.StdoutPath, dto.StdoutPath);
+            Assert.Equal(_viewModel.StderrPath, dto.StderrPath);
+            Assert.False(dto.EnableSizeRotation);
+            Assert.Equal(25, dto.RotationSize);
+            Assert.False(dto.EnableDateRotation);
+            Assert.Equal((int)DateRotationType.Daily, dto.DateRotationType);
+            Assert.Equal(5, dto.MaxRotations);
+            Assert.False(dto.UseLocalTimeForRotation);
+            Assert.False(dto.EnableHealthMonitoring);
+            Assert.Equal(10, dto.HeartbeatInterval);
+            Assert.Equal(2, dto.MaxFailedChecks);
+            Assert.Equal((int)RecoveryAction.None, dto.RecoveryAction);
+            Assert.False(dto.RecoveryOnCleanExit);
+            Assert.Equal(0, dto.MaxRestartAttempts);
+            Assert.Equal(_viewModel.HeartbeatUrl, dto.HeartbeatUrl);
+            Assert.Equal(10, dto.HeartbeatUrlTimeoutSeconds);
+            Assert.True(dto.EnableHeartbeatUrlFlags);
+            Assert.Equal(_viewModel.FailureProgramPath, dto.FailureProgramPath);
+            Assert.Equal(_viewModel.FailureProgramStartupDirectory, dto.FailureProgramStartupDirectory);
+            Assert.Equal(_viewModel.FailureProgramParameters, dto.FailureProgramParameters);
+            Assert.True(dto.RunAsLocalSystem);
+            Assert.Equal(_viewModel.UserAccount, dto.UserAccount);
+            Assert.Equal(_viewModel.Password, dto.Password);
+
+            // Core Dependency & Environment Variables Mappings
+            // Asserted as the semicolon-delimited storage form, not as an echo of the view model,
+            // so the NormalizeString conversion itself is what is measured.
+            Assert.Equal("A=1;B=2", dto.EnvironmentVariables);
+            Assert.Equal("ServiceA;ServiceB", dto.ServiceDependencies);
+
+            // Pre-Launch Life-cycle Assertions
+            Assert.Equal(_viewModel.PreLaunchExecutablePath, dto.PreLaunchExecutablePath);
+            Assert.Equal(_viewModel.PreLaunchStartupDirectory, dto.PreLaunchStartupDirectory);
+            Assert.Equal(_viewModel.PreLaunchParameters, dto.PreLaunchParameters);
+            Assert.Equal("X=9;Y=10", dto.PreLaunchEnvironmentVariables);
+            Assert.Equal(_viewModel.PreLaunchStdoutPath, dto.PreLaunchStdoutPath);
+            Assert.Equal(_viewModel.PreLaunchStderrPath, dto.PreLaunchStderrPath);
+            Assert.Equal(5, dto.PreLaunchTimeoutSeconds);
+            Assert.Equal(1, dto.PreLaunchRetryAttempts);
+            Assert.False(dto.PreLaunchIgnoreFailure);
+
+            // Post-Launch Life-cycle Assertions
+            Assert.Equal(_viewModel.PostLaunchExecutablePath, dto.PostLaunchExecutablePath);
+            Assert.Equal(_viewModel.PostLaunchStartupDirectory, dto.PostLaunchStartupDirectory);
+            Assert.Equal(_viewModel.PostLaunchParameters, dto.PostLaunchParameters);
+
+            Assert.False(dto.EnableDebugLogs);
+            Assert.Equal(30, dto.StartTimeout);
+            Assert.Equal(20, dto.StopTimeout);
+
+            // Pre-Stop Life-cycle Assertions
+            Assert.Equal(_viewModel.PreStopExecutablePath, dto.PreStopExecutablePath);
+            Assert.Equal(_viewModel.PreStopStartupDirectory, dto.PreStopStartupDirectory);
+            Assert.Equal(_viewModel.PreStopParameters, dto.PreStopParameters);
+            Assert.Equal(10, dto.PreStopTimeoutSeconds);
+            Assert.False(dto.PreStopLogAsError);
+
+            // Post-Stop Life-cycle Assertions
+            Assert.Equal(_viewModel.PostStopExecutablePath, dto.PostStopExecutablePath);
+            Assert.Equal(_viewModel.PostStopStartupDirectory, dto.PostStopStartupDirectory);
+            Assert.Equal(_viewModel.PostStopParameters, dto.PostStopParameters);
+        }
+
+        [Fact]
+        public void ModelToServiceDto_WithInvalidNumericInputs_EmitsUnparseableSentinel()
+        {
+            // Arrange
+            _viewModel.RotationSize = "invalid";
+            _viewModel.MaxRotations = "abc";
+            _viewModel.HeartbeatInterval = "10.5";
+            _viewModel.MaxFailedChecks = "not_a_number";
+            _viewModel.MaxRestartAttempts = "xyz";
+            _viewModel.HeartbeatUrlTimeoutSeconds = "ten";
+            _viewModel.PreLaunchTimeoutSeconds = "5s";
+            _viewModel.PreLaunchRetryAttempts = "1_0";
+            _viewModel.StartTimeout = "3000ms";
+            _viewModel.StopTimeout = "2000ms";
+            _viewModel.PreStopTimeoutSeconds = "bad_val";
+
+            // Act
+            var dto = _viewModel.ModelToServiceDto();
+
+            // Assert
+            Assert.Equal(-1, dto.RotationSize);
+            Assert.Equal(-1, dto.MaxRotations);
+            Assert.Equal(-1, dto.HeartbeatInterval);
+            Assert.Equal(-1, dto.MaxFailedChecks);
+            Assert.Equal(-1, dto.MaxRestartAttempts);
+            Assert.Equal(-1, dto.HeartbeatUrlTimeoutSeconds);
+            Assert.Equal(-1, dto.PreLaunchTimeoutSeconds);
+            Assert.Equal(-1, dto.PreLaunchRetryAttempts);
+            Assert.Equal(-1, dto.StartTimeout);
+            Assert.Equal(-1, dto.StopTimeout);
+            Assert.Equal(-1, dto.PreStopTimeoutSeconds);
+        }
+
+        #endregion
+
+        #region Cleanup / Unhook Event Handler Demolition Tests
+
+        [Fact]
+        public void Dispose_Unhooks_AppConfig_PropertyChanged_EventHandler_To_Prevent_Leaks()
+        {
+            // Arrange
+            _appConfigMock.Setup(c => c.IsManagerAppAvailable).Returns(false);
+
+            // Act - Dispose the ViewModel to unhook event bindings
+            _viewModel.Dispose();
+
+            // Raise the PropertyChanged event post-dispose
+            _appConfigMock.Raise(c => c.PropertyChanged += null, new PropertyChangedEventArgs(nameof(IAppConfiguration.IsManagerAppAvailable)));
+
+            // Assert - The property shouldn't be updated anymore since the handler is safely detached
+            Assert.True(_viewModel.IsManagerAppAvailable);
+        }
+
+        #endregion
+    }
+}

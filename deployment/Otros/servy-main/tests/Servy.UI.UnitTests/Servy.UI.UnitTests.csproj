@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <AssemblyTitle>Servy.UI.UnitTests</AssemblyTitle>
+    <Description>Servy.UI unit tests</Description>
+    <Product>Servy.UI.UnitTests</Product>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Servy.UI\Servy.UI.csproj" />
+  </ItemGroup>
+
+</Project>

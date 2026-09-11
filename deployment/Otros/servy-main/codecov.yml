@@ -1,0 +1,7 @@
+coverage:
+  status:
+    project: off   # disables overall project coverage check
+    patch: off     # disables patch coverage check
+
+# Coverage scope (which assemblies and files are reported) is decided once, upstream:
+# see .github/workflows/test.yml.

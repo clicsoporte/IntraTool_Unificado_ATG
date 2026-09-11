@@ -1,0 +1,13 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Internal HKDF-derived key field, not a literal secret"
+condition = "AND"
+paths = [
+  '''src/Servy\.Core/Security/SecureData\.cs''',
+  '''tests/Servy\.Core\.UnitTests/Security/SecureDataTests\.cs''',
+]
+regexes = [
+  '''_v2EncryptionKey''',
+]

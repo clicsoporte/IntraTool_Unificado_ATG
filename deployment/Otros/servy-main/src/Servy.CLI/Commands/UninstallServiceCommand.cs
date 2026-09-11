@@ -1,0 +1,56 @@
+using Servy.CLI.Models;
+using Servy.CLI.Options;
+using Servy.CLI.Resources;
+using Servy.Core.Data;
+using Servy.Core.Security;
+using Servy.Core.Services;
+
+namespace Servy.CLI.Commands
+{
+    /// <summary>
+    /// Command to uninstall a Windows service.
+    /// </summary>
+    public class UninstallServiceCommand : BaseCommand
+    {
+        private readonly IServiceManager _serviceManager;
+        private readonly IServiceRepository _serviceRepository;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="UninstallServiceCommand"/> class.
+        /// </summary>
+        /// <param name="serviceManager">Service manager to perform service operations.</param>
+        /// <param name="serviceRepository">The repository for managing service data persistence.</param>
+        /// <exception cref="ArgumentNullException">
+        /// Thrown when <paramref name="serviceManager"/> or <paramref name="serviceRepository"/> is <c>null</c>.
+        /// </exception>
+        public UninstallServiceCommand(IServiceManager serviceManager, IServiceRepository serviceRepository)
+        {
+            _serviceManager = serviceManager ?? throw new ArgumentNullException(nameof(serviceManager));
+            _serviceRepository = serviceRepository ?? throw new ArgumentNullException(nameof(serviceRepository));
+        }
+
+        /// <summary>
+        /// Executes the uninstall of the service with the specified options.
+        /// </summary>
+        /// <param name="opts">Options containing the service name to uninstall.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task{CommandResult}"/> indicating the success or failure of the operation.</returns>
+        public async Task<CommandResult> ExecuteAsync(UninstallServiceOptions opts, CancellationToken cancellationToken = default)
+        {
+            var action = string.Format(Strings.Msg_UninstallServiceAction, opts.ServiceName);
+            var suggestion = Strings.Msg_UninstallServiceSuggestion;
+
+            return await ExecuteServiceOperationAsync(
+                commandName: "uninstall",
+                action: action,
+                suggestion: suggestion,
+                serviceName: opts.ServiceName,
+                serviceManager: _serviceManager,
+                operation: (token) => _serviceManager.UninstallServiceAsync(opts.ServiceName, cancellationToken: token),
+                successMessageFormatter: (name) => string.Format(Strings.Msg_UninstallSuccess, name),
+                onSuccess: (token) => _serviceRepository.DeleteAsync(opts.ServiceName, cancellationToken: token),
+                skipInstalledCheck: true,
+                cancellationToken: cancellationToken);
+        }
+    }
+}

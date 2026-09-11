@@ -1,0 +1,140 @@
+using Servy.Core.Config;
+using Servy.Infrastructure.Helpers;
+
+namespace Servy.Infrastructure.UnitTests.Helpers
+{
+    public class DatabaseValidatorTests
+    {
+        [Fact]
+        public void IsSqliteVersionSafe_CurrentEnvironment_ReturnsParseableVersion()
+        {
+            // Arrange & Act
+            bool isSafe = DatabaseValidator.IsSqliteVersionSafe(out string? detectedVersion);
+
+            // Assert
+            // We do not assert whether the environment is safe or unsafe (which is environment-dependent).
+            // We only assert that the method successfully extracted a version string that can be parsed,
+            // proving the detection mechanism itself works without crashing.
+            Assert.NotNull(detectedVersion);
+            Assert.True(Version.TryParse(detectedVersion, out _), $"Detected version '{detectedVersion}' should be parseable.");
+
+            // Verify that the boolean verdict strictly agrees with direct delegation to ValidateVersion
+            Assert.Equal(DatabaseValidator.ValidateVersion(detectedVersion), isSafe);
+        }
+
+        [Fact]
+        public void IsSqliteVersionSafe_ReportsTheLoadedEngineVersion()
+        {
+            // Act
+            DatabaseValidator.IsSqliteVersionSafe(out string? detectedVersion);
+
+            // Assert
+            // The out parameter is the engine version itself, not merely something parseable:
+            // a pass-through that reported any other well-formed version would satisfy
+            // IsSqliteVersionSafe_CurrentEnvironment_ReturnsParseableVersion but not this.
+            Assert.Equal(System.Data.SQLite.SQLiteConnection.SQLiteVersion, detectedVersion);
+        }
+
+        [Fact]
+        public void IsSqliteVersionSafe_ReturnsFalse_WhenVersionIsBelowMinRequiredFloor()
+        {
+            // Arrange - Override seam with an unsafe SQLite version string below the CVE floor
+            var originalSeam = DatabaseValidator.GetSqliteVersion;
+            DatabaseValidator.GetSqliteVersion = () => "3.1.0";
+
+            try
+            {
+                // Act
+                bool isSafe = DatabaseValidator.IsSqliteVersionSafe(out string? currentVersion);
+
+                // Assert - Catches constant-true mutation: must return false for unsafe versions
+                Assert.False(isSafe);
+                Assert.Equal("3.1.0", currentVersion);
+            }
+            finally
+            {
+                DatabaseValidator.GetSqliteVersion = originalSeam;
+            }
+        }
+
+        [Fact]
+        public void IsSqliteVersionSafe_ReturnsTrue_WhenVersionMeetsMinRequiredFloor()
+        {
+            // Arrange - Override seam with a safe SQLite version string
+            var originalSeam = DatabaseValidator.GetSqliteVersion;
+            var safeVersion = AppConfig.MinRequiredSqliteVersion.ToString();
+            DatabaseValidator.GetSqliteVersion = () => safeVersion;
+
+            try
+            {
+                // Act
+                bool isSafe = DatabaseValidator.IsSqliteVersionSafe(out string? currentVersion);
+
+                // Assert
+                Assert.True(isSafe);
+                Assert.Equal(safeVersion, currentVersion);
+            }
+            finally
+            {
+                DatabaseValidator.GetSqliteVersion = originalSeam;
+            }
+        }
+
+        [Fact]
+        public void ShippedSqliteEngine_ClearsTheCveFloor()
+        {
+            // Act
+            var shipped = Version.Parse(System.Data.SQLite.SQLiteConnection.SQLiteVersion);
+
+            // Assert
+            // The engine the solution actually ships must satisfy our own CVE-2025-6965 minimum.
+            // This is the supply-chain regression guard: a package downgrade should fail here
+            // rather than silently disarm the startup check.
+            Assert.True(shipped >= AppConfig.MinRequiredSqliteVersion,
+                $"Shipped SQLite {shipped} is below the required {AppConfig.MinRequiredSqliteVersion}.");
+        }
+
+        public static TheoryData<string?, bool> VersionCases()
+        {
+            var min = AppConfig.MinRequiredSqliteVersion;
+            var justBelow = min.Build > 0
+                ? new Version(min.Major, min.Minor, min.Build - 1)
+                : min.Minor > 0
+                    ? new Version(min.Major, min.Minor - 1, 999)
+                    : new Version(min.Major - 1, 999, 999);
+            var newerPatch = new Version(min.Major, min.Minor, min.Build + 2);
+
+            return new TheoryData<string?, bool>
+            {
+                // Branch 1: Valid and Safe (sqlVersion >= MinRequiredSqliteVersion)
+                { min.ToString(), true },        // Exact boundary: comparison must be >=
+                { newerPatch.ToString(), true }, // Newer patch version
+                { "4.0.0", true },               // Major-version bump must still compare as newer
+                { "10.0.0", true },              // Multi-digit major must not compare lexically
+
+                // Branch 2: Valid but Unsafe (sqlVersion < MinRequiredSqliteVersion)
+                { justBelow.ToString(), false }, // One patch level below must be rejected
+                { "1.0.0", false },
+                { "0.0.0", false },
+
+                // Branch 3: Invalid/Unparseable (Version.TryParse returns false)
+                { "not-a-version", false },
+                { "invalid", false },
+                { "v3.50.2", false },            // Version.TryParse fails on leading characters
+                { "", false },
+                { null, false }
+            };
+        }
+
+        [Theory]
+        [MemberData(nameof(VersionCases))]
+        public void ValidateVersion_ParsesAndComparesAgainstMinimum(string? inputVersion, bool expectedSafe)
+        {
+            // Act
+            bool actualResult = DatabaseValidator.ValidateVersion(inputVersion);
+
+            // Assert
+            Assert.Equal(expectedSafe, actualResult);
+        }
+    }
+}

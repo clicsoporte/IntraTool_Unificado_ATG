@@ -1,0 +1,99 @@
+# ==========================================================================================
+# SBOM Generation Workflow
+# ==========================================================================================
+#
+# Purpose:
+#    This workflow generates a CycloneDX Software Bill of Materials (SBOM)
+#    for the Servy solution and uploads it as a short-lived build artifact.
+#
+# Trigger:
+#    Manually triggered via workflow_dispatch.
+#
+# Inputs:
+#    version:
+#      Required. Must be in Major.Minor format (e.g. 4.2).
+#      The value is validated at runtime and used consistently for:
+#        - SBOM metadata version
+#        - Output filename
+#        - Artifact name
+#
+# Security / Trust Notes:
+#    - Version input is validated early and the workflow fails fast on error.
+#    - Repository checkout is shallow; the SBOM is derived from the working tree only.
+#    - The SBOM artifact is retained for 1 day to reduce exposure surface.
+#
+# Output:
+#    - servy-<version>-sbom.xml (CycloneDX XML)
+#
+# ==========================================================================================
+
+name: sbom
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version in Major.Minor format (e.g. 4.2)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  sbom:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      # Mapping the input to an environment variable prevents Expression Injection.
+      # The shell will now treat this as a literal string.
+      INPUT_VERSION: ${{ github.event.inputs.version }}
+      MAX_RETRIES: 5 # Maximum retry attempts for resilient network down-stream downloads
+
+    steps:
+      # -----------------------------------------------------
+      # Validate version input (Major.Minor)
+      # -----------------------------------------------------
+      - name: Validate version format
+        shell: pwsh
+        run: |
+          $version = $env:INPUT_VERSION
+
+          if ($version -notmatch '^\d+\.\d+$') {
+            throw "Invalid version format '$version'. Expected Major.Minor (e.g. 4.2)."
+          }
+
+          Write-Host "Version format validated: $version"
+
+      # -----------------------------------------------------
+      # Checkout repository
+      # -----------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 #v6.0.3
+
+      # -----------------------------------------------------
+      # Build and Publish SBOM
+      # -----------------------------------------------------
+      - name: Setup .NET
+        uses: ./.github/actions/setup-dotnet
+        with:
+          max_retries: ${{ env.MAX_RETRIES }}
+
+      - name: Install CycloneDX Tools
+        uses: ./.github/actions/setup-cyclonedx
+
+      # -----------------------------------------------------
+      # Generate SBOM
+      # -----------------------------------------------------
+      - name: Generate SBOM
+        shell: pwsh
+        run: |
+          $outputFile = "servy-$($env:INPUT_VERSION)-sbom.xml"
+          & setup/generate-sbom.ps1 -BaseVersion $env:INPUT_VERSION -OutputFile $outputFile
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
+        with:
+          name: servy-${{ env.INPUT_VERSION }}-sbom
+          path: servy-${{ env.INPUT_VERSION }}-sbom.xml
+          if-no-files-found: error
+          retention-days: 1

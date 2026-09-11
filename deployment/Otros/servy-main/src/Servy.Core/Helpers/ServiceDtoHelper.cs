@@ -1,0 +1,119 @@
+using Servy.Core.Config;
+using Servy.Core.DTOs;
+using Servy.Core.Logging;
+
+namespace Servy.Core.Helpers
+{
+    /// <summary>
+    /// Provides utility methods for managing and augmenting <see cref="ServiceDto"/> objects.
+    /// </summary>
+    /// <remarks>
+    /// This helper is used during the deserialization of XML and JSON configurations
+    /// to ensure that all required service parameters are populated with production-grade
+    /// defaults defined in <see cref="AppConfig"/>.
+    /// </remarks>
+    public static class ServiceDtoHelper
+    {
+        /// <summary>
+        /// Creates a shallow copy of a <see cref="ServiceDto"/>.
+        /// Delegates to <see cref="ICloneable.Clone"/> to perform a memberwise clone, preventing property drift when new properties are added.
+        /// </summary>
+        /// <param name="dto">The service data transfer object to copy.</param>
+        /// <returns>A new <see cref="ServiceDto"/> instance with identical property values.</returns>
+        public static ServiceDto Clone(ServiceDto dto)
+        {
+            if (dto == null) throw new ArgumentNullException(nameof(dto));
+
+            return (ServiceDto)dto.Clone();
+        }
+
+        /// <summary>
+        /// Populates null nullable properties with their matching system configurations sourced from <see cref="AppConfig"/>,
+        /// and normalizes identity fields by trimming surrounding whitespace from <c>UserAccount</c>.
+        /// Unlike <see cref="ApplyDefaultsAndResetIdentity"/>, it never resets or clears identity values.
+        /// </summary>
+        /// <param name="dto">The service data transfer object layout to populate. The instance is modified in place.</param>
+        /// <remarks>
+        /// ServiceMapper.ToDomain dereferences each property set here with '!.Value'.
+        /// Removing a line from this method, or adding a nullable ServiceDto property without one,
+        /// turns that read into a NullReferenceException on the database load path.
+        /// </remarks>
+        public static void HydrateDefaults(ServiceDto? dto)
+        {
+            if (dto == null) return;
+
+            // Identity & Behavior
+            dto.StartupType = dto.StartupType ?? (int)AppConfig.DefaultStartupType;
+            dto.Priority = dto.Priority ?? (int)AppConfig.DefaultProcessPriority;
+            dto.EnableDebugLogs = dto.EnableDebugLogs ?? AppConfig.DefaultEnableDebugLogs;
+
+            // Timeouts
+            dto.StartTimeout = dto.StartTimeout ?? AppConfig.DefaultStartTimeout;
+            dto.StopTimeout = dto.StopTimeout ?? AppConfig.DefaultStopTimeout;
+
+            // EnableConsoleUI
+            dto.EnableConsoleUI = dto.EnableConsoleUI ?? AppConfig.DefaultEnableConsoleUI;
+
+            // Log Rotation
+            dto.EnableSizeRotation = dto.EnableSizeRotation ?? AppConfig.DefaultEnableSizeRotation;
+            dto.RotationSize = dto.RotationSize ?? AppConfig.DefaultRotationSizeMB;
+            dto.EnableDateRotation = dto.EnableDateRotation ?? AppConfig.DefaultEnableDateRotation;
+            dto.DateRotationType = dto.DateRotationType ?? (int)AppConfig.DefaultDateRotationType;
+            dto.MaxRotations = dto.MaxRotations ?? AppConfig.DefaultMaxRotations;
+            dto.UseLocalTimeForRotation = dto.UseLocalTimeForRotation ?? AppConfig.DefaultUseLocalTimeForRotation;
+
+            // Health Monitoring
+            dto.EnableHealthMonitoring = dto.EnableHealthMonitoring ?? AppConfig.DefaultEnableHealthMonitoring;
+            dto.HeartbeatInterval = dto.HeartbeatInterval ?? AppConfig.DefaultHeartbeatInterval;
+            dto.MaxFailedChecks = dto.MaxFailedChecks ?? AppConfig.DefaultMaxFailedChecks;
+            dto.MaxRestartAttempts = dto.MaxRestartAttempts ?? AppConfig.DefaultMaxRestartAttempts;
+            dto.RecoveryAction = dto.RecoveryAction ?? (int)AppConfig.DefaultRecoveryAction;
+            dto.RecoveryOnCleanExit = dto.RecoveryOnCleanExit ?? AppConfig.DefaultRecoveryOnCleanExit;
+            dto.HeartbeatUrlTimeoutSeconds = dto.HeartbeatUrlTimeoutSeconds ?? AppConfig.DefaultHeartbeatUrlTimeoutSeconds;
+            dto.EnableHeartbeatUrlFlags = dto.EnableHeartbeatUrlFlags ?? AppConfig.DefaultEnableHeartbeatUrlFlags;
+
+            // Identity Normalization
+            dto.UserAccount = dto.UserAccount?.Trim();
+
+            // Lifecycle Hooks (Pre-Launch)
+            dto.PreLaunchTimeoutSeconds = dto.PreLaunchTimeoutSeconds ?? AppConfig.DefaultPreLaunchTimeoutSeconds;
+            dto.PreLaunchRetryAttempts = dto.PreLaunchRetryAttempts ?? AppConfig.DefaultPreLaunchRetryAttempts;
+            dto.PreLaunchIgnoreFailure = dto.PreLaunchIgnoreFailure ?? AppConfig.DefaultPreLaunchIgnoreFailure;
+
+            // Lifecycle Hooks (Pre-Stop)
+            dto.PreStopTimeoutSeconds = dto.PreStopTimeoutSeconds ?? AppConfig.DefaultPreStopTimeoutSeconds;
+            dto.PreStopLogAsError = dto.PreStopLogAsError ?? AppConfig.DefaultPreStopLogAsError;
+        }
+
+        /// <summary>
+        /// Populates null nullable properties that have production defaults in <see cref="AppConfig"/>
+        /// (startup, priority, timeouts, log rotation, health monitoring, pre-launch/pre-stop options).
+        /// Optional free-form fields (paths, parameters, hooks, dependencies) without defaults remain null.
+        /// Additionally, unconditionally resets RunAsLocalSystem/UserAccount/Password to a
+        /// password-less LocalSystem baseline (Global Identity Reset on Import policy).
+        /// </summary>
+        /// <param name="dto">The service DTO to hydrate. The instance is modified in place. If null, the method returns immediately.</param>
+        public static void ApplyDefaultsAndResetIdentity(ServiceDto? dto)
+        {
+            if (dto == null) return;
+
+            // Hydrate structural parameters via our unified local template method
+            HydrateDefaults(dto);
+
+            // POLICY: Global Identity Reset on Import
+            // To maintain architectural simplicity across all interfaces (UI, CLI, PS),
+            // we do not support importing custom identities. All imported services
+            // are forced to LocalSystem to ensure a valid, password-less baseline.
+            // If you want to set a custom account you must set it manually after import.
+            dto.RunAsLocalSystem = AppConfig.DefaultRunAsLocalSystem;
+            dto.UserAccount = null;
+            dto.Password = null;
+
+            // Log an informational notice to satisfy operator visibility requirements.
+            // Because serialization attributes strip identity data out of export manifests,
+            // this notice alerts administrators that the service defaults safely to LocalSystem.
+            Logger.Info($"Import: Service configuration applied for '{dto.Name}'. The Global Identity Reset policy enforces " +
+                        "the LocalSystem identity on all imported manifests. A custom account can be configured manually if required.");
+        }
+    }
+}

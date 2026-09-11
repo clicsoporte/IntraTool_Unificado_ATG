@@ -1,0 +1,251 @@
+using CommandLine;
+using Servy.CLI.Models;
+using Servy.CLI.Options;
+using Servy.CLI.Resources;
+using Servy.Core.DTOs;
+using Servy.Core.Enums;
+using Servy.Core.Logging;
+using Servy.Core.Validation;
+using System.Globalization;
+
+namespace Servy.CLI.Validation
+{
+    /// <summary>
+    /// Validates the installation options for a new service in the CLI environment.
+    /// This class bridges CLI-specific options with the shared core validation logic.
+    /// </summary>
+    public class ServiceInstallValidator : IServiceInstallValidator
+    {
+        private readonly IServiceValidationRules _serviceValidationRules;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ServiceInstallValidator"/> class with the specified validation rules.
+        /// </summary>
+        /// <param name="serviceValidationRules">Shared validation rules for service installation.</param>
+        /// <exception cref="ArgumentNullException">Thrown if <paramref name="serviceValidationRules"/> is null.</exception>
+        public ServiceInstallValidator(IServiceValidationRules serviceValidationRules)
+        {
+            _serviceValidationRules = serviceValidationRules ?? throw new ArgumentNullException(nameof(serviceValidationRules));
+        }
+
+        /// <summary>
+        /// Validates the provided <see cref="InstallServiceOptions"/> by mapping them to a domain DTO
+        /// and executing centralized validation rules.
+        /// </summary>
+        /// <param name="opts">The command-line options provided for the install command.</param>
+        /// <returns>
+        /// A <see cref="CommandResult"/> indicating whether validation passed or detailing the first encountered issue.
+        /// </returns>
+        public CommandResult Validate(InstallServiceOptions opts)
+        {
+            if (opts == null) throw new ArgumentNullException(nameof(opts));
+
+            // Map raw CLI strings to a ServiceDto first; any int/enum parse failure
+            // short-circuits to CommandResult.Fail before the core validation runs.
+            if (!TryMapToDto(opts, out var dto, out var mappingError))
+            {
+                Logger.Error($"Service install option mapping failed: {mappingError}");
+                return CommandResult.Fail(mappingError);
+            }
+
+            var result = _serviceValidationRules.Validate(dto);
+
+            if (!result.IsValid)
+            {
+                // CLI reports the first (blocking) error; ValidationResult only contains errors.
+                var firstIssue = result.Errors.First();
+                Logger.Warn($"Service install validation failed for '{opts.ServiceName}': {firstIssue}");
+                return CommandResult.Fail(firstIssue);
+            }
+
+            var successMsg = string.Format(Core.Resources.Strings.Msg_ValidationPassed, opts.ServiceName);
+            Logger.Info(successMsg);
+
+            return CommandResult.Ok(successMsg);
+        }
+
+        /// <summary>
+        /// Attempts to map raw CLI string options into a structured <see cref="ServiceDto"/>.
+        /// This method handles initial type conversion (parsing integers and enums).
+        /// </summary>
+        /// <param name="opts">The source CLI options.</param>
+        /// <param name="dto">When this method returns, contains the mapped <see cref="ServiceDto"/> if parsing succeeded; otherwise, <see langword="null"/>.</param>
+        /// <param name="error">When this method returns, contains an error message if parsing failed; otherwise, <see langword="null"/>.</param>
+        /// <returns><see langword="true"/> if all options were successfully parsed and mapped; otherwise, <see langword="false"/>.</returns>
+        private bool TryMapToDto(InstallServiceOptions opts, out ServiceDto? dto, out string? error)
+        {
+            dto = null;
+            string? internalError = null;
+
+            // By passing 'internalError' by ref to a static method,
+            // the analyzer MUST assume it could be modified.
+            var startupType = MapEnum<ServiceStartType>(opts.ServiceStartType, nameof(opts.ServiceStartType), ref internalError);
+            var priority = MapEnum<ProcessPriority>(opts.ProcessPriority, nameof(opts.ProcessPriority), ref internalError);
+            var rotationSize = MapInt(opts.RotationSize, nameof(opts.RotationSize), ref internalError);
+            var dateRotationType = MapEnum<DateRotationType>(opts.DateRotationType, nameof(opts.DateRotationType), ref internalError);
+            var maxRotations = MapInt(opts.MaxRotations, nameof(opts.MaxRotations), ref internalError);
+            var heartbeatInterval = MapInt(opts.HeartbeatInterval, nameof(opts.HeartbeatInterval), ref internalError);
+            var maxFailedChecks = MapInt(opts.MaxFailedChecks, nameof(opts.MaxFailedChecks), ref internalError);
+            var recoveryAction = MapEnum<RecoveryAction>(opts.RecoveryAction, nameof(opts.RecoveryAction), ref internalError);
+            var maxRestartAttempts = MapInt(opts.MaxRestartAttempts, nameof(opts.MaxRestartAttempts), ref internalError);
+            var heartbeatUrlTimeout = MapInt(opts.HeartbeatUrlTimeoutSeconds, nameof(opts.HeartbeatUrlTimeoutSeconds), ref internalError);
+            var preLaunchTimeout = MapInt(opts.PreLaunchTimeout, nameof(opts.PreLaunchTimeout), ref internalError);
+            var preLaunchRetryAttempts = MapInt(opts.PreLaunchRetryAttempts, nameof(opts.PreLaunchRetryAttempts), ref internalError);
+            var startTimeout = MapInt(opts.StartTimeout, nameof(opts.StartTimeout), ref internalError);
+            var stopTimeout = MapInt(opts.StopTimeout, nameof(opts.StopTimeout), ref internalError);
+            var preStopTimeout = MapInt(opts.PreStopTimeout, nameof(opts.PreStopTimeout), ref internalError);
+
+            // The analyzer now sees this as reachable code.
+            if (internalError != null)
+            {
+                error = internalError;
+                return false;
+            }
+
+            dto = new ServiceDto
+            {
+                Name = opts.ServiceName ?? string.Empty,
+                DisplayName = opts.ServiceDisplayName ?? string.Empty,
+                Description = opts.ServiceDescription,
+                ExecutablePath = opts.ProcessPath ?? string.Empty,
+                StartupDirectory = opts.StartupDirectory,
+                Parameters = opts.ProcessParameters,
+                StartupType = startupType,
+                Priority = priority,
+                CpuAffinity = opts.CpuAffinity,
+                StdoutPath = opts.StdoutPath,
+                StderrPath = opts.StderrPath,
+                EnableConsoleUI = opts.EnableConsoleUI,
+                EnableSizeRotation = opts.EnableSizeRotation || opts.EnableRotation,
+                RotationSize = rotationSize,
+                EnableDateRotation = opts.EnableDateRotation,
+                DateRotationType = dateRotationType,
+                MaxRotations = maxRotations,
+                UseLocalTimeForRotation = opts.UseLocalTimeForRotation,
+                EnableHealthMonitoring = opts.EnableHealthMonitoring,
+                HeartbeatInterval = heartbeatInterval,
+                MaxFailedChecks = maxFailedChecks,
+                RecoveryAction = recoveryAction,
+                RecoveryOnCleanExit = opts.RecoveryOnCleanExit,
+                MaxRestartAttempts = maxRestartAttempts,
+                HeartbeatUrl = opts.HeartbeatUrl,
+                HeartbeatUrlTimeoutSeconds = heartbeatUrlTimeout,
+                EnableHeartbeatUrlFlags = opts.EnableHeartbeatUrlFlags,
+                FailureProgramPath = opts.FailureProgramPath,
+                FailureProgramStartupDirectory = opts.FailureProgramStartupDir,
+                FailureProgramParameters = opts.FailureProgramParameters,
+                EnvironmentVariables = opts.EnvironmentVariables,
+                ServiceDependencies = opts.ServiceDependencies,
+                UserAccount = opts.User?.Trim(),
+                Password = opts.Password,
+                RunAsLocalSystem = string.IsNullOrWhiteSpace(opts.User),
+                PreLaunchExecutablePath = opts.PreLaunchPath,
+                PreLaunchStartupDirectory = opts.PreLaunchStartupDir,
+                PreLaunchParameters = opts.PreLaunchParameters,
+                PreLaunchEnvironmentVariables = opts.PreLaunchEnvironmentVariables,
+                PreLaunchStdoutPath = opts.PreLaunchStdoutPath,
+                PreLaunchStderrPath = opts.PreLaunchStderrPath,
+                PreLaunchTimeoutSeconds = preLaunchTimeout,
+                PreLaunchRetryAttempts = preLaunchRetryAttempts,
+                PreLaunchIgnoreFailure = opts.PreLaunchIgnoreFailure,
+                PostLaunchExecutablePath = opts.PostLaunchPath,
+                PostLaunchStartupDirectory = opts.PostLaunchStartupDir,
+                PostLaunchParameters = opts.PostLaunchParameters,
+                EnableDebugLogs = opts.EnableDebugLogs,
+                StartTimeout = startTimeout,
+                StopTimeout = stopTimeout,
+                PreStopExecutablePath = opts.PreStopPath,
+                PreStopStartupDirectory = opts.PreStopStartupDir,
+                PreStopParameters = opts.PreStopParameters,
+                PreStopTimeoutSeconds = preStopTimeout,
+                PreStopLogAsError = opts.PreStopLogAsError,
+                PostStopExecutablePath = opts.PostStopPath,
+                PostStopStartupDirectory = opts.PostStopStartupDir,
+                PostStopParameters = opts.PostStopParameters
+            };
+
+            error = null;
+            return true;
+        }
+
+        /// <summary>
+        /// Attempts to parse a string value into a nullable integer.
+        /// </summary>
+        /// <param name="val">The string value to parse.</param>
+        /// <param name="propertyName">The name of the property being mapped, used for error reporting.</param>
+        /// <param name="error">A reference to an error string. If an error already exists, the method returns early. If parsing fails, this reference is updated with a formatted error message.</param>
+        /// <returns> The parsed integer if successful; otherwise, <see langword="null"/>.</returns>
+        private static int? MapInt(string? val, string propertyName, ref string? error)
+        {
+            if (error != null || string.IsNullOrWhiteSpace(val)) return null;
+
+            int result;
+            if (int.TryParse(val, NumberStyles.Integer, CultureInfo.InvariantCulture, out result)) return result;
+
+            error = string.Format(Strings.Msg_InvalidIntegerFormat, GetOptionName(propertyName), val);
+            return null;
+        }
+
+        /// <summary>
+        /// Attempts to parse a string value into an enumeration of type <typeparamref name="T"/>.
+        /// </summary>
+        /// <typeparam name="T">The enumeration type. Must be a valid <see cref="Enum"/> value type.</typeparam>
+        /// <param name="val">The string value to parse.</param>
+        /// <param name="propertyName">The name of the property being mapped, used for error reporting.</param>
+        /// <param name="error">A reference to an error string. If an error already exists, the method returns early. If parsing fails, this reference is updated with a formatted error message containing valid options.</param>
+        /// <returns>The integer representation of the enum value if successful; otherwise, <see langword="null"/>.</returns>
+        /// <remarks>
+        /// This method dynamically accounts for standard enumerations as well as bitmask combinations decorated with
+        /// <see cref="FlagsAttribute"/>, ensuring unmapped bits are rejected without breaking composite flag parsing.
+        /// </remarks>
+        private static int? MapEnum<T>(string? val, string propertyName, ref string? error) where T : struct, Enum
+        {
+            if (error != null || string.IsNullOrWhiteSpace(val)) return null;
+
+            var enumType = typeof(T);
+
+            if (Enum.TryParse<T>(val, true, out T result))
+            {
+                // Check if the enum is a bitmask [Flags] layout
+                if (enumType.IsDefined(typeof(FlagsAttribute), false))
+                {
+                    // If the string contains unmapped or anonymous bits, ToString() drops back
+                    // to displaying a raw number. Comparing it against the normalized text
+                    // detects out-of-range flag corruption.
+                    var underlyingValue = Convert.ChangeType(result, Enum.GetUnderlyingType(enumType)).ToString();
+                    if (result.ToString() != underlyingValue)
+                    {
+                        return Convert.ToInt32(result);
+                    }
+                }
+                else if (val.IndexOf(',') < 0 && Enum.IsDefined(enumType, result))
+                {
+                    return Convert.ToInt32(result);
+                }
+            }
+
+            // Determine formatting nomenclature for the error options list
+            string optionsList = enumType.IsDefined(typeof(FlagsAttribute), false)
+                ? string.Join(" | ", Enum.GetNames(enumType))
+                : string.Join(", ", Enum.GetNames(enumType));
+
+            error = string.Format(Strings.Msg_InvalidEnumValue,
+                GetOptionName(propertyName), val, optionsList);
+            return null;
+        }
+
+        /// <summary>
+        /// Retrieves the CLI option name associated with a property using reflection on <see cref="OptionAttribute"/>.
+        /// </summary>
+        /// <param name="propertyName">The name of the property in <see cref="InstallServiceOptions"/>.</param>
+        /// <returns>The CLI flag name (e.g., "--name") or the property name if no attribute is found.</returns>
+        private static string GetOptionName(string propertyName)
+        {
+            var prop = typeof(InstallServiceOptions).GetProperty(propertyName);
+            if (prop == null) return propertyName;
+
+            var attr = Attribute.GetCustomAttribute(prop, typeof(OptionAttribute)) as OptionAttribute;
+            return attr != null ? "--" + attr.LongName : propertyName;
+        }
+    }
+}

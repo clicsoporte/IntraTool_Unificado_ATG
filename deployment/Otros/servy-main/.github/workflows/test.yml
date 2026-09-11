@@ -1,0 +1,305 @@
+# ==========================================================================================
+# GitHub Actions Workflow - Test Matrix
+# ------------------------------------------------------------------------------------------
+# Runs comprehensive test suites for all Servy projects natively across both x64 and
+# ARM64 platforms. Only the x64 execution node generates, compiles, and submits
+# aggregated Cobertura coverage data to Codecov and Coveralls metrics platforms.
+# ==========================================================================================
+
+name: test
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      upload_coverage:
+        description: 'Upload coverage metrics to Codecov and Coveralls'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  test:
+    name: Test (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch: x64
+            upload_coverage: true
+          - os: windows-11-arm
+            arch: ARM64
+            upload_coverage: false
+
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    env:
+      MAX_RETRIES: 5 # Maximum retry attempts for resilient network down-stream downloads
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 #v6.0.3
+
+      - name: Setup .NET
+        uses: ./.github/actions/setup-dotnet
+        with:
+          max_retries: ${{ env.MAX_RETRIES }}
+
+      - name: Restore dependencies
+        shell: pwsh
+        run: |
+          dotnet restore Servy.sln
+          if ($LASTEXITCODE -ne 0) { throw "Restore failed for Servy.sln (exit $LASTEXITCODE)" }
+
+      - name: Build solution (Debug)
+        shell: pwsh
+        run: |
+          dotnet build Servy.sln --configuration Debug --no-restore
+          if ($LASTEXITCODE -ne 0) { throw "Debug build failed for Servy.sln (exit $LASTEXITCODE)" }
+
+      - name: Run all tests with coverage (Debug)
+        shell: pwsh
+        run: |
+          # The native filesystem globbing filter (*Tests.csproj) already naturally excludes 'Servy.Testing.csproj'.
+          $RawTestProjects = Get-ChildItem -Path "$env:GITHUB_WORKSPACE/tests" -Recurse -Filter '*Tests.csproj'
+
+          $failed = $false
+
+          foreach ($projFile in $RawTestProjects) {
+              $projPath = $projFile.FullName
+              $projName = $projFile.BaseName
+
+              # Derive the category segment (e.g. 'Core', 'UI') from the project folder name for the results path
+              $subDirName = if ($projFile.Directory.Name -match 'Servy\.(.+?)\.') { $matches[1] } else { "UnitTests" }
+
+              Write-Host "Running tests for $projName..." -ForegroundColor Cyan
+
+              # .NET MTP CLI syntax
+              $dotnetArgs = @(
+                  'test', $projPath,
+                  '--configuration', 'Debug',
+                  '--no-build',
+                  '--filter', 'Category!=Stress',
+                  '--results-directory', "$env:GITHUB_WORKSPACE/TestResults/$subDirName/$projName",
+                  '--',
+                  '--coverage',
+                  '--coverage-output-format', 'cobertura',
+                  '--coverage-output', 'coverage.cobertura.xml'
+              )
+
+              & dotnet @dotnetArgs
+
+              if ($LASTEXITCODE -ne 0) {
+                  $failed = $true
+                  Write-Host "::error::Tests failed for project: $projName"
+              }
+          }
+
+          if ($failed) {
+              Write-Error "One or more test projects failed. Review the logs above."
+          }
+
+      - name: Build solution (Release)
+        shell: pwsh
+        run: |
+          dotnet build Servy.sln --configuration Release --no-restore
+          if ($LASTEXITCODE -ne 0) { throw "Release build failed for Servy.sln (exit $LASTEXITCODE)" }
+
+      - name: Run all tests (Release)
+        shell: pwsh
+        run: |
+          dotnet test Servy.sln --configuration Release --no-build `
+            --filter "Category!=Stress" `
+            --results-directory "$env:GITHUB_WORKSPACE/TestResults/Release"
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error::Release test run failed"
+              Write-Error "Release test run failed."
+          }
+
+      - name: Run PowerShell verification and test scripts
+        shell: pwsh
+        run: |
+          $workspace = $env:GITHUB_WORKSPACE
+          $testScripts = @(Get-ChildItem -Path $workspace -Recurse -Filter '*.test.ps1' | Select-Object -ExpandProperty FullName)
+
+          $extraScripts = @(
+              Join-Path $workspace "setup\Verify-PublishExclusions.ps1"
+          )
+
+          foreach ($extra in $extraScripts) {
+              if (Test-Path $extra) {
+                  $testScripts += (Get-Item $extra).FullName
+              }
+          }
+
+          $testScripts = $testScripts | Select-Object -Unique
+          $failed = $false
+
+          foreach ($script in $testScripts) {
+              $relativePath = $script.Substring($workspace.Length).TrimStart('\', '/')
+              Write-Host "Running PowerShell test script: $relativePath..." -ForegroundColor Cyan
+              & pwsh -File $script
+              if ($LASTEXITCODE -ne 0) {
+                  $failed = $true
+                  Write-Host "::error::PowerShell test script failed: $relativePath"
+              }
+          }
+
+          if ($failed) {
+              Write-Error "One or more PowerShell test scripts failed."
+          }
+
+      - name: Upload Test Diagnostics & Crash Dumps on Failure
+        if: ${{ failure() || cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a #v7.0.1
+        with:
+          name: test-diagnostics-${{ matrix.arch }}
+          path: |
+            TestResults/**/*.dmp
+            TestResults/**/*.xml
+            TestResults/**/*.trx
+          if-no-files-found: ignore
+
+      # -----------------------------------------------------
+      # Coverage Report Merging (x64 Only Context)
+      # -----------------------------------------------------
+      - name: Merge and normalize coverage paths (PowerShell)
+        shell: pwsh
+        if: ${{ matrix.upload_coverage == true && (github.event_name != 'workflow_dispatch' || inputs.upload_coverage) }}
+        run: |
+          $workspace = $env:GITHUB_WORKSPACE
+          $filters = . (Join-Path $workspace "tests/coverage-filters.ps1")
+
+          $fixedDir = Join-Path $workspace "TestResults\fixed"
+          if (-Not (Test-Path $fixedDir)) { New-Item -ItemType Directory -Path $fixedDir | Out-Null }
+
+          $coverageFiles = Get-ChildItem -Path TestResults -Recurse -Filter "coverage.cobertura.xml"
+          if ($coverageFiles.Count -eq 0) { Write-Error "No coverage files found" }
+
+          $localTools = "$env:RUNNER_TEMP\localtools"
+          if (-Not (Test-Path $localTools)) { New-Item -ItemType Directory -Path $localTools | Out-Null }
+
+          & dotnet new tool-manifest --force --output $localTools
+
+          Push-Location $localTools
+          & dotnet tool install dotnet-reportgenerator-globaltool --version $filters.Version
+          if ($LASTEXITCODE -ne 0) { Write-Error "dotnet tool install failed (exit $LASTEXITCODE)" }
+
+          $joinedReports = $coverageFiles.FullName -join ';'
+          & dotnet tool run reportgenerator `
+              "-reports:$joinedReports" `
+              "-targetdir:$fixedDir" `
+              "-reporttypes:Cobertura" `
+              "-assemblyfilters:$($filters.Assemblies)" `
+              "-filefilters:$($filters.Files)"
+          if ($LASTEXITCODE -ne 0) { Pop-Location; Write-Error "reportgenerator failed (exit $LASTEXITCODE)" }
+          Pop-Location
+
+          $mergedFile = Join-Path $fixedDir "Cobertura.xml"
+          $content = Get-Content $mergedFile -Raw
+          $content = [regex]::Replace($content, 'filename="([^"]*)"', {
+              param($match)
+              $origPath = $match.Groups[1].Value -replace '\\', '/'
+              if ($origPath -match 'src/(Servy[^/]*)/(.*)') {
+                  return "filename=`"src/$($matches[1])/$($matches[2])`""
+              } else {
+                  return "filename=`"$origPath`""
+              }
+          })
+
+          $normalizedFile = Join-Path $fixedDir "coverage.cobertura.xml"
+          $content | Out-File -FilePath $normalizedFile -Encoding utf8
+
+          if (-Not (Test-Path $normalizedFile)) { Write-Error "$normalizedFile not found" }
+          Get-ChildItem -Path TestResults -Recurse -Filter "coverage.cobertura.xml" | Where-Object { $_.FullName -ne $normalizedFile } | Remove-Item
+
+      # -----------------------------------------------------
+      # Third-Party Metrics Tracking Uploads (x64 Only Context)
+      # -----------------------------------------------------
+      - name: Import Codecov Public GPG Key
+        if: ${{ matrix.upload_coverage == true && (github.event_name != 'workflow_dispatch' || inputs.upload_coverage) }}
+        continue-on-error: true
+        shell: bash
+        run: |
+          # Create the directory just in case
+          mkdir -p ~/.gnupg
+
+          # Use gpg --batch to skip interactive prompts, and try a secondary, robust keyserver
+          gpg --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys 27034E7FDB850E0BBC2C62FF806BB28AED779869
+
+          # Verify the import
+          gpg --list-keys 27034E7FDB850E0BBC2C62FF806BB28AED779869
+
+      - name: Upload coverage to Codecov
+        id: codecov
+        continue-on-error: true
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe #v5.5.4
+        if: ${{ matrix.upload_coverage == true && (github.event_name != 'workflow_dispatch' || inputs.upload_coverage) }}
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: TestResults/fixed/coverage.cobertura.xml
+          flags: aggregated_ci
+          name: codecov-coverage-report
+          fail_ci_if_error: true   # let the action report failure
+          verbose: false
+          commit_parent: ${{ github.event.before }}
+
+      - name: Upload coverage to Coveralls
+        id: coveralls
+        continue-on-error: true
+        uses: coverallsapp/github-action@648a8eb78e6d50909eff900e4ec85cab4524a45b #v2.36
+        if: ${{ matrix.upload_coverage == true && (github.event_name != 'workflow_dispatch' || inputs.upload_coverage) }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          base-path: ${{ github.workspace }}
+          file: TestResults/fixed/coverage.cobertura.xml
+          format: cobertura
+          fail-on-error: true   # let the action report failure
+          debug: false
+        env:
+          COVERALLS_GIT_BRANCH: ${{ github.ref_name }}
+
+      - name: Notify Metrics Platform Status in case of failure
+        if: ${{ matrix.upload_coverage == true && (github.event_name != 'workflow_dispatch' || inputs.upload_coverage) && (steps.codecov.outcome == 'failure' || steps.coveralls.outcome == 'failure') }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 #v9.0.0
+        with:
+          script: |
+            const failureTargets = [
+              { failed: "${{ steps.codecov.outcome }}" === "failure", label: "codecov-tracking", provider: "Codecov" },
+              { failed: "${{ steps.coveralls.outcome }}" === "failure", label: "coveralls-tracking", provider: "Coveralls" }
+            ];
+
+            for (const target of failureTargets) {
+              if (!target.failed) continue;
+
+              const issues = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: target.label,
+                state: 'open'
+              });
+
+              const body = `${target.provider} upload failed in workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`;
+
+              if (issues.data.length === 0) {
+                core.warning(`${target.provider} upload failed, but no open issue is labelled '${target.label}' - nobody was notified. ${body}`);
+                continue;
+              }
+
+              for (const issue of issues.data) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body,
+                });
+              }
+            }

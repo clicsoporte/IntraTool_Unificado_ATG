@@ -1,0 +1,124 @@
+using System.Diagnostics.CodeAnalysis;
+
+namespace Servy.Core.Validation
+{
+    /// <summary>
+    /// Specifies the high-level classification category of a path validation failure.
+    /// Used to securely map runtime rejections to their proper exception variants independent of the active UI culture.
+    /// </summary>
+    public enum PathSecurityFailureKind
+    {
+        /// <summary>
+        /// No validation rule was broken. The path is secure.
+        /// </summary>
+        None,
+
+        /// <summary>
+        /// A structural system security boundary was crossed (e.g., UNC exfiltration, protected system directory, or reparse redirection).
+        /// </summary>
+        Security,
+
+        /// <summary>
+        /// An invalid syntax, parameter, extension type, or formatting rule error occurred.
+        /// </summary>
+        InvalidArgument
+    }
+
+    /// <summary>
+    /// A token representing a file path that passed the checks of the <see cref="PathSecurityGuard"/> entry point that produced it.
+    /// Note that <see cref="PathSecurityGuard.ValidatePathOnly"/> runs the pre-handle checks only; the post-open re-checks run in <see cref="PathSecurityGuard.ValidatePath"/>.
+    /// The constructor is <c>internal</c>, so construction is confined to <c>Servy.Core</c> and, through <c>InternalsVisibleTo</c>, its test assemblies; it is not restricted to the gate itself.
+    /// Callers must not construct one outside <see cref="PathSecurityResult.Success"/>.
+    /// </summary>
+    public sealed class ValidatedPath
+    {
+        /// <summary>
+        /// Gets the absolute, fully qualified, and structurally verified filesystem path.
+        /// It is kernel-resolved only when the token came from <see cref="PathSecurityGuard.ValidatePath"/>;
+        /// <see cref="PathSecurityGuard.ValidatePathOnly"/> supplies the <c>Path.GetFullPath</c> result instead.
+        /// </summary>
+        public string ResolvedPath { get; }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ValidatedPath"/> class.
+        /// </summary>
+        /// <param name="resolvedPath">The fully canonicalized filesystem path that has passed validation.</param>
+        internal ValidatedPath(string resolvedPath)
+        {
+            ResolvedPath = resolvedPath;
+        }
+    }
+
+    /// <summary>
+    /// Represents the outcome of the path security validation pipeline.
+    /// </summary>
+    public sealed class PathSecurityResult
+    {
+        /// <summary>
+        /// Gets a value indicating whether the path successfully passed all security validation checks.
+        /// </summary>
+        [MemberNotNullWhen(true, nameof(ValidPath))]
+        [MemberNotNullWhen(false, nameof(ErrorMessage))]
+        public bool IsValid { get; }
+
+        /// <summary>
+        /// Gets the failure category; <see cref="PathSecurityFailureKind.None"/> when the path is valid.
+        /// </summary>
+        public PathSecurityFailureKind FailureKind { get; }
+
+        /// <summary>
+        /// Gets the validated path token containing the verified path string.
+        /// Guaranteed to be non-null when <see cref="IsValid"/> is <c>true</c>; otherwise, <c>null</c>.
+        /// </summary>
+        public ValidatedPath? ValidPath { get; }
+
+        /// <summary>
+        /// Gets the descriptive message detailing the specific rule or infrastructural failure that caused the validation to fail.
+        /// Guaranteed to be non-null when <see cref="IsValid"/> is <c>false</c>; otherwise, <c>null</c>.
+        /// </summary>
+        public string? ErrorMessage { get; }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="PathSecurityResult"/> class representing a successful validation.
+        /// </summary>
+        /// <param name="path">The secure, verified path token instance.</param>
+        private PathSecurityResult(ValidatedPath path)
+        {
+            IsValid = true;
+            FailureKind = PathSecurityFailureKind.None;
+            ValidPath = path;
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="PathSecurityResult"/> class representing a failed validation.
+        /// </summary>
+        /// <param name="kind">The failure category (security violation vs. invalid argument).</param>
+        /// <param name="error">Human-readable description of the failed rule.</param>
+        private PathSecurityResult(PathSecurityFailureKind kind, string error)
+        {
+            IsValid = false;
+            FailureKind = kind;
+            ErrorMessage = error;
+        }
+
+        /// <summary>
+        /// Creates a successful <see cref="PathSecurityResult"/> encapsulating a verified path token.
+        /// </summary>
+        /// <param name="path">
+        /// The fully qualified path that passed the checks of the calling entry point: the kernel-resolved
+        /// target from <see cref="PathSecurityGuard.ValidatePath"/>, or the <c>Path.GetFullPath</c> result
+        /// from <see cref="PathSecurityGuard.ValidatePathOnly"/>, which opens no handle and therefore performs
+        /// no kernel resolution.
+        /// </param>
+        /// <returns>An initialized success descriptor containing a valid <see cref="ValidatedPath"/> instance.</returns>
+        internal static PathSecurityResult Success(string path) => new PathSecurityResult(new ValidatedPath(path));
+
+        /// <summary>
+        /// Creates a failed <see cref="PathSecurityResult"/> capturing a validation rule violation error string and classification kind.
+        /// </summary>
+        /// <param name="kind">The failure category (security violation vs. invalid argument).</param>
+        /// <param name="error">Human-readable description of the failed rule.</param>
+        /// <returns>An initialized failure descriptor containing an explicit error message.</returns>
+        internal static PathSecurityResult Fail(PathSecurityFailureKind kind, string error) => new PathSecurityResult(kind, error);
+    }
+}

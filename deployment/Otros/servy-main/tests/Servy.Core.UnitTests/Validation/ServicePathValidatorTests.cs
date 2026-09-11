@@ -1,0 +1,403 @@
+using Servy.Core.DTOs;
+using Servy.Core.Resources;
+using Servy.Core.Validation;
+
+namespace Servy.Core.UnitTests.Validation
+{
+    public class ServicePathValidatorTests
+    {
+        private class TestDto
+        {
+            [ServicePath("executable path", isFile: true, required: true)]
+            public string? ExecutablePath { get; set; }
+
+            [ServicePath("startup directory", isFile: false)]
+            public string? StartupDirectory { get; set; }
+
+            // Undecorated on purpose: the walker inspects every public property and relies on the
+            // attribute lookup to skip the ones it must not validate - 51 of ServiceDto's 63 and
+            // 39 of StartOptions' 51 in production.
+            public string? Description { get; set; }
+        }
+
+        private class NonStringServicePathDto
+        {
+            // Deliberately misapplied: [ServicePath] is only meaningful on string properties, and the
+            // walker throws rather than silently misreading a non-string value (see #6387).
+            [ServicePath("misapplied path", isFile: true)]
+            public int MisappliedPath { get; set; }
+        }
+
+        #region FindFirstViolation Tests
+
+        [Fact]
+        public void FindFirstViolation_WhenServicePathAppliedToNonStringProperty_ThrowsInvalidOperationException()
+        {
+            // Arrange
+            var dto = new NonStringServicePathDto { MisappliedPath = 42 };
+
+            // Act
+            var ex = Assert.Throws<InvalidOperationException>(() =>
+                ServicePathValidator.FindFirstViolation(dto, (path, isFile) => true));
+
+            // Assert
+            Assert.Contains(nameof(NonStringServicePathDto), ex.Message);
+            Assert.Contains(nameof(NonStringServicePathDto.MisappliedPath), ex.Message);
+            Assert.Contains("Int32", ex.Message);
+        }
+
+        [Fact]
+        public void FindFirstViolation_WhenTargetIsNull_ReturnsNull()
+        {
+            // Arrange
+            TestDto? dto = null;
+
+            // Act
+            var violation = ServicePathValidator.FindFirstViolation(dto, (path, isFile) => true);
+
+            // Assert
+            Assert.Null(violation);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        [InlineData("\t")]
+        public void FindFirstViolation_WhenRequiredPropertyIsNullOrEmptyOrWhitespace_ReturnsMissingViolationAndSkipsPathValidation(string? requiredPath)
+        {
+            // Arrange
+            var dto = new TestDto { ExecutablePath = requiredPath };
+            bool pathValidated = false;
+
+            // Act
+            var violation = ServicePathValidator.FindFirstViolation(dto, (path, isFile) =>
+            {
+                pathValidated = true;
+                return true;
+            });
+
+            // Assert
+            Assert.NotNull(violation);
+            Assert.True(violation.IsMissing);
+            Assert.Equal("executable path", violation.Attribute.Label);
+            Assert.False(pathValidated); // Verifies validatePath is never invoked when string is empty or whitespace
+        }
+
+        [Fact]
+        public void FindFirstViolation_WhenPathIsInvalid_ReturnsInvalidViolation()
+        {
+            // Arrange
+            var dto = new TestDto { ExecutablePath = @"C:\invalid\app.exe" };
+
+            // Act
+            var violation = ServicePathValidator.FindFirstViolation(dto, (path, isFile) => false);
+
+            // Assert
+            Assert.NotNull(violation);
+            Assert.False(violation.IsMissing);
+            Assert.Equal(@"C:\invalid\app.exe", violation.Value);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        [InlineData("\t")]
+        public void FindFirstViolation_WhenOptionalPathIsNullOrEmptyOrWhitespace_ReturnsNullAndSkipsPathValidation(string? optionalPath)
+        {
+            // Arrange
+            var dto = new TestDto { ExecutablePath = @"C:\valid\app.exe", StartupDirectory = optionalPath };
+            bool optionalPathValidated = false;
+
+            // Act
+            var violation = ServicePathValidator.FindFirstViolation(dto, (path, isFile) =>
+            {
+                if (path == optionalPath)
+                {
+                    optionalPathValidated = true;
+                }
+                return true;
+            });
+
+            // Assert
+            Assert.Null(violation);
+            Assert.False(optionalPathValidated); // Verifies validatePath is skipped for null/empty/whitespace optional paths
+        }
+
+        [Fact]
+        public void FindFirstViolation_WhenStartupDirectoryIsInvalid_PassesIsFileFalseToValidatorAndReturnsViolation()
+        {
+            // Arrange
+            var dto = new TestDto
+            {
+                ExecutablePath = @"C:\valid\app.exe",
+                StartupDirectory = @"C:\invalid\dir"
+            };
+
+            bool? receivedIsFile = null;
+
+            // Act
+            var violation = ServicePathValidator.FindFirstViolation(dto, (path, isFile) =>
+            {
+                if (path == dto.StartupDirectory)
+                {
+                    receivedIsFile = isFile;
+                    return false; // Force directory path to fail validation
+                }
+                return true;
+            });
+
+            // Assert
+            Assert.NotNull(violation);
+            Assert.False(violation.IsMissing);
+            Assert.Equal(@"C:\invalid\dir", violation.Value);
+            Assert.Equal("startup directory", violation.Attribute.Label);
+            Assert.False(receivedIsFile); // Verifies isFile = false was evaluated for StartupDirectory
+        }
+
+        [Fact]
+        public void FindFirstViolation_WhenStartupDirectoryIsValid_ReturnsNull()
+        {
+            // Arrange
+            var dto = new TestDto
+            {
+                ExecutablePath = @"C:\valid\app.exe",
+                StartupDirectory = @"C:\valid\dir"
+            };
+
+            // Act
+            var violation = ServicePathValidator.FindFirstViolation(dto, (path, isFile) => true);
+
+            // Assert
+            Assert.Null(violation);
+        }
+
+        [Fact]
+        public void FindFirstViolation_WhenMultiplePropertiesAreInvalid_ReturnsFirstPropertyInDeclarationOrder()
+        {
+            // Arrange: Provide a DTO with multiple simultaneously invalid paths.
+            // ExecutablePath is declared before StartupDirectory in TestDto metadata.
+            var dto = new TestDto
+            {
+                ExecutablePath = @"C:\invalid\app.exe",
+                StartupDirectory = @"C:\invalid\dir"
+            };
+
+            // Act: Evaluate violations when both path checks return false.
+            var violation = ServicePathValidator.FindFirstViolation(dto, (path, isFile) => false);
+
+            // Assert: Verify that the violation for the first-declared property (ExecutablePath) is returned.
+            Assert.NotNull(violation);
+            Assert.Equal(nameof(TestDto.ExecutablePath), violation.Property.Name);
+            Assert.Equal("executable path", violation.Attribute.Label);
+        }
+
+        #endregion
+
+        #region FindAllViolations Tests
+
+        [Fact]
+        public void FindAllViolations_WhenTargetIsNull_ReturnsEmptyEnumerable()
+        {
+            // Arrange
+            TestDto? dto = null;
+
+            // Act
+            var violations = ServicePathValidator.FindAllViolations(dto, (path, isFile) => true);
+
+            // Assert
+            Assert.Empty(violations);
+        }
+
+        [Fact]
+        public void FindAllViolations_WhenAllPathsAreValid_ReturnsEmptyEnumerable()
+        {
+            // Arrange
+            var dto = new TestDto
+            {
+                ExecutablePath = @"C:\valid\app.exe",
+                StartupDirectory = @"C:\valid\dir"
+            };
+
+            // Act
+            var violations = ServicePathValidator.FindAllViolations(dto, (path, isFile) => true);
+
+            // Assert
+            Assert.Empty(violations);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        [InlineData("\t")]
+        public void FindAllViolations_WhenOptionalPathIsNullOrEmptyOrWhitespace_ReturnsEmptyEnumerableAndSkipsPathValidation(string? optionalPath)
+        {
+            // Arrange
+            var dto = new TestDto { ExecutablePath = @"C:\valid\app.exe", StartupDirectory = optionalPath };
+            bool optionalPathValidated = false;
+
+            // Act
+            var violations = ServicePathValidator.FindAllViolations(dto, (path, isFile) =>
+            {
+                if (path == optionalPath)
+                {
+                    optionalPathValidated = true;
+                }
+                return true;
+            });
+
+            // Assert
+            Assert.Empty(violations);
+            Assert.False(optionalPathValidated); // Verifies validatePath is skipped for null/empty/whitespace optional paths
+        }
+
+        [Fact]
+        public void FindAllViolations_WhenStartupDirectoryIsInvalid_PassesIsFileFalseToValidatorAndReturnsViolation()
+        {
+            // Arrange
+            var dto = new TestDto
+            {
+                ExecutablePath = @"C:\valid\app.exe",
+                StartupDirectory = @"C:\invalid\dir"
+            };
+
+            bool? receivedIsFile = null;
+
+            // Act
+            var violations = ServicePathValidator.FindAllViolations(dto, (path, isFile) =>
+            {
+                if (path == dto.StartupDirectory)
+                {
+                    receivedIsFile = isFile;
+                    return false; // Force directory path to fail validation
+                }
+                return true;
+            }).ToList();
+
+            // Assert
+            var violation = Assert.Single(violations);
+            Assert.False(violation.IsMissing);
+            Assert.Equal(@"C:\invalid\dir", violation.Value);
+            Assert.Equal("startup directory", violation.Attribute.Label);
+            Assert.False(receivedIsFile); // Verifies isFile = false was evaluated for StartupDirectory
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        [InlineData("\t")]
+        public void FindAllViolations_WhenRequiredPropertyIsNullOrEmptyOrWhitespace_ReturnsMissingViolationAndSkipsPathValidation(string? requiredPath)
+        {
+            // Arrange
+            var dto = new TestDto { ExecutablePath = requiredPath, StartupDirectory = @"C:\valid\dir" };
+            bool requiredPathValidated = false;
+
+            // Act
+            var violations = ServicePathValidator.FindAllViolations(dto, (path, isFile) =>
+            {
+                if (path == requiredPath)
+                {
+                    requiredPathValidated = true;
+                }
+                return true;
+            }).ToList();
+
+            // Assert
+            var violation = Assert.Single(violations);
+            Assert.True(violation.IsMissing);
+            Assert.Equal("executable path", violation.Attribute.Label);
+            Assert.False(requiredPathValidated); // Verifies validatePath is skipped for a required path that is empty or whitespace
+        }
+
+        [Fact]
+        public void FindAllViolations_WhenPropertyHasNoServicePathAttribute_IsNotInspected()
+        {
+            // Arrange: the undecorated property holds a value the validator would reject if it ever saw it
+            var dto = new TestDto
+            {
+                ExecutablePath = @"C:\valid\app.exe",
+                StartupDirectory = @"C:\valid\dir",
+                Description = "not a path at all"
+            };
+
+            var inspected = new List<string?>();
+
+            // Act
+            var violations = ServicePathValidator.FindAllViolations(dto, (path, isFile) =>
+            {
+                inspected.Add(path);
+                return path != dto.Description;
+            }).ToList();
+
+            // Assert
+            Assert.Empty(violations);
+            Assert.DoesNotContain(dto.Description, inspected);
+            Assert.Equal(2, inspected.Count); // only the two decorated properties reach the validator
+        }
+
+        [Fact]
+        public void FindAllViolations_WhenMultiplePropertiesAreInvalid_ReturnsAllViolationsInDeclarationOrder()
+        {
+            // Arrange
+            var dto = new TestDto
+            {
+                ExecutablePath = null, // Missing required path (Violation 1)
+                StartupDirectory = @"C:\invalid\dir" // Invalid path (Violation 2)
+            };
+
+            // Act
+            var violations = ServicePathValidator.FindAllViolations(dto, (path, isFile) => false).ToList();
+
+            // Assert: Verify that violations are yielded strictly in property MetadataToken declaration order
+            Assert.Equal(2, violations.Count);
+
+            Assert.Equal(nameof(TestDto.ExecutablePath), violations[0].Property.Name);
+            Assert.True(violations[0].IsMissing);
+            Assert.Equal("executable path", violations[0].Attribute.Label);
+
+            Assert.Equal(nameof(TestDto.StartupDirectory), violations[1].Property.Name);
+            Assert.False(violations[1].IsMissing);
+            Assert.Equal(@"C:\invalid\dir", violations[1].Value);
+            Assert.Equal("startup directory", violations[1].Attribute.Label);
+        }
+
+        #endregion
+
+        #region ResolveErrorMessage Tests
+
+        [Fact]
+        public void ResolveErrorMessage_WhenErrorResourceKeyIsNull_ReturnsGenericMessage()
+        {
+            // Arrange: errorResourceKey is optional and defaults to null, so the outer lookup is skipped
+            var property = typeof(TestDto).GetProperty(nameof(TestDto.ExecutablePath))!;
+            var attribute = new ServicePathAttribute("executable path", isFile: true);
+            var violation = new ServicePathViolation(property, attribute, value: null, isMissing: true);
+
+            // Act
+            var message = violation.ResolveErrorMessage();
+
+            // Assert
+            Assert.Equal(string.Format(Strings.Msg_InvalidPathInConfig, "executable path"), message);
+        }
+
+        [Fact]
+        public void ResolveErrorMessage_WhenErrorResourceKeyDoesNotResolve_ReturnsGenericMessage()
+        {
+            // Arrange: a key that names no static property on Strings - what a rename on either side leaves behind
+            var property = typeof(TestDto).GetProperty(nameof(TestDto.ExecutablePath))!;
+            var attribute = new ServicePathAttribute("executable path", isFile: true, errorResourceKey: "Msg_DoesNotExist_TypoedKey");
+            var violation = new ServicePathViolation(property, attribute, value: null, isMissing: true);
+
+            // Act
+            var message = violation.ResolveErrorMessage();
+
+            // Assert
+            Assert.Equal(string.Format(Strings.Msg_InvalidPathInConfig, "executable path"), message);
+        }
+
+        #endregion
+    }
+}

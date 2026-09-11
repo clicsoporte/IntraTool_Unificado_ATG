@@ -1,0 +1,440 @@
+using Servy.Core.Config;
+using Servy.Core.Logging;
+using System.Diagnostics;
+using System.Reflection;
+using System.Security.AccessControl;
+
+namespace Servy.Core.Helpers
+{
+    /// <summary>
+    /// Provides helper methods for managing and extracting embedded resources
+    /// from the assembly, such as the Servy service executable and related files.
+    /// </summary>
+    public class ResourceHelper
+    {
+        private readonly IServiceHelper _serviceHelper;
+        private readonly IProcessKiller _processKiller;
+
+        /// <summary>
+        /// Gets or sets the base directory where embedded resources are extracted.
+        /// Defaults to the application base directory in DEBUG and the ProgramData vault in RELEASE.
+        /// </summary>
+        public string BaseExtractionDirectory { get; set; } =
+#if DEBUG
+            AppDomain.CurrentDomain.BaseDirectory;
+#else
+                AppConfig.ProgramDataPath;
+#endif
+
+        /// <summary>
+        /// Initializes a new instance of the ResourceHelper class using the specified service helper and process killer.
+        /// </summary>
+        /// <param name="serviceHelper">The service helper used to access and manage service states. Cannot be null.</param>
+        /// <param name="processKiller">The process killer used to terminate processes. Cannot be null.</param>
+        public ResourceHelper(
+            IServiceHelper serviceHelper,
+            IProcessKiller processKiller)
+        {
+            _serviceHelper = serviceHelper ?? throw new ArgumentNullException(nameof(serviceHelper));
+            _processKiller = processKiller ?? throw new ArgumentNullException(nameof(processKiller));
+        }
+
+        /// <summary>
+        /// Copies an embedded resource from the assembly to disk, stopping and restarting services if necessary.
+        /// </summary>
+        /// <param name="assembly">The assembly containing the resource.</param>
+        /// <param name="resourceNamespace">Namespace of the embedded resource.</param>
+        /// <param name="fileName">The filename of the resource without extension.</param>
+        /// <param name="extension">The file extension (e.g., "exe" or "dll").</param>
+        /// <param name="stopServices">Whether to stop services before copying the resource.</param>
+        /// <param name="isCli">Whether we are in CLI or not.</param>
+        /// <param name="cancellationToken">An optional token to monitor for cancellation requests during execution.</param>
+        /// <returns>
+        /// True if the copy succeeded (or was not needed); otherwise, false.
+        /// Failures to restart previously-running services do not affect the return value;
+        /// they are surfaced via <see cref="Logger.Error(string, Exception)"/>.
+        /// </returns>
+        public async Task<bool> CopyEmbeddedResourceAsync(
+            Assembly assembly,
+            string resourceNamespace,
+            string fileName,
+            string extension,
+            bool stopServices = true,
+            bool isCli = false,
+            CancellationToken cancellationToken = default)
+        {
+            bool copyDone = false; // Tracks if the physical file copy succeeded
+
+            try
+            {
+                if (!TryPrepareExtraction(resourceNamespace, fileName, extension, out var targetPath, out var resourceName))
+                    return true;
+
+                // Capture pre-existing explicit ACLs BEFORE stopping services, killing processes, or staging files
+                FileSecurity? existingAcl = GetExistingFileSecurity(targetPath);
+
+                // ROBUSTNESS: Validate the embedded resource exists BEFORE side-effecting anything.
+                // This prevents stopping services or killing locking processes if the resource is missing.
+                Stream? resourceStream = assembly.GetManifestResourceStream(resourceName);
+                if (resourceStream == null)
+                {
+                    Logger.Error($"Embedded resource not found: {resourceName}");
+                    return false;
+                }
+
+                using (resourceStream)
+                {
+                    // Get running services before the inner try block
+                    var runningServices = new List<string>();
+                    if (stopServices)
+                    {
+                        // CLI-installed services are installed with Servy.Service.CLI.exe and UI-installed services are installed with Servy.Service.exe
+                        runningServices = isCli
+                            ? _serviceHelper.GetRunningServyCLIServices()
+                            : _serviceHelper.GetRunningServyUIServices();
+                    }
+
+                    try
+                    {
+                        if (stopServices && runningServices.Count > 0)
+                        {
+                            Logger.Info($"Stopping services before copying resource '{resourceName}': {string.Join(", ", runningServices)}");
+                            // Forward the cancellation token to the polling routine
+                            await _serviceHelper.StopServicesAsync(runningServices, cancellationToken);
+                        }
+
+                        // Check cancellation boundary right before process execution checks
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        if (!TerminateBlockingProcesses(targetPath))
+                            return false;
+
+                        // Plumb the token parameter through to the atomic I/O engine
+                        await Helper.WriteFileAtomicAsync(targetPath, resourceStream.CopyToAsync, cancellationToken);
+
+                        // Restore pre-existing ACLs on the newly written file
+                        RestoreFileSecurity(targetPath, existingAcl);
+
+                        copyDone = true; // File write succeeded natively within the execution path
+                    }
+                    finally
+                    {
+                        if (stopServices && runningServices.Count > 0)
+                        {
+                            try
+                            {
+                                Logger.Info($"Starting stopped services after copying resource '{resourceName}': {string.Join(", ", runningServices)}");
+
+                                // Intentionally pass CancellationToken.None here so an upfront
+                                // pipeline cancellation signal doesn't discard orphaned background services.
+                                await _serviceHelper.StartServicesAsync(runningServices, CancellationToken.None);
+                            }
+                            catch (Exception startEx)
+                            {
+                                // ROBUSTNESS: Dynamically evaluate the copyDone state inside the finally block.
+                                // This guarantees we don't issue false success metrics to the administrator logs if the copy was aborted earlier.
+                                var copyDescription = copyDone
+                                    ? $"Embedded resource '{resourceName}' was successfully copied to '{targetPath}', but "
+                                    : $"Embedded resource '{resourceName}' was NOT copied to '{targetPath}'; additionally, ";
+
+                                Logger.Error(
+                                    copyDescription + $"{runningServices.Count} previously-running services failed to restart.",
+                                    startEx);
+                            }
+                        }
+                    }
+                }
+
+                if (copyDone)
+                {
+                    Logger.Info($"Successfully copied embedded resource '{resourceName}' to '{targetPath}'.");
+                }
+
+                // Restart failures are surfaced via Logger.Error already, so the boolean does not need to encode them
+                return copyDone;
+            }
+            catch (OperationCanceledException)
+            {
+                Logger.Info($"Embedded resource copy for '{fileName}' was cancelled by the caller.");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Failed to copy embedded resource '{fileName}'.", ex);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Copies an embedded resource from the assembly to disk synchronously.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <b>DANGER:</b> Unlike its asynchronous counterpart, this method forcefully terminates
+        /// any processes holding a lock on the target file WITHOUT performing a graceful service
+        /// shutdown or restart. It completely circumvents the standard service lifecycle.
+        /// </para>
+        /// <para>
+        /// This should <b>only</b> be called by external bootstrapping utilities or during
+        /// installation phases when it is guaranteed that no Servy services are actively running.
+        /// </para>
+        /// </remarks>
+        /// <param name="assembly">The assembly containing the resource.</param>
+        /// <param name="resourceNamespace">Namespace of the embedded resource.</param>
+        /// <param name="fileName">The filename of the resource without extension.</param>
+        /// <param name="extension">The file extension (e.g., "exe" or "dll").</param>
+        /// <returns>True if the copy succeeded or was not needed, false if it failed.</returns>
+        public bool CopyEmbeddedResourceForceSync(
+            Assembly assembly,
+            string resourceNamespace,
+            string fileName,
+            string extension)
+        {
+            try
+            {
+                if (!TryPrepareExtraction(resourceNamespace, fileName, extension, out var targetPath, out var resourceName))
+                    return true;
+
+                // Capture pre-existing explicit ACLs BEFORE killing processes or executing atomic writes
+                FileSecurity? existingAcl = GetExistingFileSecurity(targetPath);
+
+                // ROBUSTNESS: Validate the embedded resource exists BEFORE side-effecting anything.
+                Stream? resourceStream = assembly.GetManifestResourceStream(resourceName);
+                if (resourceStream == null)
+                {
+                    Logger.Error($"Embedded resource not found: {resourceName}");
+                    return false;
+                }
+
+                using (resourceStream)
+                {
+                    // Log a warning so operators auditing the logs know a brute-force termination might occur
+                    Logger.Warn($"Executing synchronous force-copy for '{resourceName}'. Any processes locking this file will be killed without graceful shutdown.");
+
+                    if (!TerminateBlockingProcesses(targetPath))
+                        return false;
+
+                    Helper.WriteFileAtomic(targetPath, resourceStream.CopyTo);
+
+                    // Restore pre-existing ACLs on the newly written file
+                    RestoreFileSecurity(targetPath, existingAcl);
+                }
+
+                Logger.Info($"Successfully forcefully copied embedded resource '{resourceName}' to '{targetPath}'.");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Failed to forcefully copy embedded resource '{fileName}'.", ex);
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Retrieves the last write time of the host process executable.
+        /// </summary>
+        /// <returns>
+        /// The <see cref="DateTime"/> (UTC) when the host process (.exe) was last modified,
+        /// or <see cref="DateTime.MinValue"/> if the file cannot be accessed. The sentinel
+        /// value causes <c>ShouldCopyResource</c> to leave any existing extraction untouched
+        /// when the timestamp probe fails.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// This method uses the main module of the current process as a proxy for the
+        /// "deployment timestamp." This is an acceptable proxy in the current single-exe
+        /// distribution model of Servy, as it represents the last time the application
+        /// artifacts were updated on the host machine.
+        /// </para>
+        /// <para>
+        /// Note: If resources are moved to a separate library assembly in the future,
+        /// this method should be updated to query that specific assembly's file path
+        /// to ensure accurate re-extraction logic.
+        /// </para>
+        /// </remarks>
+        public DateTime GetHostProcessLastWriteTimeUtc()
+        {
+            // 1. Primary probe via Process.MainModule
+            try
+            {
+                using (var process = Process.GetCurrentProcess())
+                {
+                    var exePath = process.MainModule?.FileName;
+                    if (!string.IsNullOrEmpty(exePath) && File.Exists(exePath))
+                    {
+                        return File.GetLastWriteTimeUtc(exePath);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Info($"{nameof(GetHostProcessLastWriteTimeUtc)}: MainModule.FileName access threw, falling back to AppDomain probe.", ex);
+            }
+
+            // 2. AppDomain fallback (runs for BOTH the exception and the silent-null path)
+            try
+            {
+                var exeName = AppDomain.CurrentDomain.FriendlyName;
+                string[] candidates =
+                {
+                    Path.Combine(AppContext.BaseDirectory, exeName),
+                    Path.Combine(AppContext.BaseDirectory, exeName + ".exe"),
+                    Path.Combine(AppContext.BaseDirectory, exeName + ".dll"),
+                };
+                foreach (var path in candidates)
+                {
+                    if (File.Exists(path))
+                        return File.GetLastWriteTimeUtc(path);
+                }
+            }
+            catch (Exception innerEx)
+            {
+                Logger.Warn($"{nameof(GetHostProcessLastWriteTimeUtc)}: both MainModule and AppDomain probes failed.", innerEx);
+            }
+
+            return DateTime.MinValue;
+        }
+
+        #region Shared Internal Logic
+
+        /// <summary>
+        /// Attempts to retrieve the existing Access Control List (ACL) for a file before replacement,
+        /// converting inherited rules into explicit Access Control Entries (ACEs).
+        /// </summary>
+        /// <param name="filePath">The target file path.</param>
+        /// <returns>The <see cref="FileSecurity"/> of the target file if it exists; otherwise, <c>null</c>.</returns>
+        private FileSecurity? GetExistingFileSecurity(string filePath)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
+                {
+                    var fileInfo = new FileInfo(filePath);
+                    var security = fileInfo.GetAccessControl();
+
+                    // Protect against re-inheriting parent directory permissions upon atomic file replacement
+                    security.SetAccessRuleProtection(isProtected: true, preserveInheritance: true);
+                    return security;
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Failed to read existing ACL for file '{filePath}'. Pre-existing security settings may not be preserved upon replacement.", ex);
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Reapplies a previously captured Access Control List (ACL) to a target file after replacement.
+        /// </summary>
+        /// <param name="filePath">The target file path.</param>
+        /// <param name="fileSecurity">The <see cref="FileSecurity"/> settings to apply.</param>
+        private void RestoreFileSecurity(string filePath, FileSecurity? fileSecurity)
+        {
+            if (fileSecurity == null || string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+                return;
+
+            try
+            {
+                var fileInfo = new FileInfo(filePath);
+                fileInfo.SetAccessControl(fileSecurity);
+                Logger.Debug($"Successfully restored explicit pre-existing ACL settings on '{filePath}'.");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"Failed to restore pre-existing ACL settings on '{filePath}'.", ex);
+            }
+        }
+
+        /// <summary>
+        /// Resolves output paths, creates necessary directories, and determines if a resource extraction is required based on timestamps.
+        /// </summary>
+        /// <param name="resourceNamespace">The namespace where the resource is located within the assembly.</param>
+        /// <param name="fileName">The base name of the file to extract (without extension).</param>
+        /// <param name="extension">The file extension (e.g., "exe", "dll").</param>
+        /// <param name="targetPath">Output parameter containing the full destination path on disk.</param>
+        /// <param name="resourceName">Output parameter containing the full manifest resource name used for extraction.</param>
+        /// <returns>True if the resource needs to be copied; false if the existing file is up to date.</returns>
+        private bool TryPrepareExtraction(
+            string resourceNamespace,
+            string fileName,
+            string extension,
+            out string targetPath,
+            out string resourceName)
+        {
+            var targetFileName = fileName + "." + extension;
+
+            // Use the explicit extraction root instead of assembly-relative logic
+            targetPath = Path.Combine(BaseExtractionDirectory, targetFileName);
+
+            var targetPathDir = Path.GetDirectoryName(targetPath);
+
+            if (string.IsNullOrEmpty(targetPathDir))
+            {
+                throw new IOException($"Could not resolve parent directory for extraction: {targetPath}");
+            }
+
+            Directory.CreateDirectory(targetPathDir);
+
+            resourceName = resourceNamespace + "." + fileName + "." + extension;
+
+            if (File.Exists(targetPath))
+            {
+                DateTime existingFileTime = File.GetLastWriteTimeUtc(targetPath);
+                DateTime hostExeWriteTime = GetHostProcessLastWriteTimeUtc();
+
+                if (hostExeWriteTime == DateTime.MinValue)
+                {
+                    Logger.Warn("Last write time of the host process executable is equal to DateTime.MinValue, "
+                        + $"resource re-extraction will be skipped this session until the existing file '{fileName}' is removed.");
+                    return false;
+                }
+
+                Logger.Debug($"Existing file '{targetPath}' last write time: {existingFileTime.ToLocalTime():G}");
+                Logger.Debug($"Host executable (deployment proxy) for '{resourceName}' last write time: {hostExeWriteTime.ToLocalTime():G}");
+
+                // Only copy if the host executable (deployment proxy) is newer by more than AppConfig.ResourceStalenessThresholdMinutes
+                bool shouldCopy = hostExeWriteTime > existingFileTime.AddMinutes(AppConfig.ResourceStalenessThresholdMinutes);
+
+                if (!shouldCopy)
+                {
+                    if (hostExeWriteTime > existingFileTime)
+                    {
+                        Logger.Debug($"Embedded resource '{resourceName}' is newer, but within the {AppConfig.ResourceStalenessThresholdMinutes}-minute delta. Skipping copy.");
+                    }
+                    else if (existingFileTime > hostExeWriteTime.AddMinutes(AppConfig.ResourceStalenessThresholdMinutes))
+                    {
+                        Logger.Warn($"Extracted resource '{targetFileName}' ({existingFileTime.ToLocalTime():G}) is newer than host executable ({hostExeWriteTime.ToLocalTime():G}). Potential version downgrade detected; existing file will be retained.");
+                    }
+                }
+
+                return shouldCopy;
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Safely terminates any processes holding locks on the target file by identifying them by path.
+        /// This prevents collateral damage to other service instances using the same utility names.
+        /// </summary>
+        /// <param name="targetPath">The full path to the file to check for active file handles.</param>
+        /// <returns>True if the file was successfully cleared of blocking processes; false if termination failed.</returns>
+        private bool TerminateBlockingProcesses(string targetPath)
+        {
+            // Identify lock holders by path (not by executable name) so we surgically terminate
+            // only the trees locking THIS specific file, leaving unrelated services that run
+            // their own copy of the same executable (e.g., Servy.Restarter.exe) untouched.
+            if (!_processKiller.KillProcessesUsingFile(targetPath))
+            {
+                Logger.Error($"Could not clear file locks on '{targetPath}'. Extraction aborted to prevent file corruption.");
+                return false;
+            }
+
+            return true;
+        }
+
+        #endregion
+    }
+}

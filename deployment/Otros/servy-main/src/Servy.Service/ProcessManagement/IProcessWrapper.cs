@@ -1,0 +1,204 @@
+using Servy.Core.Config;
+using System.Diagnostics;
+
+namespace Servy.Service.ProcessManagement
+{
+    /// <summary>
+    /// Defines a wrapper interface for managing and interacting with a system process.
+    /// </summary>
+    public interface IProcessWrapper : IDisposable
+    {
+        /// <summary>
+        /// Occurs when the associated process writes a line to its standard output stream.
+        /// </summary>
+        event DataReceivedEventHandler OutputDataReceived;
+
+        /// <summary>
+        /// Occurs when the associated process writes a line to its standard error stream.
+        /// </summary>
+        event DataReceivedEventHandler ErrorDataReceived;
+
+        /// <summary>
+        /// Occurs when the associated process exits.
+        /// </summary>
+        event EventHandler Exited;
+
+        /// <summary>
+        /// Gets the unique identifier for the associated process.
+        /// </summary>
+        int Id { get; }
+
+        /// <summary>
+        /// Gets a value indicating whether the associated process has exited.
+        /// </summary>
+        bool HasExited { get; }
+
+        /// <summary>
+        /// Gets the native handle for the associated process.
+        /// </summary>
+        IntPtr Handle { get; }
+
+        /// <summary>
+        /// Gets the exit code of the associated process.
+        /// </summary>
+        int ExitCode { get; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the <see cref="Exited"/> event should be raised when the process terminates.
+        /// </summary>
+        bool EnableRaisingEvents { get; set; }
+
+        /// <summary>
+        /// Gets the process start time.
+        /// </summary>
+        DateTime StartTime { get; }
+
+        /// <summary>
+        /// Gets the standard output stream of the associated process.
+        /// </summary>
+        StreamReader StandardOutput { get; }
+
+        /// <summary>
+        /// Gets the standard error stream of the associated process.
+        /// </summary>
+        StreamReader StandardError { get; }
+
+        /// <summary>
+        /// Gets the window handle of the main window for the associated process.
+        /// </summary>
+        IntPtr MainWindowHandle { get; }
+
+        /// <summary>
+        /// Gets or sets the overall priority category for the associated process.
+        /// </summary>
+        ProcessPriorityClass PriorityClass { get; set; }
+
+        /// <summary>
+        /// Gets or sets the logical CPUs the process may run on.
+        /// </summary>
+        IntPtr ProcessorAffinity { get; set; }
+
+        /// <summary>
+        /// Gets the process start information, including the executable path, arguments, and other settings.
+        /// </summary>
+        ProcessStartInfo StartInfo { get; }
+
+        /// <summary>
+        /// Gets the underlying <see cref="Process"/> instance.
+        /// </summary>
+        Process UnderlyingProcess { get; }
+
+        /// <summary>
+        /// Starts the process.
+        /// </summary>
+        /// <returns>
+        /// <c>true</c> if the process was successfully started;
+        /// <c>false</c> if no new process resource is started (for example, if a process is reused).
+        /// </returns>
+        bool Start();
+
+        /// <summary>
+        /// Waits until the child process remains alive for the specified timeout,
+        /// which indicates that the process has started successfully and did not
+        /// exit prematurely.
+        /// </summary>
+        /// <param name="timeout">
+        /// The maximum time to wait for the process to remain running.
+        /// </param>
+        /// <param name="cancellationToken">
+        /// An optional token to observe while waiting. If cancellation is requested,
+        /// the task is canceled.
+        /// </param>
+        /// <returns>
+        /// A task that resolves to <c>true</c> if the process is still running after
+        /// the timeout period; otherwise, <c>false</c>.
+        /// </returns>
+        /// <remarks>
+        /// This method polls the process state at the interval configured by
+        /// <see cref="AppConfig.WaitForExitOrTimeoutDelayMs"/> (default 500 ms) until the timeout is reached.
+        /// If the process exits during this time, the method returns <c>false</c>.
+        /// </remarks>
+        Task<bool> WaitAndCheckStillRunningAsync(TimeSpan timeout, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Stops the associated process.
+        /// </summary>
+        /// <param name="timeoutMs">The timeout in milliseconds to wait for the process to stop.</param>
+        /// <returns>
+        /// <see langword="null"/> if the process was already dead;
+        /// <see langword="true"/> if it stopped gracefully;
+        /// <see langword="false"/> if it had to be forcefully killed.
+        /// </returns>
+        bool? Stop(int timeoutMs);
+
+        /// <summary>
+        /// Stops all descendant processes of the associated process.
+        /// </summary>
+        /// <param name="parentPid">Parent process PID.</param>
+        /// <param name="parentStartTime">Parent process start time.</param>
+        /// <param name="timeoutMs">The timeout in milliseconds to wait for the descendant processes to stop.</param>
+        void StopDescendants(int parentPid, DateTime parentStartTime, int timeoutMs);
+
+        /// <summary>
+        /// Formats the process information as a string.
+        /// </summary>
+        /// <returns>A human-readable description of the process, formatted as "ProcessName (Id)".</returns>
+        string Format();
+
+        /// <summary>
+        /// Immediately stops the associated process and optionally its child/descendant processes.
+        /// </summary>
+        /// <param name="entireProcessTree">Kill entire process tree.</param>
+        void Kill(bool entireProcessTree = false);
+
+        /// <summary>
+        /// Instructs the process to wait for exit for a specified time.
+        /// </summary>
+        /// <param name="milliseconds">The amount of time, in milliseconds, to wait for the associated process to exit.</param>
+        /// <returns><c>true</c> if the process exited within the specified time; otherwise, <c>false</c>.</returns>
+        bool WaitForExit(int milliseconds);
+
+        /// <summary>
+        /// Blocks until the associated process exits.
+        /// </summary>
+        /// <remarks>
+        /// This call blocks indefinitely. Avoid calling it while holding a lock or on a thread that must stay
+        /// responsive: if the child process never exits (hang or infinite loop), the calling thread is blocked forever.
+        /// </remarks>
+        void WaitForExit();
+
+        /// <summary>
+        /// Closes the main window of the associated process.
+        /// </summary>
+        /// <returns><c>true</c> if the main window has been successfully closed; otherwise, <c>false</c>.</returns>
+        bool CloseMainWindow();
+
+        /// <summary>
+        /// Begins asynchronous read operations on the redirected standard output stream of the application.
+        /// </summary>
+        void BeginOutputReadLine();
+
+        /// <summary>
+        /// Begins asynchronous read operations on the redirected standard error stream of the application.
+        /// </summary>
+        void BeginErrorReadLine();
+
+        /// <summary>
+        /// Cancels the asynchronous read operation on the process's standard output stream.
+        /// </summary>
+        /// <remarks>
+        /// This should be called when the process has exited or when you no longer wish to
+        /// receive output events to free up underlying resources.
+        /// </remarks>
+        void CancelOutputRead();
+
+        /// <summary>
+        /// Cancels the asynchronous read operation on the process's standard error stream.
+        /// </summary>
+        /// <remarks>
+        /// This should be called when the process has exited or when you no longer wish to
+        /// receive error events to prevent resource leaks.
+        /// </remarks>
+        void CancelErrorRead();
+    }
+}

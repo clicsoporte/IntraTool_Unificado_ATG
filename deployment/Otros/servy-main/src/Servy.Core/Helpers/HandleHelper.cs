@@ -1,0 +1,189 @@
+using Servy.Core.Config;
+using Servy.Core.Logging;
+using System.Diagnostics;
+using System.Text.RegularExpressions;
+
+namespace Servy.Core.Helpers
+{
+    /// <summary>
+    /// Helper class to find processes holding handles to a file using Sysinternals handle.exe.
+    /// </summary>
+    public static class HandleHelper
+    {
+        /// <summary>
+        /// Contains information about a process holding a file handle.
+        /// </summary>
+        public class ProcessHandleInfo
+        {
+            /// <summary>
+            /// Gets or sets the process ID.
+            /// </summary>
+            public int ProcessId { get; set; }
+
+            /// <summary>
+            /// Gets or sets the process name.
+            /// </summary>
+            public string? ProcessName { get; set; }
+        }
+
+        /// <summary>
+        /// A compiled regular expression used to parse the output of the handle utility.
+        /// </summary>
+        /// <remarks>
+        /// The pattern extracts the process name and process ID (PID) from lines formatted as:
+        /// <c>service.exe        pid: 1234   type: File     123: C:\Path\To\File.dll</c>
+        /// <list type="bullet">
+        /// <item>
+        /// <description><c>name</c>: Captures the executable name (e.g., "service.exe").</description>
+        /// </item>
+        /// <item>
+        /// <description><c>pid</c>: Captures the numerical process identifier (e.g., "1234").</description>
+        /// </item>
+        /// </list>
+        /// </remarks>
+        private static readonly Regex HandleOutputRegex = new Regex(
+            @"^\s*(?<name>.+?)\s+pid:\s*(?<pid>\d+)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.Multiline,
+            AppConfig.HandleExeRegexTimeout);
+
+        /// <summary>
+        /// Uses handle.exe or handle64.exe to find all processes that have an open handle to the specified file.
+        /// </summary>
+        /// <param name="handleExePath">Full path to handle.exe or handle64.exe.</param>
+        /// <param name="filePath">Full path of the file to check for open handles.</param>
+        /// <returns>A list of <see cref="ProcessHandleInfo"/> objects representing the processes holding the file.</returns>
+        /// <exception cref="ArgumentException">Thrown if <paramref name="handleExePath"/> or <paramref name="filePath"/> is null or empty.</exception>
+        /// <exception cref="System.ComponentModel.Win32Exception">Thrown when the OS refuses to start <paramref name="handleExePath"/>, most commonly because the file does not exist or is not executable. <see cref="ProcessStartInfo.UseShellExecute"/> is false, so this is the failure mode for an unstartable executable.</exception>
+        /// <exception cref="TimeoutException">Thrown when handle.exe does not exit within <see cref="AppConfig.HandleExeTimeoutMs"/>.</exception>
+        /// <exception cref="InvalidOperationException">Thrown when handle.exe exits with a non-zero code that does not indicate "no matching handles".</exception>
+        /// <exception cref="RegexMatchTimeoutException">Thrown when parsing the handle.exe output exceeds <see cref="AppConfig.HandleExeRegexTimeout"/>.</exception>
+        public static List<ProcessHandleInfo> GetProcessesUsingFile(string handleExePath, string filePath)
+        {
+            if (string.IsNullOrWhiteSpace(handleExePath))
+                throw new ArgumentException("handleExePath is null or empty", nameof(handleExePath));
+            if (string.IsNullOrWhiteSpace(filePath))
+                throw new ArgumentException("filePath is null or empty", nameof(filePath));
+
+            var processes = new List<ProcessHandleInfo>();
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = handleExePath,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true, // We redirect this, so we MUST drain it
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+
+            // NOTE: The /accepteula flag must be appended as the first positional parameter.
+            // If the target file path occupies the primary position index, handle.exe occasionally
+            // evaluates the target scope prematurely and skips subsequent license parameters.
+            psi.ArgumentList.Add("/accepteula");
+            psi.ArgumentList.Add(filePath);
+
+            using (var process = new Process { StartInfo = psi })
+            {
+                // Use StringBuilders to capture stdout and stderr in the background to avoid deadlocks
+                var outputBuilder = new System.Text.StringBuilder();
+                var errorBuilder = new System.Text.StringBuilder();
+
+                process.OutputDataReceived += (s, e) => { if (e.Data != null) outputBuilder.AppendLine(e.Data); };
+                process.ErrorDataReceived += (s, e) => { if (e.Data != null) errorBuilder.AppendLine(e.Data); };
+
+                // UseShellExecute is false, so Start() cannot return false (there is no process to reuse):
+                // an unstartable executable surfaces as Win32Exception.
+                process.Start();
+
+                // Start asynchronous reads
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+
+                if (!process.WaitForExit(AppConfig.HandleExeTimeoutMs))
+                {
+                    try
+                    {
+                        process.Kill(entireProcessTree: true);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        /* Already exited, expected */
+                    }
+                    catch (Exception killEx)
+                    {
+                        Logger.Warn($"Failed to kill handle.exe after timeout (PID {process.Id}): {killEx.Message}");
+                    }
+
+                    // ROBUSTNESS: Bound first to avoid an unkillable process tree hang.
+                    // If the OS successfully tears down the target process tree layout within the drain limit,
+                    // invoke the unbounded version to safely flush out outstanding in-flight async stream events
+                    // before reading the errorBuilder buffer contents.
+                    if (process.WaitForExit(AppConfig.HandleExeKillDrainTimeoutMs))
+                    {
+                        process.WaitForExit();
+                    }
+
+                    throw new TimeoutException($"handle.exe timed out. Stderr: {errorBuilder}");
+                }
+
+                // Final WaitForExit() with no timeout flushes any in-flight async event handlers for the success path
+                process.WaitForExit();
+
+                string output = outputBuilder.ToString();
+                string error = errorBuilder.ToString();
+
+                // Sysinternals handle.exe returns exit code 1 when it successfully executes but finds no handles.
+                List<Match> matches;
+                try
+                {
+                    // ToList() forces synchronous evaluation under the timeout
+                    matches = HandleOutputRegex.Matches(output).Cast<Match>().ToList();
+                }
+                catch (RegexMatchTimeoutException ex)
+                {
+                    Logger.Error("Regex parsing timed out while processing handle output.", ex);
+                    throw;
+                }
+
+                var matchedAny = matches.Count > 0;
+                bool noMatchingHandles =
+                    process.ExitCode == 1
+                    && !matchedAny
+                    && (output.Contains("No matching handles found", StringComparison.OrdinalIgnoreCase)
+                        || string.IsNullOrWhiteSpace(output));
+
+                // Inspection of ExitCode is critical to ensure the process actually succeeded
+                if (process.ExitCode != 0 && !noMatchingHandles)
+                {
+                    // Log detailed diagnostic information for the operator
+                    Logger.Error($"handle.exe exited with non-zero code {process.ExitCode}. " +
+                                 $"Stdout: {output.Trim()}. Stderr: {error.Trim()}. " +
+                                 "Handle detection is unreliable; aborting operation to prevent file corruption.");
+
+                    // Throwing an InvalidOperationException forces the caller (ProcessKiller.KillProcessesUsingFile)
+                    // to catch the error and return 'false', which halts ResourceHelper's file-replacement pipeline.
+                    throw new InvalidOperationException($"Handle detection failed with exit code {process.ExitCode}.");
+                }
+
+                // Check for specific handle.exe errors
+                if (string.IsNullOrWhiteSpace(output) && errorBuilder.Length > 0)
+                {
+                    Logger.Warn($"handle.exe produced error output: {errorBuilder}");
+                }
+
+                foreach (Match match in matches)
+                {
+                    if (int.TryParse(match.Groups["pid"].Value, out int pid))
+                    {
+                        processes.Add(new ProcessHandleInfo
+                        {
+                            ProcessName = match.Groups["name"].Value.Trim(),
+                            ProcessId = pid
+                        });
+                    }
+                }
+            }
+
+            return processes;
+        }
+    }
+}

@@ -1,0 +1,302 @@
+# ==========================================================================================
+# GitHub Actions Workflow - Changelog Automation
+# ------------------------------------------------------------------------------------------
+# Automatically fetches release metadata from GitHub, constructs a formatted
+# CHANGELOG.md file, and commits the updates to the repository.
+#
+# Triggers:
+# - Automatically after successful completion of 'bump-version' workflow.
+# - Manually via workflow_dispatch for full rebuilds.
+# ==========================================================================================
+name: changelog
+
+on:
+  workflow_run:             # auto-trigger after bump-version.yml
+    workflows: ["bump-version"]    # must match the `name:` in bump-version.yml
+    types:
+      - completed
+
+  workflow_dispatch:
+    inputs:
+      reset:
+        description: 'Rebuild CHANGELOG.md from all published releases (unchecked: append latest release only)'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: changelog-${{ github.ref }}
+  cancel-in-progress: false
+
+# Default to read-only for the entire workflow
+permissions:
+  contents: read
+
+jobs:
+  changelog:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    # Only run if manually triggered OR if the automated upstream 'bump-version' run succeeded.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+
+    # Explicitly elevate for this job only to allow the push
+    permissions:
+      contents: write
+
+    env:
+      MAX_RETRIES: 5
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 #v6.0.3
+        with:
+          fetch-depth: 0
+          ref: main # Force checkout of the main branch, not the release tag
+
+      - name: Initialize Git Script Helpers
+        uses: ./.github/actions/setup-git-helpers
+
+      - name: Update CHANGELOG.md
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IS_RESET: ${{ inputs.reset == true }}
+        run: |
+          $repo = $env:GITHUB_REPOSITORY
+          $changelogPath = "CHANGELOG.md"
+          $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+          $maxBytes = 400 * 1024 # Target ~400 KB cutoff threshold per file
+
+          Write-Host "Fetching releases for $repo..."
+          # Use --slurp to combine paginated responses into a single JSON array,
+          # preventing 'ConvertFrom-Json' from failing on concatenated array fragments.
+          $rawJson = gh api repos/$repo/releases --paginate --slurp
+          if ($LASTEXITCODE -ne 0) {
+              throw 'gh api releases failed (exit ' + $LASTEXITCODE + '). Aborting changelog update.'
+          }
+
+          # ROBUSTNESS: Flatten the slurped array-of-arrays into a single stream of release objects
+          $deserializedJson = $rawJson | ConvertFrom-Json | ForEach-Object { $_ }
+          $releases = @($deserializedJson | Where-Object { $_.draft -eq $false })
+
+          if ($releases.Count -eq 0) {
+              Write-Host "No releases found. Exiting."
+              exit 0
+          }
+
+          Function Get-ReleaseEntry {
+              param($Release, $PrevRelease)
+
+              # Regex pattern matching Unicode hyphens, n-dashes, m-dashes, minus signs, and related dash symbols
+              # U+2010 (hyphen), U+2011 (non-breaking hyphen), U+2012 (figure dash), U+2013 (en dash),
+              # U+2014 (em dash), U+2015 (horizontal bar), U+2212 (minus sign), plus Unicode Dash Punctuation (\p{Pd})
+              $dashPattern = '[\u2010\u2011\u2012\u2013\u2014\u2015\u2212\p{Pd}]'
+
+              $rawTitle = if ([string]::IsNullOrWhiteSpace($Release.name)) { $Release.tag_name } else { $Release.name }
+              $title = $rawTitle -replace $dashPattern, '-'
+
+              $url = $Release.html_url
+
+              $date = if (![string]::IsNullOrWhiteSpace($Release.published_at)) {
+                  [DateTime]::Parse($Release.published_at, [Globalization.CultureInfo]::InvariantCulture,
+                    [Globalization.DateTimeStyles]::AdjustToUniversal).ToString("yyyy-MM-dd")
+              } else {
+                  "Pending"
+              }
+
+              $tag = $Release.tag_name
+
+              # Normalize CRLF -> LF and strip trailing whitespace on each line
+              $rawBody = if ([string]::IsNullOrWhiteSpace($Release.body)) {
+                  "*No release notes provided.*"
+              } else {
+                  $normalized = $Release.body -replace "`r`n", "`n"
+                  (($normalized -split "`n") | ForEach-Object { $_.TrimEnd() }) -join "`n"
+              }
+              $body = $rawBody.Trim() -replace $dashPattern, '-'
+
+              $bt = [char]96
+
+              $md = "## [$title]($url)`n`n"
+              $md += "**Date:** $date | **Tag:** [$bt$tag$bt](https://github.com/$repo/tree/$tag)`n`n"
+              $md += "$body`n`n"
+              $md += "### Downloads`n"
+
+              foreach ($asset in $Release.assets) {
+                  $aName = $asset.name -replace $dashPattern, '-'
+                  $aUrl = $asset.browser_download_url
+                  $size = ([math]::Round($asset.size / 1MB, 2)).ToString("F2", [Globalization.CultureInfo]::InvariantCulture)
+                  $md += "* [$aName]($aUrl) - ${size} MB`n"
+              }
+
+              $md += "* [Source code (zip)]($($url.Replace('/releases/tag/', '/archive/refs/tags/')).zip)`n"
+              $md += "* [Source code (tar.gz)]($($url.Replace('/releases/tag/', '/archive/refs/tags/')).tar.gz)`n`n"
+
+              if ($null -ne $PrevRelease) {
+                  $prevTag = $PrevRelease.tag_name
+                  $md += "Compare changes: https://github.com/$repo/compare/$prevTag...$tag`n`n"
+              }
+
+              return $md
+          }
+
+          Function Save-ChangelogFiles {
+              param($Releases)
+
+              # Clean up any existing archive files to prevent orphaned/duplicate archives when chunk boundaries shift
+              Get-ChildItem -Path . -Filter "CHANGELOG-*.md" | Remove-Item -Force
+
+              # Chunk release history into blocks of ~400 KB
+              $chunks = [System.Collections.Generic.List[System.Collections.Generic.List[object]]]::new()
+              $currentChunk = [System.Collections.Generic.List[object]]::new()
+              $currentBytes = $utf8NoBom.GetByteCount("# Changelog`n`n")
+
+              for ($i = 0; $i -lt $Releases.Count; $i++) {
+                  $prev = if ($i + 1 -lt $Releases.Count) { $Releases[$i+1] } else { $null }
+                  $entry = Get-ReleaseEntry -Release $Releases[$i] -PrevRelease $prev
+                  $entryBytes = $utf8NoBom.GetByteCount($entry)
+
+                  if ($currentChunk.Count -gt 0 -and ($currentBytes + $entryBytes) -gt $maxBytes) {
+                      $chunks.Add($currentChunk)
+                      $currentChunk = [System.Collections.Generic.List[object]]::new()
+                      $currentBytes = $utf8NoBom.GetByteCount("# Changelog`n`n")
+                  }
+
+                  $currentChunk.Add($Releases[$i])
+                  $currentBytes += $entryBytes
+              }
+
+              if ($currentChunk.Count -gt 0) {
+                  $chunks.Add($currentChunk)
+              }
+
+              # Determine archive filenames and links from newest to oldest chunk
+              $archiveFileNames = [System.Collections.Generic.List[string]]::new()
+              for ($c = 1; $c -lt $chunks.Count; $c++) {
+                  $chunk = $chunks[$c]
+                  $newestInChunk = $chunk[0].tag_name
+                  $oldestInChunk = $chunk[$chunk.Count - 1].tag_name
+                  $archiveFileNames.Add("CHANGELOG-$oldestInChunk-$newestInChunk.md")
+              }
+
+              # Write primary CHANGELOG.md (Chunk 0)
+              $mainChunk = $chunks[0]
+              $mainContent = "# Changelog`n`n"
+              for ($i = 0; $i -lt $mainChunk.Count; $i++) {
+                  $rel = $mainChunk[$i]
+                  $globalIdx = $i
+                  $prev = if ($globalIdx + 1 -lt $Releases.Count) { $Releases[$globalIdx + 1] } else { $null }
+                  $mainContent += Get-ReleaseEntry -Release $rel -PrevRelease $prev
+              }
+
+              if ($archiveFileNames.Count -gt 0) {
+                  $firstArchive = $archiveFileNames[0]
+                  $mainContent += "---`n`nLooking for older releases? See: [$firstArchive](./$firstArchive)`n"
+              }
+              [System.IO.File]::WriteAllText("CHANGELOG.md", $mainContent, $utf8NoBom)
+
+              # Write each archive file recursively with 400 KB bounds
+              $runningGlobalIdx = $mainChunk.Count
+              for ($c = 1; $c -lt $chunks.Count; $c++) {
+                  $chunk = $chunks[$c]
+                  $fileName = $archiveFileNames[$c - 1]
+                  $newestTag = $chunk[0].tag_name
+                  $oldestTag = $chunk[$chunk.Count - 1].tag_name
+
+                  $archiveHeader = "# Changelog ($oldestTag - $newestTag)`n`n"
+                  if ($c -eq 1) {
+                      $archiveHeader += "This is the archived release history. For newer releases, see [CHANGELOG.md](./CHANGELOG.md).`n`n"
+                  } else {
+                      $newerArchive = $archiveFileNames[$c - 2]
+                      $archiveHeader += "This is an archived release history. For newer releases, see [$newerArchive](./$newerArchive) and [CHANGELOG.md](./CHANGELOG.md).`n`n"
+                  }
+
+                  $archiveContent = $archiveHeader
+                  for ($i = 0; $i -lt $chunk.Count; $i++) {
+                      $rel = $chunk[$i]
+                      $globalIdx = $runningGlobalIdx + $i
+                      $prev = if ($globalIdx + 1 -lt $Releases.Count) { $Releases[$globalIdx + 1] } else { $null }
+                      $archiveContent += Get-ReleaseEntry -Release $rel -PrevRelease $prev
+                  }
+
+                  if ($c -lt $archiveFileNames.Count) {
+                      $nextArchive = $archiveFileNames[$c]
+                      $archiveContent += "---`n`nLooking for older releases? See the next archive: [$nextArchive](./$nextArchive)`n"
+                  }
+
+                  [System.IO.File]::WriteAllText($fileName, $archiveContent, $utf8NoBom)
+                  $runningGlobalIdx += $chunk.Count
+              }
+          }
+
+          $isReset = ($env:IS_RESET -eq 'true')
+          $bt = [char]96
+          $header = "# Changelog"
+
+          if ($isReset) {
+              Write-Host "Reset flag is true. Rebuilding all changelog files..."
+              Save-ChangelogFiles -Releases $releases
+          } else {
+              $latest = $releases[0]
+              $tag = $latest.tag_name
+
+              $existing = ""
+              if ([System.IO.File]::Exists($changelogPath)) {
+                  $existing = [System.IO.File]::ReadAllText($changelogPath, $utf8NoBom)
+                  # Standardize existing line endings to LF
+                  $existing = $existing -replace "`r`n", "`n"
+              }
+
+              $tagLine = "**Tag:** [$bt$tag$bt](https://github.com/$repo/tree/$tag)"
+              if ($existing.Contains($tagLine)) {
+                  Write-Host "Release $tag is already in the CHANGELOG. No updates needed."
+              } else {
+                  Write-Host "Prepending latest release ($tag) to top of CHANGELOG.md..."
+                  $prev = if ($releases.Count -gt 1) { $releases[1] } else { $null }
+                  $entry = Get-ReleaseEntry -Release $latest -PrevRelease $prev
+
+                  $headerPattern = '(?s)^' + [regex]::Escape($header) + '\n(.*)$'
+                  if ($existing -match $headerPattern) {
+                      $newLog = "$header`n`n$entry" + $matches[1].TrimStart()
+                  } else {
+                      $newLog = "$header`n`n$entry$existing"
+                  }
+                  [System.IO.File]::WriteAllText($changelogPath, $newLog, $utf8NoBom)
+
+                  # Auto-split if appending pushed CHANGELOG.md past 400 KB
+                  if ($utf8NoBom.GetByteCount($newLog) -gt $maxBytes) {
+                      Write-Host "CHANGELOG.md exceeds 400 KB ($($utf8NoBom.GetByteCount($newLog)) bytes). Re-chunking archives..."
+                      Save-ChangelogFiles -Releases $releases
+                  }
+              }
+          }
+
+      - name: Commit and Push
+        shell: pwsh
+        run: |
+          . "$env:RUNNER_TEMP\git-helpers.ps1"
+          Invoke-Git config core.autocrlf false
+          Invoke-Git config user.name "github-actions[bot]"
+          Invoke-Git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Scope the check to CHANGELOG files so unrelated working-tree changes don't trigger a commit
+          $hasChanges = (Invoke-Git status --porcelain CHANGELOG*.md) -join "`n"
+          if ([string]::IsNullOrWhiteSpace($hasChanges)) {
+              Write-Host "No changes detected in CHANGELOG files. Nothing to update."
+              exit 0
+          }
+
+          Invoke-Git add CHANGELOG*.md
+
+          git diff --staged --quiet
+          if ($LASTEXITCODE -ne 0) {
+              Invoke-Git commit -m "docs: auto-update CHANGELOG.md"
+          } else {
+              Write-Host "Index is clean after staging. Skipping commit."
+          }
+
+          # Env vars are strings; -MaxRetries is [int]
+          $maxRetries = [int]$env:MAX_RETRIES
+          Invoke-PushWithRetry -PullRef 'main' -PushRef 'HEAD:main' -MaxRetries $maxRetries

@@ -1,0 +1,112 @@
+# ==========================================================================================
+# GitHub Actions Workflow - Bump Version
+# ------------------------------------------------------------------------------------------
+# Automatically bumps the Servy version number
+# after a completed "choco" workflow.
+# It determines the next version (decimal-point scheme),
+# updates version files on both main and net48 branches,
+# and commits the changes back to the repository.
+# ==========================================================================================
+name: bump-version
+on:
+  workflow_run:             # auto-trigger after choco.yml
+    workflows: ["choco"]    # must match the `name:` in choco.yml
+    types:
+      - completed
+
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.1)'
+        required: false    # Optional manual trigger
+
+concurrency:
+  group: bump-version-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write       # Needed to push commits back
+
+jobs:
+  bump-version:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    # Only run if manually triggered OR if the automated upstream 'choco' run succeeded.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    steps:
+      # 1. Checkout the repository
+      - name: Checkout repo
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 #v6.0.3
+
+      # 1a. Write shared git helper to disk for use in subsequent steps
+      - name: Initialize Git Script Helpers
+        uses: ./.github/actions/setup-git-helpers
+
+      # 2. Determine the tag/version to use, support multiple trigger sources via composite action
+      - name: Set version vars
+        uses: ./.github/actions/resolve-version
+        with:
+          manual_tag: ${{ github.event.inputs.tag }}
+
+      # 2a. Compute the next version
+      - name: Compute next version
+        shell: pwsh
+        run: |
+          # Calculate NEXT_VERSION: increment minor, roll over major if minor >= 9
+          # Product follows decimal-point versioning, max 10 minor releases per major
+          $parts = $env:VERSION.Split('.')
+          $major = [int]$parts[0]
+          $minor = [int]$parts[1]
+          if ($minor -lt 9) {
+              $minor++
+          } else {
+              $major++
+              $minor = 0
+          }
+          $next_version = "$major.$minor"
+          Write-Host "Next version: $next_version"
+          Add-Content -Path $env:GITHUB_ENV -Value "NEXT_VERSION=$next_version"
+
+      # 3. Bump version on main and net48 branches sequentially
+      - name: Bump version on main and net48 branches
+        shell: pwsh
+        run: |
+          . "$env:RUNNER_TEMP\git-helpers.ps1"
+
+          # Configure commit identity for this checkout (repo-local; both branch iterations reuse it)
+          Invoke-Git config user.name "github-actions[bot]"
+          Invoke-Git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          $branches = @("main", "net48")
+          foreach ($branch in $branches) {
+              Write-Host "Starting version bump for branch: $branch"
+
+              # Fetch the branch tips safely without modifying active local branch head refs directly
+              Invoke-Git fetch origin $branch
+              Invoke-Git checkout -B $branch
+              Invoke-Git reset --hard "origin/$branch"
+
+              ./bump-version.ps1 -Version $env:NEXT_VERSION
+              if ($LASTEXITCODE -ne 0) { throw "bump-version.ps1 failed with exit $LASTEXITCODE on branch $branch" }
+
+              # Using porcelain check consistently to prevent silent skips across branches.
+              $hasChanges = (Invoke-Git status --porcelain) -join "`n"
+              if (-not [string]::IsNullOrWhiteSpace($hasChanges)) {
+                  Invoke-Git add --all
+
+                  git diff --staged --quiet
+                  if ($LASTEXITCODE -ne 0) {
+                      Invoke-Git commit -m "chore: bump version from $env:VERSION to $env:NEXT_VERSION"
+                      Invoke-PushWithRetry -PullRef $branch -PushRef $branch
+                      Write-Host "Successfully committed and pushed version updates to $branch"
+                  } else {
+                      Write-Host "Index is clean after staging. Skipping commit on $branch branch."
+                  }
+              } else {
+                  Write-Host "No changes detected on $branch branch, skipping commit."
+              }
+
+              Write-Host "Finished processing branch: $branch`n"
+          }

@@ -1,0 +1,683 @@
+using Servy.Core.Config;
+using Servy.Core.Data;
+using Servy.Core.EnvironmentVariables;
+using Servy.Core.Helpers;
+using Servy.Core.Logging;
+using Servy.Core.Validation;
+using Servy.Service.CommandLine;
+using Servy.Service.ProcessManagement;
+using System.Diagnostics;
+using System.ServiceProcess;
+using System.Text.RegularExpressions;
+
+namespace Servy.Service.Helpers
+{
+    /// <inheritdoc />
+    public class ServiceHelper : IServiceHelper
+    {
+        #region Logging Security
+
+        /// <summary>
+        /// Long or unambiguous sensitive keywords where letter/digit prefixes are permitted
+        /// (e.g., PGPASSWORD, DBPASSWORD, APITOKEN, APIKEY, MY_PASSWORD).
+        /// </summary>
+        private static readonly string[] LooseKeyWords = new string[]
+        {
+            // --- Core Credentials ---
+            "PASSWORD", "PASSPHRASE", "USERPWD",
+
+            // --- Web & Mobile Auth (JWT/OAuth/Personal Tokens) ---
+            "TOKEN", "CREDENTIAL", "CLIENT_SECRET",
+
+            // --- Cloud & Infrastructure (AWS/Azure/GCP) ---
+            "SECRET", "ACCOUNTKEY", "ACCESSKEY", "SIGNATURE",
+
+            // --- Databases & Storage ---
+            "CONNECTIONSTRING", "CONNSTR", "DATABASE_URL",
+            "PROVIDER_CONNECTION_STRING", "DATABASE_PASSWORD",
+
+            // --- Cryptography & Identity (Specific KEY variants) ---
+            "PRIVATE_KEY", "SSH_KEY", "SECRET_KEY", "API_KEY", "APIKEY",
+            "CERTIFICATE", "THUMBPRINT",
+
+            // --- API & Integration Tokens ---
+            "APP_SECRET", "BROWSER_KEY", "WEBHOOK_URL",
+            "KUBE_CONFIG", "TELEGRAM_TOKEN", "DISCORD_TOKEN"
+        };
+
+        /// <summary>
+        /// Short or ambiguous sensitive keywords that require a strict leading word boundary
+        /// to prevent false positives (e.g., COMPAT, CONCERT, ARKANSAS).
+        /// </summary>
+        private static readonly string[] StrictKeyWords = new string[]
+        {
+            // --- Short Core Credentials ---
+            "PWD", "PIN",
+
+            // --- Web & Mobile Auth ---
+            "AUTH", "BEARER", "JWT", "SESSION", "COOKIE", "PAT",
+
+            // --- Cloud & Infrastructure ---
+            "SAS", "SKEY", "TENANT_ID",
+
+            // --- Databases & Storage ---
+            "DSN",
+
+            // --- Cryptography & Identity ---
+            "CERT", "PFX", "PEM", "SALT", "PEPPER",
+
+            // --- API Service Identifiers ---
+            "API"
+        };
+
+        /// <summary>
+        /// Centralized regular expression sub-pattern representing the optimized case-insensitive
+        /// word boundaries and alternation maps for sensitive credential keys.
+        /// </summary>
+        private static readonly string KeywordBoundaryPattern =
+            @"(?i)(?:" +
+                @"(?<=^|[^a-zA-Z0-9])(?<key>[A-Za-z0-9]*(?:" + string.Join("|", LooseKeyWords.Select(Regex.Escape)) + @")S?(?:_[A-Za-z0-9]+)*)(?![a-zA-Z0-9])" +
+                @"|" +
+                @"(?<![a-zA-Z0-9])(?<key>(?:" + string.Join("|", StrictKeyWords.Select(Regex.Escape)) + @")S?(?:_[A-Za-z0-9]+)*)(?![a-zA-Z0-9])" +
+            @")";
+
+        /// <summary>
+        /// A specialized regex for matching sensitive keys.
+        /// Uses the same boundary logic as MaskingRegex to avoid false positives like 'MONKEY_TYPE'.
+        /// </summary>
+        private static readonly Regex KeyMatcherRegex = new Regex(
+            KeywordBoundaryPattern,
+            RegexOptions.Compiled,
+            AppConfig.InputRegexTimeout);
+
+        /// <summary>
+        /// A compiled regular expression designed to identify and mask sensitive credentials
+        /// within raw command-line argument strings.
+        /// </summary>
+        /// <remarks>
+        /// The value pattern handles both quoted strings and standard tokens, including
+        /// multi-word values that do not look like subsequent CLI flags.
+        /// </remarks>
+        private static readonly Regex MaskingRegex = new Regex(
+             // 1. Unified Keyword Pattern
+             KeywordBoundaryPattern +
+
+             // 2. Separator & Value (Two Branches)
+             // Entire branch choice block is wrapped in an outer atomic group (?>...) to prevent catastrophic backtracking timeouts.
+             @"(?>(?:" +
+                 // BRANCH A: Explicit Separators (:, =, /)
+                 // Aggressively consumes spaces for unquoted strings (e.g., "KEY=---BEGIN RSA---")
+                 // as long as the next word isn't another CLI flag.
+                 // Entire choice block is wrapped in an atomic group (?>...) to prevent catastrophic backtracking.
+                 @"(?<sep>\s*[:=]\s*|/)" +
+                 @"(?>(?:" +
+                     @"(?<val>""[^""]*"")|" +            // Double quoted: captures quotes so the whole string gets masked cleanly
+                     @"(?<val>'[^']*')|" +               // Single quoted: captures quotes so the whole string gets masked cleanly
+                     @"(?<val>[^\s""']+(?:\s+(?![\-/]+[a-zA-Z])[^\s""']+)*)" + // Unquoted: isolates spaces cleanly without nested loops
+                 @"))" +
+                 @"|" +
+                 // BRANCH B: Space Separator
+                 // Consumes unquoted strings, supporting multi-word values (e.g., "my secret pass")
+                 // but stops consuming if it detects a subsequent CLI flag.
+                 // Entire choice block is wrapped in an atomic group (?>...) to prevent catastrophic backtracking.
+                 @"(?<sep>\s+)(?![\-/]+[a-zA-Z])" +
+                 @"(?>(?:" +
+                     @"(?<val>""[^""]*"")|" +            // Double quoted: captures quotes so the whole string gets masked cleanly
+                     @"(?<val>'[^']*')|" +               // Single quoted: captures quotes so the whole string gets masked cleanly
+                     @"(?<val>[^\s""']+(?:\s+(?![\-/]+[a-zA-Z])[^\s""']+)*)" + // Unquoted: isolates spaces cleanly without nested loops
+                 @"))" +
+             @"))",
+             RegexOptions.Compiled,
+             AppConfig.InputRegexTimeout);
+
+        #endregion
+
+        #region Private Fields
+
+        private readonly ICommandLineProvider _commandLineProvider;
+        private readonly IProcessHelper _processHelper;
+
+        #endregion
+
+        #region Constructors
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ServiceHelper"/> class.
+        /// </summary>
+        /// <param name="commandLineProvider">The provider used to access system command line arguments.</param>
+        /// <param name="processHelper">The process helper used for any necessary process-related operations during parsing.</param>
+        /// <exception cref="ArgumentNullException">
+        /// Thrown if <paramref name="commandLineProvider"/> or <paramref name="processHelper"/> is null.
+        /// </exception>
+        public ServiceHelper(
+            ICommandLineProvider commandLineProvider,
+            IProcessHelper processHelper
+            )
+        {
+            _commandLineProvider = commandLineProvider ?? throw new ArgumentNullException(nameof(commandLineProvider));
+            _processHelper = processHelper ?? throw new ArgumentNullException(nameof(processHelper));
+        }
+
+        #endregion
+
+        #region IServiceHelper implementation
+
+        /// <inheritdoc />
+        public void LogStartupArguments(StartOptions options, IServyLogger? logger)
+        {
+            if (options == null)
+            {
+                logger?.Error("StartOptions is null.");
+                return;
+            }
+
+            // 1. PUBLIC DATA: Logged to both Local Log and Windows Event Log (logger?.Info)
+            logger?.Info(
+                  $"[Startup Parameters]\n" +
+                  $"Servy version: {AppConfig.Version}\n\n" +
+
+                  "--------Main-------------------\n" +
+                  $"- serviceName: {options.ServiceName}\n" +
+                  $"- realExePath: {options.ExecutablePath}\n" +
+                  $"- startupDirectory: {options.StartupDirectory}\n" +
+                  $"- priority: {options.Priority}\n" +
+                  $"- cpuAffinity: {options.CpuAffinity}\n" +
+                  $"- startTimeoutInSeconds: {options.StartTimeoutInSeconds}\n" +
+                  $"- stopTimeoutInSeconds: {options.StopTimeoutInSeconds}\n" +
+                  $"- enableConsoleUI: {options.EnableConsoleUI}\n\n" +
+
+                  "--------Logging----------------\n" +
+                  $"- stdoutFilePath: {options.StdoutPath}\n" +
+                  $"- stderrFilePath: {options.StderrPath}\n" +
+                  $"- enableSizeRotation: {options.EnableSizeRotation}\n" +
+                  $"- rotationSizeInBytes: {options.RotationSizeInBytes}\n" +
+                  $"- enableDateRotation: {options.EnableDateRotation}\n" +
+                  $"- dateRotationType: {options.DateRotationType}\n" +
+                  $"- maxRotations: {options.MaxRotations}\n" +
+                  $"- useLocalTimeForRotation: {options.UseLocalTimeForRotation}\n" +
+                  $"- enableDebugLogs: {options.EnableDebugLogs}\n\n" +
+
+                  "--------Recovery---------------\n" +
+                  $"- enableHealthMonitoring: {options.EnableHealthMonitoring}\n" +
+                  $"- heartbeatInterval: {options.HeartbeatIntervalInSeconds}\n" +
+                  $"- maxFailedChecks: {options.MaxFailedChecks}\n" +
+                  $"- recoveryAction: {options.RecoveryAction}\n" +
+                  $"- recoveryOnCleanExit: {options.RecoveryOnCleanExit}\n" +
+                  $"- maxRestartAttempts: {options.MaxRestartAttempts}\n" +
+                  $"- heartbeatUrl: {MaskUrl(options.HeartbeatUrl)}\n" +
+                  $"- heartbeatUrlTimeoutSeconds: {options.HeartbeatUrlTimeoutInSeconds}\n" +
+                  $"- enableHeartbeatUrlFlags: {options.EnableHeartbeatUrlFlags}\n" +
+                  $"- failureProgramPath: {options.FailureProgramPath}\n" +
+                  $"- failureProgramStartupDirectory: {options.FailureProgramStartupDirectory}\n\n" +
+
+                  "--------Pre-Launch-------------\n" +
+                  $"- preLaunchExecutablePath: {options.PreLaunchExecutablePath}\n" +
+                  $"- preLaunchStartupDirectory: {options.PreLaunchStartupDirectory}\n" +
+                  $"- preLaunchStdoutPath: {options.PreLaunchStdoutPath}\n" +
+                  $"- preLaunchStderrPath: {options.PreLaunchStderrPath}\n" +
+                  $"- preLaunchTimeout: {options.PreLaunchTimeoutInSeconds}\n" +
+                  $"- preLaunchRetryAttempts: {options.PreLaunchRetryAttempts}\n" +
+                  $"- preLaunchIgnoreFailure: {options.PreLaunchIgnoreFailure}\n\n" +
+
+                  "--------Post-Launch------------\n" +
+                  $"- postLaunchExecutablePath: {options.PostLaunchExecutablePath}\n" +
+                  $"- postLaunchStartupDirectory: {options.PostLaunchStartupDirectory}\n\n" +
+
+                  "--------Pre-Stop---------------\n" +
+                  $"- preStopExecutablePath: {options.PreStopExecutablePath}\n" +
+                  $"- preStopStartupDirectory: {options.PreStopStartupDirectory}\n" +
+                  $"- preStopTimeout: {options.PreStopTimeoutInSeconds}\n" +
+                  $"- preStopLogAsError: {options.PreStopLogAsError}\n\n" +
+
+                  "--------Post-Stop--------------\n" +
+                  $"- postStopExecutablePath: {options.PostStopExecutablePath}\n" +
+                  $"- postStopStartupDirectory: {options.PostStopStartupDirectory}\n"
+            );
+
+            // 2. SENSITIVE DATA: Logged to Local Text Logs ONLY (Servy.Service.log)
+            // This is only triggered if EnableDebugLogs is true.
+            if (options.EnableDebugLogs)
+            {
+                string envVarsFormatted = EnvironmentVariablesToString(options.EnvironmentVariables);
+                string preLaunchEnvVarsFormatted = EnvironmentVariablesToString(options.PreLaunchEnvironmentVariables);
+
+                Logger.Info(
+                    $"[Startup Parameters - SENSITIVE DATA]\n" +
+                    "NOTE: This section contains sensitive parameters including executable arguments and environment variables.\n" +
+                    "--------Main (Sensitive)-------\n" +
+                    $"- realArgs: {MaskRawArguments(options.ExecutableArgs)}\n\n" +
+
+                    "--------Recovery (Sensitive)---\n" +
+                    $"- failureProgramArgs: {MaskRawArguments(options.FailureProgramExecutableArgs)}\n\n" +
+
+                    "--------Advanced (Sensitive)---\n" +
+                    $"- environmentVariables: {envVarsFormatted}\n\n" +
+
+                    "--------Pre-Launch (Sensitive)-\n" +
+                    $"- preLaunchExecutableArgs: {MaskRawArguments(options.PreLaunchExecutableArgs)}\n" +
+                    $"- preLaunchEnvironmentVariables: {preLaunchEnvVarsFormatted}\n\n" +
+
+                    "--------Post-Launch (Sensitive)\n" +
+                    $"- postLaunchExecutableArgs: {MaskRawArguments(options.PostLaunchExecutableArgs)}\n\n" +
+
+                    "--------Pre-Stop (Sensitive)---\n" +
+                    $"- preStopExecutableArgs: {MaskRawArguments(options.PreStopExecutableArgs)}\n\n" +
+
+                    "--------Post-Stop (Sensitive)--\n" +
+                    $"- postStopExecutableArgs: {MaskRawArguments(options.PostStopExecutableArgs)}\n"
+                );
+            }
+        }
+
+        /// <inheritdoc />
+        public void EnsureValidStartupDirectory(StartOptions options, IServyLogger? logger)
+        {
+            // Check if the current directory is missing, malformed, or physically non-existent
+            if (string.IsNullOrWhiteSpace(options.StartupDirectory) ||
+                !Helper.IsValidPath(options.StartupDirectory) ||
+                !Directory.Exists(options.StartupDirectory))
+            {
+                // 1. Capture original value
+                string originalValue = string.IsNullOrWhiteSpace(options.StartupDirectory)
+                    ? "[Empty]"
+                    : options.StartupDirectory;
+
+                // 2. Establish the absolute floor (System32)
+                string system32 = Environment.GetFolderPath(Environment.SpecialFolder.System);
+
+                // 3. Derive the fallback from ExecutablePath.
+                // Path.GetDirectoryName returns null for null or empty input and for a bare root ("C:\"),
+                // so the IsNullOrEmpty check on its result below covers every case.
+                string? exeDir = string.IsNullOrEmpty(options.ExecutablePath)
+                    ? null
+                    : Path.GetDirectoryName(options.ExecutablePath);
+
+                // 4. Final safety check: if GetDirectoryName returned null or empty, use System32
+                options.StartupDirectory = string.IsNullOrEmpty(exeDir) ? system32 : exeDir;
+
+                // 5. Diagnostic logging with full context
+                logger?.Warn($"Working directory '{originalValue}' is invalid or inaccessible. Falling back to '{options.StartupDirectory}'.");
+            }
+        }
+
+        /// <inheritdoc />
+        public string[] GetArgs()
+            => _commandLineProvider.GetArgs();
+
+        /// <inheritdoc />
+        public StartOptions? ParseOptions(IServiceRepository serviceRepository, string[] fullArgs)
+            => StartOptionsParser.Parse(serviceRepository, _processHelper, fullArgs);
+
+        /// <inheritdoc />
+        public bool ValidateAndLog(StartOptions options, IServyLogger? logger)
+        {
+            LogStartupArguments(options, logger);
+
+            if (!ValidateStartupOptions(logger, options))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        /// <inheritdoc />
+        public void RestartProcess(
+                    IProcessWrapper process,
+                    StartProcessCallback startProcess,
+                    string realExePath,
+                    string realArgs,
+                    string workingDir,
+                    List<EnvironmentVariable> environmentVariables,
+                    IServyLogger? logger,
+                    int stopTimeoutMs,
+                    CancellationToken cancellationToken = default)
+        {
+            if (startProcess == null) throw new ArgumentNullException(nameof(startProcess));
+
+            try
+            {
+                logger?.Info("Restarting child process...");
+
+                if (process != null)
+                {
+                    try
+                    {
+                        // Capture lineage BEFORE stopping
+                        var parentPid = 0;
+                        var parentStartTime = DateTime.MinValue;
+                        try
+                        {
+                            parentPid = process.Id;
+                            parentStartTime = process.StartTime;
+                        }
+                        catch (Exception ex)
+                        {
+                            logger?.Warn($"RestartProcess error while getting process PID and StartTime: {ex.Message}");
+                        }
+
+                        if (!process.HasExited)
+                        {
+                            process.Stop(stopTimeoutMs);
+                        }
+
+                        // Always sweep descendants -- orphans persist even after the parent exits.
+                        try
+                        {
+                            process.StopDescendants(parentPid, parentStartTime, stopTimeoutMs);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger?.Warn($"RestartProcess descendant cleanup failed: {ex.Message}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger?.Error("Failed to stop old child process; proceeding with launch anyway to avoid restart loop.", ex);
+                    }
+                }
+
+                startProcess.Invoke(realExePath, realArgs, workingDir, environmentVariables, cancellationToken);
+
+                logger?.Info("Process restarted.");
+            }
+            catch (Exception ex)
+            {
+                logger?.Error($"Failed to restart process.", ex);
+            }
+            finally
+            {
+                // Ensure the old process wrapper is disposed to prevent
+                // handle leaks during repeated recovery cycles.
+                process?.Dispose();
+            }
+        }
+
+        /// <inheritdoc />
+        public void RestartService(string serviceName, IServyLogger? logger)
+        {
+            try
+            {
+#if DEBUG
+                var dir = AppFoldersHelper.GetAppDirectory();
+#else
+                var dir = AppConfig.ProgramDataPath;
+#endif
+
+                if (string.IsNullOrWhiteSpace(dir))
+                {
+                    logger?.Error("Execution Aborted: The directory path for the restarter is invalid.");
+                    return;
+                }
+
+                var restarter = Path.Combine(dir, "Servy.Restarter.exe");
+
+                if (!File.Exists(restarter))
+                {
+                    logger?.Error("Servy.Restarter.exe not found.");
+                    return;
+                }
+
+                var psi = new ProcessStartInfo
+                {
+                    FileName = restarter,
+                    Arguments = Helper.Quote(serviceName),
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                };
+
+                using (var process = _processHelper.Start(psi))
+                {
+                    if (process == null)
+                    {
+                        logger?.Error("Failed to start Servy.Restarter.exe.");
+                        return;
+                    }
+
+                    // 1. Wait for the restarter to complete the Stop/Start cycle
+                    if (!process.WaitForExit(AppConfig.RestarterExeMaxWaitMs))
+                    {
+                        logger?.Error($"Servy.Restarter.exe timed out after {AppConfig.RestarterExeMaxWaitMs / (double)AppConfig.MillisecondsPerMinute} minutes. Forcing termination to prevent orphan conflicts.");
+
+                        try
+                        {
+                            // 2. Kill the orphaned restarter
+                            process.Kill();
+
+                            // 3. Brief wait to ensure kernel cleanup is complete before we return control
+                            if (!process.WaitForExit(AppConfig.RestarterKillGracePeriodMs))
+                            {
+                                logger?.Warn($"Restarter killed, but kernel cleanup is taking longer than {AppConfig.RestarterKillGracePeriodMs / (double)AppConfig.MillisecondsPerSecond} seconds.");
+                            }
+                        }
+                        catch (Exception killEx)
+                        {
+                            logger?.Error($"Failed to kill orphaned restarter: {killEx.Message}");
+                        }
+
+                        return;
+                    }
+
+                    if (process.ExitCode == 0)
+                    {
+                        logger?.Info($"Servy.Restarter.exe exited with code {process.ExitCode}.");
+                    }
+                    else
+                    {
+                        logger?.Error($"Servy.Restarter.exe exited with non-zero code {process.ExitCode}; the service restart likely failed.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.Error("Failed to launch restarter.", ex);
+            }
+        }
+
+        /// <inheritdoc />
+        public void RestartComputer(IServyLogger? logger)
+        {
+            try
+            {
+                var shutdownExe = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.System),
+                    "shutdown.exe");
+
+                using (var process = _processHelper.Start(new ProcessStartInfo
+                {
+                    FileName = shutdownExe,
+                    Arguments = "/r /t 0 /f",
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                }))
+                {
+                    // The using block ensures the native process handle is closed
+                    // immediately after the process is launched, preventing a
+                    // handle leak in the calling application.
+                    if (process == null)
+                    {
+                        logger?.Error("Failed to launch shutdown.exe for RestartComputer; no process was started.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.Error($"Failed to restart computer.", ex);
+            }
+        }
+
+        /// <inheritdoc />
+        public void RequestAdditionalTime(ServiceBase service, int milliseconds, IServyLogger? logger)
+        {
+            if (service == null) return;
+
+            try
+            {
+                service.RequestAdditionalTime(milliseconds);
+                logger?.Info($"Requested additional {milliseconds} ms for service operation.");
+            }
+            catch (InvalidOperationException)
+            {
+                // SCM no longer accepts wait hints (service likely exiting)
+            }
+            catch (Exception ex)
+            {
+                // Last-resort safety: never let SCM signaling crash the service
+                logger?.Error($"RequestAdditionalTime failed.", ex);
+            }
+        }
+
+        #endregion
+
+        #region Private Helpers
+
+        /// <summary>
+        /// Converts a collection of environment variables into a single formatted string,
+        /// automatically masking values for keys recognized as sensitive.
+        /// </summary>
+        /// <param name="vars">The collection of environment variables to process.</param>
+        /// <returns>A semicolon-separated string of key-value pairs, or "None" if the collection is null.</returns>
+        private static string EnvironmentVariablesToString(IEnumerable<EnvironmentVariable> vars)
+        {
+            if (vars == null) return "None";
+
+            return string.Join("; ", vars.Select(v =>
+                $"{v.Name}={MaskSensitiveValue(v.Name, v.Value)}"));
+        }
+
+        /// <summary>
+        /// Evaluates a key-value pair and returns a masked string if the key matches
+        /// known sensitive patterns.
+        /// </summary>
+        /// <param name="key">The name of the variable or setting.</param>
+        /// <param name="value">The raw value to potentially mask.</param>
+        /// <returns>The original value, or "********" if the key is deemed sensitive.</returns>
+        private static string MaskSensitiveValue(string key, string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return value;
+            if (string.IsNullOrWhiteSpace(key)) return value;
+
+            bool isSensitive;
+            try
+            {
+                // Use the strict key matcher to avoid greedy substring matches
+                isSensitive = KeyMatcherRegex.IsMatch(key);
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                Logger.Warn($"Regex timeout while classifying key '{key}'. Defaulting to masked.");
+                return "********";
+            }
+
+            return isSensitive ? "********" : value;
+        }
+
+        /// <summary>
+        /// Uses a timed regular expression to identify and mask sensitive credentials
+        /// within a raw command-line argument string.
+        /// </summary>
+        /// <param name="args">The raw string of executable arguments.</param>
+        /// <returns>A string with masked credentials, or the original string if no sensitive patterns are found.</returns>
+        internal static string? MaskRawArguments(string? args)
+        {
+            if (string.IsNullOrWhiteSpace(args)) return args;
+
+            try
+            {
+                return MaskingRegex.Replace(args, m =>
+                {
+                    string key = m.Groups["key"].Value;
+                    string sep = m.Groups["sep"].Value;
+
+                    // Redact the entire captured value regardless of quotes or spaces to guarantee no credential leaks.
+                    return $"{key}{sep}********";
+                });
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                Logger.Warn("Regex timeout occurred while masking arguments. Output has been fully masked for security.");
+                return "[MASKED DUE TO TIMEOUT]";
+            }
+        }
+
+        /// <summary>
+        /// Masks the dynamic segments of a URL for logging purposes, preserving only the scheme and host.
+        /// Explicitly strips out embedded credentials (UserInfo), query parameters, and down-path segments.
+        /// </summary>
+        /// <param name="url">The URL to mask.</param>
+        /// <returns>The fully scrubbed and masked URL.</returns>
+        internal static string MaskUrl(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                return string.Empty;
+            }
+
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            {
+                return "[INVALID URL]";
+            }
+
+            // Keep only scheme://host plus a 5-character path hint; strips user:pass, the query string, and the fragment
+            string baseSecuredUri = $"{uri.Scheme}://{uri.Host}";
+            string localPath = uri.LocalPath;
+
+            if (localPath.Length > 6)
+            {
+                // localPath.Length > 6 guarantees at least 5 characters after the leading '/'
+                string dynamicSegment = localPath.Substring(1, 5);
+                return $"{baseSecuredUri}/{dynamicSegment}... [MASKED]";
+            }
+
+            return $"{baseSecuredUri}/... [MASKED]";
+        }
+
+        /// <summary>
+        /// Validates the critical configuration paths and service identity within the startup options.
+        /// Uses reflection to automatically validate any property decorated with ServicePathAttribute.
+        /// </summary>
+        /// <remarks>
+        /// This method performs a series of integrity checks on:
+        /// <list type="bullet">
+        /// <item><description>Required fields (Service Name and Main Executable Path).</description></item>
+        /// <item><description>The existence and validity of primary, failure, pre-launch, and post-launch executable paths.</description></item>
+        /// <item><description>The validity of associated working directories for all configured processes.</description></item>
+        /// </list>
+        /// Any validation failure is logged as an error to the provided <paramref name="logger"/>.
+        /// </remarks>
+        /// <param name="logger">The logger instance used to report specific validation errors.</param>
+        /// <param name="options">The <see cref="StartOptions"/> instance containing the configuration to validate.</param>
+        /// <returns>
+        /// <c>true</c> if all mandatory paths and directories are valid; otherwise, <c>false</c>.
+        /// </returns>
+        private bool ValidateStartupOptions(IServyLogger? logger, StartOptions options)
+        {
+            // 1. Explicit check for ServiceName (not a path field)
+            if (string.IsNullOrWhiteSpace(options.ServiceName))
+            {
+                logger?.Error("Service name empty");
+                return false;
+            }
+
+            // 2. Reflective path evaluation using shared validator
+            var violation = ServicePathValidator.FindFirstViolation(options, _processHelper.ValidatePath);
+            if (violation != null)
+            {
+                if (violation.IsMissing)
+                {
+                    logger?.Error($"{violation.Attribute.Label} not provided.");
+                }
+                else
+                {
+                    logger?.Error($"{violation.Attribute.Label} {violation.Value} is invalid.");
+                }
+
+                return false;
+            }
+
+            return true;
+        }
+
+        #endregion
+    }
+}

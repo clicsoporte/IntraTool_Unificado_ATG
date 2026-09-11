@@ -1,0 +1,509 @@
+using Servy.Core.Config;
+using Servy.Core.Logging;
+using System.Security.Cryptography;
+using System.Text;
+
+namespace Servy.Core.Security
+{
+    /// <summary>
+    /// Provides thread-safe, authenticated encryption (Encrypt-then-MAC) for service credentials and large configuration files.
+    /// Implements salted HKDF for key separation and follows strict memory-zeroing protocols for all sensitive buffers.
+    /// Designed for a Singleton lifetime; internal keys are immutable after construction.
+    /// </summary>
+    public class SecureData : SecureDisposable, ISecureData
+    {
+        private static readonly byte[] HkdfV2EncInfo = Encoding.UTF8.GetBytes("V2_AES_ENCRYPTION");
+        private static readonly byte[] HkdfV2HmacInfo = Encoding.UTF8.GetBytes("V2_HMAC_AUTHENTICATION");
+
+        private readonly byte[]? _v1MasterKey;
+        private readonly byte[]? _v1StaticIv;
+        private readonly byte[]? _v2EncryptionKey;
+        private readonly byte[]? _v2HmacKey;
+
+        private readonly object _keyLock = new object();
+
+        private const string EncryptMarker = "SERVY_ENC:";
+        private const string V2Marker = EncryptMarker + "v2:";
+        private const int HmacSize = 32;
+        private const int IvSize = 16;
+
+        /// <summary>
+        /// Salt used for HKDF key derivation to provide domain separation.
+        /// </summary>
+        private static readonly byte[] HkdfSalt = Encoding.UTF8.GetBytes("Servy.Core.Security.v2.Salt");
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="SecureData"/> class.
+        /// Performs HKDF key derivation to generate independent keys for encryption and authentication.
+        /// </summary>
+        /// <remarks>
+        /// This constructor follows a "Secure Retrieval and Purge" pattern:
+        /// <list type="number">
+        /// <item><description>Retrieves the raw master keying material from the <paramref name="protectedKeyProvider"/>.</description></item>
+        /// <item><description>Uses HKDF (RFC 5869) to derive independent sub-keys for AES encryption and HMAC authentication.</description></item>
+        /// <item><description>Conditionally clones the master key for legacy v1 support if explicitly allowed by configuration.</description></item>
+        /// <item><description>Security Critical: Immediately clears the temporary <c>masterKey</c> buffer using <see cref="CryptographicOperations.ZeroMemory(Array)"/> to ensure the raw secret does not linger in memory.</description></item>
+        /// </list>
+        /// </remarks>
+        /// <param name="protectedKeyProvider">The provider used to retrieve the master keying material and legacy IV.</param>
+        /// <exception cref="ArgumentNullException">Thrown if <paramref name="protectedKeyProvider"/> is null.</exception>
+        public SecureData(IProtectedKeyProvider protectedKeyProvider)
+        {
+            if (protectedKeyProvider == null)
+                throw new ArgumentNullException(nameof(protectedKeyProvider));
+
+            byte[]? masterKey = null;
+            byte[]? v1StaticIv = null;
+            try
+            {
+                masterKey = protectedKeyProvider.GetKey();
+
+                _v2EncryptionKey = HKDF.DeriveKey(HashAlgorithmName.SHA256, masterKey, 32, HkdfSalt, HkdfV2EncInfo);
+                _v2HmacKey = HKDF.DeriveKey(HashAlgorithmName.SHA256, masterKey, 32, HkdfSalt, HkdfV2HmacInfo);
+
+                // Const-gated branch allows compiler to strip key cloning
+                // and eliminate unneeded DPAPI I/O when AllowLegacyV1Decryption is false.
+                if (AppConfig.AllowLegacyV1Decryption)
+                {
+                    v1StaticIv = protectedKeyProvider.GetIV();
+                    _v1MasterKey = (byte[])masterKey.Clone();
+                    _v1StaticIv = (byte[])v1StaticIv.Clone();
+                }
+            }
+            catch
+            {
+                // Symmetrical fallback cleaning for half-constructed instance field allocations
+                if (_v2EncryptionKey != null) CryptographicOperations.ZeroMemory(_v2EncryptionKey);
+                if (_v2HmacKey != null) CryptographicOperations.ZeroMemory(_v2HmacKey);
+                if (_v1MasterKey != null) CryptographicOperations.ZeroMemory(_v1MasterKey);
+                if (_v1StaticIv != null) CryptographicOperations.ZeroMemory(_v1StaticIv);
+                throw;
+            }
+            finally
+            {
+                if (masterKey != null) CryptographicOperations.ZeroMemory(masterKey);
+                if (v1StaticIv != null) CryptographicOperations.ZeroMemory(v1StaticIv);
+            }
+        }
+
+        /// <inheritdoc />
+        public string Encrypt(string plainText)
+        {
+            byte[] encKey;
+            byte[] hmacKey;
+
+            lock (_keyLock)
+            {
+                ThrowIfDisposed();
+
+                // Validation: Ensure we have data to work with
+                if (plainText == null) throw new ArgumentNullException(nameof(plainText));
+                if (plainText.Length == 0) throw new ArgumentException("Cannot encrypt empty string.", nameof(plainText));
+
+                encKey = (byte[])_v2EncryptionKey!.Clone();
+                hmacKey = (byte[])_v2HmacKey!.Clone();
+            }
+
+            byte[]? plainBytes = null;
+            byte[]? binaryPayload = null;
+
+            try
+            {
+                // Convert string to UTF-8 bytes for cryptographic processing
+                plainBytes = Encoding.UTF8.GetBytes(plainText);
+
+                // Initialize AES-256 with the derived V2 encryption key
+                using var aes = Aes.Create();
+                aes.Key = encKey;
+
+                // 1. PRE-CALCULATION: Determine exact buffer requirements
+                // Get the exact ciphertext size (including PKCS7 padding)
+                int ciphertextLen = aes.GetCiphertextLengthCbc(plainBytes.Length, PaddingMode.PKCS7);
+
+                // Total binary payload: [IV (16 bytes)] + [Ciphertext (Variable)] + [HMAC (32 bytes)]
+                int binaryPayloadLen = IvSize + ciphertextLen + HmacSize;
+                binaryPayload = new byte[binaryPayloadLen];
+
+                // 2. CRYPTOGRAPHIC OPERATIONS: Direct buffer manipulation via Spans
+                Span<byte> payloadSpan = binaryPayload;
+
+                // A. Generate a random IV directly into the head of the buffer
+                RandomNumberGenerator.Fill(payloadSpan.Slice(0, IvSize));
+
+                // B. Encrypt directly into the body of the buffer
+                // Slice is [IV size] ... [ciphertext size]
+                aes.EncryptCbc(plainBytes, payloadSpan.Slice(0, IvSize), payloadSpan.Slice(IvSize, ciphertextLen), PaddingMode.PKCS7);
+
+                // C. Authenticate the data (IV + Ciphertext)
+                // Store the resulting 32-byte HMAC at the tail of the buffer
+                HMACSHA256.HashData(hmacKey, payloadSpan.Slice(0, IvSize + ciphertextLen), payloadSpan.Slice(IvSize + ciphertextLen, HmacSize));
+
+                // 3. MATERIALIZATION: Optimized String Construction
+                // Exact Base64 formula: every 3 input bytes -> 4 output chars, always padded to multiple of 4
+                int exactBase64Len = ((binaryPayloadLen + 2) / 3) * 4;
+
+                // Allocate the final string object once and write marker + base64 data directly into it
+                return string.Create(V2Marker.Length + exactBase64Len, (binaryPayload, V2Marker), (chars, state) =>
+                {
+                    // Copy the "SERVY_ENC:v2:" marker into the start of the string
+                    state.V2Marker.AsSpan().CopyTo(chars);
+
+                    // Encode the binary payload into the remaining space
+                    // TryToBase64Chars writes exactly exactBase64Len chars (with '=' padding if needed)
+                    if (!Convert.TryToBase64Chars(state.binaryPayload, chars.Slice(state.V2Marker.Length), out _))
+                    {
+                        throw new CryptographicException("Failed to Base64 encode the encrypted binary payload.");
+                    }
+                });
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(encKey);
+                CryptographicOperations.ZeroMemory(hmacKey);
+
+                // 4. SECURITY HYGIENE: Wipe sensitive buffers from the heap immediately after use
+                // plainBytes contains sensitive text; binaryPayload contains the IV and Ciphertext
+                if (plainBytes != null) CryptographicOperations.ZeroMemory(plainBytes);
+
+                if (binaryPayload != null) CryptographicOperations.ZeroMemory(binaryPayload);
+            }
+        }
+
+        /// <inheritdoc />
+        public string Decrypt(string cipherText)
+        {
+            lock (_keyLock)
+            {
+                ThrowIfDisposed();
+            }
+
+            // Initial validation
+            if (cipherText == null) throw new ArgumentNullException(nameof(cipherText));
+            if (cipherText.Length == 0) throw new ArgumentException("Cannot decrypt empty string.", nameof(cipherText));
+
+            // PERF: Create a span of the input string to perform prefix checks and slicing
+            // without allocating new string objects on the heap.
+            ReadOnlySpan<char> textSpan = cipherText.AsSpan();
+            ReadOnlySpan<char> markerSpan = EncryptMarker.AsSpan();
+
+            // Check for the "SERVY_ENC:" prefix
+            bool hasMarker = textSpan.StartsWith(markerSpan, StringComparison.Ordinal);
+
+            // Slice the payload (either stripping the marker or using the whole string)
+            ReadOnlySpan<char> payload = hasMarker ? textSpan.Slice(markerSpan.Length) : textSpan;
+
+            // --- STRATEGY: Explicit markers must succeed or fail loud ---
+            if (hasMarker)
+            {
+                try
+                {
+                    // Version 2 Routing: Authenticated Encryption
+                    if (payload.StartsWith("v2:", StringComparison.Ordinal))
+                        return DecryptV2(payload.Slice(3).ToString());
+
+                    // Version 1 Routing: Legacy Encryption
+                    if (payload.StartsWith("v1:", StringComparison.Ordinal))
+                    {
+                        if (!AppConfig.AllowLegacyV1Decryption)
+                        {
+                            Logger.Warn("Security block: Attempted to decrypt a v1 payload, but legacy unauthenticated decryption is disabled. Throwing to prevent downgrade attack.");
+                            throw new SecureDataLegacyBlockedException(
+                                "Legacy v1 decryption is disabled in this version. To migrate older records, " +
+                                "export the configuration using a v1-compatible version of Servy, then import " +
+                                "the resulting file into this version to upgrade to v2 authenticated encryption.");
+                        }
+
+                        Logger.Warn("Security audit: Legacy v1 decryption invoked. Please re-save this configuration to upgrade to v2 authenticated encryption.");
+                        return DecryptV1(payload.Slice(3).ToString());
+                    }
+
+                    // Take just the version marker portion (up to the first ':' inside the payload, or a fixed cap)
+                    int colonIdx = payload.IndexOf(':');
+                    string markerSnippet = colonIdx > 0
+                        ? payload.Slice(0, Math.Min(colonIdx, 8)).ToString()
+                        : payload.Slice(0, Math.Min(payload.Length, 8)).ToString();
+                    throw new SecureDataIntegrityException($"Unsupported encryption version marker: '{markerSnippet}'");
+                }
+                catch (SecureDataLegacyBlockedException)
+                {
+                    // Policy refusal, not an integrity failure. The v1-marker and raw-legacy branches
+                    // already logged a Warn before throwing; re-throw without a second, contradictory
+                    // Error entry.
+                    throw;
+                }
+                catch (Exception ex) when (ex is FormatException || ex is CryptographicException)
+                {
+                    // We log the failure and re-throw. Upstream callers (UI/CLI) must handle this failure
+                    // to prevent the use of tampered or corrupted credentials.
+                    Logger.Error("Integrity failure for marked payload.", ex);
+                    throw;
+                }
+            }
+
+            // --- FALLBACK LOGIC: Handle legacy data that lacks markers or version tags. ---
+            // Convert the span to a string once for use in legacy methods.
+            string rawPayload = payload.ToString();
+
+            try
+            {
+                // Version 1 Legacy Detection
+                if (IsStrictBase64(rawPayload))
+                {
+                    if (!AppConfig.AllowLegacyV1Decryption)
+                    {
+                        Logger.Warn("Security block: Raw legacy payload encountered with legacy decryption disabled.");
+                        throw new SecureDataLegacyBlockedException(
+                            "Raw legacy ciphertext detected. Legacy unauthenticated decryption is permanently disabled in this version. " +
+                            "To migrate these records, export the service configuration using an older v1-compatible version of Servy, " +
+                            "then import that file into this version to generate a secure v2 authenticated ciphertext.");
+                    }
+
+                    Logger.Warn("Security audit: Raw legacy decryption invoked. Please re-save this configuration to upgrade to v2 authenticated encryption.");
+                    return DecryptV1(rawPayload);
+                }
+            }
+            catch (Exception ex) when ((ex is FormatException || ex is CryptographicException)
+                                       && !(ex is SecureDataIntegrityException))
+            {
+                // For unmarked strings, we preserve the defensive fallback to avoid breaking
+                // fields that were never meant to be encrypted.
+                Logger.Warn($"Legacy fallback decryption failed for unmarked data: {ex.Message}. Returning as plaintext.");
+                return rawPayload;
+            }
+
+            // Explicitly log when data is processed as plaintext.
+            Logger.Warn("Decryption bypassed: Input does not match any known encryption format. Returning as plaintext.");
+            return rawPayload;
+        }
+
+        /// <summary>
+        /// Internal logic for v1 (legacy) decryption using a static IV and the master key.
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <b>Security Warning:</b> This method implements a legacy format that lacks an HMAC integrity check.
+        /// It is vulnerable to ciphertext manipulation and does not provide authentication.
+        /// </para>
+        /// <para>
+        /// This version utilizes a static Initialization Vector (IV), which reduces cryptographic variance
+        /// compared to the random IV used in v2. It is maintained strictly for backward compatibility
+        /// with data encrypted prior to the implementation of the authenticated v2 format.
+        /// </para>
+        /// </remarks>
+        /// <param name="payload">The Base64-encoded v1 ciphertext.</param>
+        /// <returns>The decrypted UTF-8 string.</returns>
+        /// <exception cref="CryptographicException">Thrown if decryption fails (e.g., due to incorrect keying material or corrupted data).</exception>
+        private string DecryptV1(string payload)
+        {
+            byte[] masterKey;
+            byte[] staticIv;
+
+            lock (_keyLock)
+            {
+                ThrowIfDisposed();
+                masterKey = (byte[])_v1MasterKey!.Clone();
+                staticIv = (byte[])_v1StaticIv!.Clone();
+            }
+
+            byte[] cipherBytes = Convert.FromBase64String(payload);
+            try
+            {
+                using (var aes = Aes.Create())
+                {
+                    aes.Key = masterKey;
+                    aes.IV = staticIv;
+
+                    using (var decryptor = aes.CreateDecryptor())
+                    using (var ms = new MemoryStream(cipherBytes))
+                    using (var cs = new CryptoStream(ms, decryptor, CryptoStreamMode.Read))
+                    using (var sr = new StreamReader(cs, Encoding.UTF8))
+                    {
+                        return sr.ReadToEnd();
+                    }
+                }
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(masterKey);
+                CryptographicOperations.ZeroMemory(staticIv);
+                CryptographicOperations.ZeroMemory(cipherBytes);
+            }
+        }
+
+        /// <summary>
+        /// Internal logic for v2 decryption. Validates the HMAC-SHA256 signature before attempting AES decryption.
+        /// </summary>
+        /// <remarks>
+        /// This follows the <b>Encrypt-then-MAC (EtM)</b> security best practice:
+        /// <list type="number">
+        /// <item><description>The payload is decomposed into IV, Ciphertext, and HMAC using zero-copy <see cref="ReadOnlySpan{T}"/> slices.</description></item>
+        /// <item><description>A new HMAC is computed over the [IV + Ciphertext] using <c>stackalloc</c> for zero heap allocation.</description></item>
+        /// <item><description>The HMAC is verified in constant-time via <see cref="CryptographicOperations.FixedTimeEquals"/>.</description></item>
+        /// <item><description>Only if integrity is verified, the ciphertext is decrypted using AES-256-CBC.</description></item>
+        /// </list>
+        /// </remarks>
+        /// <param name="payload">The Base64-encoded v2 encrypted string (excluding the version prefix).</param>
+        /// <returns>The decrypted UTF-8 string.</returns>
+        /// <exception cref="CryptographicException">
+        /// Thrown if the payload is truncated, the HMAC is invalid, or AES decryption fails.
+        /// </exception>
+        private string DecryptV2(string payload)
+        {
+            byte[] encKey;
+            byte[] hmacKey;
+
+            lock (_keyLock)
+            {
+                ThrowIfDisposed();
+                encKey = (byte[])_v2EncryptionKey!.Clone();
+                hmacKey = (byte[])_v2HmacKey!.Clone();
+            }
+
+            try
+            {
+                // 1. DECODING: Convert Base64 back to raw bytes
+                // Note: This remains the primary allocation in the decryption path.
+                byte[] combined;
+                try { combined = Convert.FromBase64String(payload); }
+                catch (FormatException ex)
+                {
+                    throw new SecureDataIntegrityException("V2 payload is not valid Base64 (corrupted or tampered).", ex);
+                }
+
+                try
+                {
+                    // Minimum size check: must contain at least an IV (16) and an HMAC (32)
+                    if (combined.Length < (IvSize + HmacSize))
+                        throw new SecureDataIntegrityException("V2 payload length is insufficient.");
+
+                    // Create Spans: These are lightweight "views" into the 'combined' array (0 copies)
+                    ReadOnlySpan<byte> combinedSpan = combined;
+                    ReadOnlySpan<byte> iv = combinedSpan.Slice(0, IvSize);
+                    ReadOnlySpan<byte> expectedHmac = combinedSpan.Slice(combinedSpan.Length - HmacSize);
+                    ReadOnlySpan<byte> ciphertext = combinedSpan.Slice(IvSize, combinedSpan.Length - IvSize - HmacSize);
+                    ReadOnlySpan<byte> dataToHash = combinedSpan.Slice(0, IvSize + ciphertext.Length);
+
+                    // 2. AUTHENTICATION: High-speed HMAC Verification
+                    // stackalloc allocates 32 bytes on the stack, bypassing the Garbage Collector entirely.
+                    Span<byte> computedHash = stackalloc byte[HmacSize];
+
+                    // Compute the hash over [IV + Ciphertext]
+                    if (!HMACSHA256.TryHashData(hmacKey, dataToHash, computedHash, out _))
+                    {
+                        throw new SecureDataIntegrityException("Failed to compute HMAC hash over payload.");
+                    }
+
+                    // Security Critical: Constant-time comparison prevents side-channel timing attacks.
+                    if (!CryptographicOperations.FixedTimeEquals(computedHash, expectedHmac))
+                        throw new SecureDataIntegrityException("HMAC integrity check failed.");
+
+                    // 3. DECRYPTION: Direct AES execution
+                    using (var aes = Aes.Create())
+                    {
+                        aes.Key = encKey;
+
+                        // Pre-allocate the output buffer for plaintext.
+                        // In PKCS7, plaintext length is always <= ciphertext length.
+                        byte[] outputBuffer = new byte[ciphertext.Length];
+                        try
+                        {
+                            // DecryptCbc is a high-performance Span-based method that avoids CryptoStream overhead.
+                            int bytesWritten = aes.DecryptCbc(ciphertext, iv, outputBuffer, PaddingMode.PKCS7);
+
+                            // Materialize the final string directly from the buffer.
+                            return Encoding.UTF8.GetString(outputBuffer, 0, bytesWritten);
+                        }
+                        catch (CryptographicException ex)
+                        {
+                            // If the HMAC passed but AES fails (e.g., bad padding), it's still an integrity issue
+                            throw new SecureDataIntegrityException($"AES decryption failed: {ex.Message}", ex);
+                        }
+                        finally
+                        {
+                            // Wipe the plaintext buffer from memory immediately.
+                            CryptographicOperations.ZeroMemory(outputBuffer);
+                        }
+                    }
+                }
+                finally
+                {
+                    // Security hygiene: Wipe the combined buffer (containing IV and Ciphertext) from the heap.
+                    CryptographicOperations.ZeroMemory(combined);
+                }
+            }
+            finally
+            {
+                CryptographicOperations.ZeroMemory(encKey);
+                CryptographicOperations.ZeroMemory(hmacKey);
+            }
+        }
+
+        /// <summary>
+        /// Validates if a string is structurally valid Base64.
+        /// </summary>
+        /// <remarks>
+        /// This method performs a strict structural check by verifying:
+        /// <list type="bullet">
+        /// <item><description>The string length is a multiple of 4.</description></item>
+        /// <item><description>Characters belong exclusively to the Base64 alphabet (A-Z, a-z, 0-9, +, /).</description></item>
+        /// <item><description>Padding ('=') only appears at the very end of the string.</description></item>
+        /// </list>
+        /// It is used to quickly distinguish between encrypted markers and raw legacy text without triggering
+        /// expensive <see cref="System.FormatException"/> exceptions during decryption attempts.
+        /// </remarks>
+        /// <param name="value">The string to validate.</param>
+        /// <returns>True if the string follows strict Base64 formatting rules; otherwise, false.</returns>
+        private static bool IsStrictBase64(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Length % 4 != 0)
+                return false;
+
+            int length = value.Length;
+
+            for (int i = 0; i < length; i++)
+            {
+                char c = value[i];
+
+                // If we hit a padding character
+                if (c == '=')
+                {
+                    // Padding can only occur in the last two positions
+                    if (i < length - 2) return false;
+
+                    // If it's the second to last char, the very last char MUST also be '='
+                    if (i == length - 2 && value[i + 1] != '=') return false;
+
+                    // Once we validate the remaining padding, we're done
+                    break;
+                }
+
+                // Standard Alphabet Check
+                if (!((c >= 'A' && c <= 'Z') ||
+                      (c >= 'a' && c <= 'z') ||
+                      (c >= '0' && c <= '9') ||
+                      c == '+' || c == '/'))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        #region SecureDisposable Overrides
+
+        /// <inheritdoc />
+        protected override void ZeroSensitiveData()
+        {
+            lock (_keyLock)
+            {
+                if (_v1MasterKey != null) CryptographicOperations.ZeroMemory(_v1MasterKey);
+                if (_v1StaticIv != null) CryptographicOperations.ZeroMemory(_v1StaticIv);
+                if (_v2EncryptionKey != null) CryptographicOperations.ZeroMemory(_v2EncryptionKey);
+                if (_v2HmacKey != null) CryptographicOperations.ZeroMemory(_v2HmacKey);
+            }
+        }
+
+        #endregion
+    }
+}

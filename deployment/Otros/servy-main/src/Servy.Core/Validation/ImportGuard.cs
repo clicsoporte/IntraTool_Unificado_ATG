@@ -1,0 +1,47 @@
+using Servy.Core.Config;
+using Servy.Core.Logging;
+using Servy.Core.Resources;
+
+namespace Servy.Core.Validation
+{
+    /// <summary>
+    /// Provides the shared import-side gate for configuration files: path security,
+    /// size threshold, and content read from the validated stream.
+    /// (The path-security gate shared with export lives in <see cref="PathSecurityGuard"/>.)
+    /// </summary>
+    public static class ImportGuard
+    {
+        /// <summary>
+        /// Enforces defense-in-depth security guards against path traversal, UNC bypasses, and unauthorized system reads.
+        /// Validates that a configuration file exists, is secure, and stays within a safe size threshold, and returns a structured validation result.
+        /// </summary>
+        /// <param name="path">The file path to validate.</param>
+        /// <param name="fileContent">On success, outputs the full text content read from the validated file; otherwise, null.</param>
+        /// <returns>A strongly-typed result containing the secure path token on success, or a rejection reason on failure.</returns>
+        public static PathSecurityResult ValidatePathSecurityAndSize(string path, out string? fileContent)
+        {
+            fileContent = null;
+
+            // Invoke the shared security gate using read intent semantics
+            var securityCheck = PathSecurityGuard.ValidatePath(path, FileMode.Open, FileAccess.Read, FileShare.Read, out var fileStream);
+            if (!securityCheck.IsValid) return securityCheck;
+
+            using (fileStream) // guaranteed non-null when IsValid; see PathSecurityGuard.ValidatePath
+            {
+                if (fileStream!.Length > AppConfig.MaxConfigFileSizeBytes)
+                {
+                    var errorMsg = string.Format(Strings.Msg_ConfigSizeLimitReached, securityCheck.ValidPath.ResolvedPath, AppConfig.MaxConfigFileSizeMB);
+                    Logger.Error(errorMsg);
+                    return PathSecurityResult.Fail(PathSecurityFailureKind.InvalidArgument, errorMsg);
+                }
+
+                // Success: Set content output and return validated path token
+                using (var sr = new StreamReader(fileStream))
+                {
+                    fileContent = sr.ReadToEnd();
+                }
+                return securityCheck;
+            }
+        }
+    }
+}

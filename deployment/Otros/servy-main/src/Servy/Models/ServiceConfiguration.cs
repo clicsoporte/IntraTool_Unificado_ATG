@@ -1,0 +1,341 @@
+using Servy.Core.Config;
+using Servy.Core.Enums;
+
+namespace Servy.Models
+{
+    /// <summary>
+    /// Represents the full configuration of a Windows service to be managed by Servy.
+    /// Includes properties for startup settings, process paths, health monitoring, and logging.
+    /// </summary>
+    public class ServiceConfiguration
+    {
+        /// <summary>
+        /// Gets or sets the name of the service.
+        /// </summary>
+        public string? Name { get; set; }
+
+        /// <summary>
+        /// Gets or sets the display name of the service.
+        /// </summary>
+        public string? DisplayName { get; set; }
+
+        /// <summary>
+        /// Gets or sets the description of the service.
+        /// </summary>
+        public string? Description { get; set; }
+
+        /// <summary>
+        /// Gets or sets the path to the executable process to run.
+        /// </summary>
+        public string? ExecutablePath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the startup directory for the executable.
+        /// </summary>
+        public string? StartupDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets the command line parameters to pass to the executable.
+        /// </summary>
+        public string? Parameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets the selected startup type for the service.
+        /// </summary>
+        public ServiceStartType StartupType { get; set; }
+
+        /// <summary>
+        /// Gets or sets the process priority for the service's executable.
+        /// </summary>
+        public ProcessPriority Priority { get; set; }
+
+        /// <summary>
+        /// Gets or sets the logical CPUs the process may run on (e.g., '0-3,8' or '0xFF00').
+        /// </summary>
+        public string? CpuAffinity { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to enable the console user interface for the service.
+        /// When enabled, stdout/stderr redirection is disabled, and the service runs in a console window.
+        /// Default is <see cref="AppConfig.DefaultEnableConsoleUI"/>.
+        /// </summary>
+        public bool EnableConsoleUI { get; set; }
+
+        /// <summary>
+        /// Gets or sets the path to the standard output log file.
+        /// </summary>
+        public string? StdoutPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the path to the standard error log file.
+        /// </summary>
+        public string? StderrPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether size-based log rotation is enabled.
+        /// Default is <see cref="AppConfig.DefaultEnableSizeRotation"/>.
+        /// </summary>
+        public bool EnableSizeRotation { get; set; }
+
+        /// <summary>
+        /// Gets or sets the rotation size in MB.
+        /// Default is <see cref="AppConfig.DefaultRotationSizeMB"/>.
+        /// </summary>
+        public string? RotationSize { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether date-based log rotation is enabled.
+        /// Default is <see cref="AppConfig.DefaultEnableDateRotation"/>.
+        /// </summary>
+        public bool EnableDateRotation { get; set; }
+
+        /// <summary>
+        /// Gets or sets the date rotation interval.
+        /// </summary>
+        public DateRotationType DateRotationType { get; set; }
+
+        /// <summary>
+        /// Gets or sets the maximum number of rotated log files to keep.
+        /// Default is <see cref="AppConfig.DefaultMaxRotations"/>.
+        /// </summary>
+        public string? MaxRotations { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to use local system time for log rotation.
+        /// </summary>
+        /// <remarks>
+        /// <para>Default is <see cref="AppConfig.DefaultUseLocalTimeForRotation"/> (UTC).</para>
+        /// <para>Set to <c>true</c> to rotate logs based on the server's local time (e.g., exactly at local midnight).
+        /// This is often preferred for manual log inspection but can be affected by Daylight Saving Time transitions.</para>
+        /// <para>Set to <c>false</c> to use Coordinated Universal Time (UTC).
+        /// This ensures a consistent, 24-hour rotation interval regardless of time zone or DST changes.</para>
+        /// </remarks>
+        public bool UseLocalTimeForRotation { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether health monitoring is enabled.
+        /// Default is <see cref="AppConfig.DefaultEnableHealthMonitoring"/>.
+        /// </summary>
+        public bool EnableHealthMonitoring { get; set; }
+
+        /// <summary>
+        /// Gets or sets the heartbeat interval in seconds.
+        /// Default is <see cref="AppConfig.DefaultHeartbeatInterval"/>.
+        /// </summary>
+        public string? HeartbeatInterval { get; set; }
+
+        /// <summary>
+        /// Gets or sets the maximum number of allowed failed health checks.
+        /// Default is <see cref="AppConfig.DefaultMaxFailedChecks"/>.
+        /// </summary>
+        public string? MaxFailedChecks { get; set; }
+
+        /// <summary>
+        /// Gets or sets the recovery action to take if the service fails.
+        /// </summary>
+        public RecoveryAction RecoveryAction { get; set; }
+
+        /// <summary>
+        /// Gets or sets a flag for running recovery action even if the process exits successfully.
+        /// Default is <see cref="AppConfig.DefaultRecoveryOnCleanExit"/>.
+        /// </summary>
+        public bool RecoveryOnCleanExit { get; set; }
+
+        /// <summary>
+        /// Gets or sets the maximum number of restart attempts.
+        /// Default is <see cref="AppConfig.DefaultMaxRestartAttempts"/>.
+        /// </summary>
+        public string? MaxRestartAttempts { get; set; }
+
+        /// <summary>
+        /// Gets or sets the absolute URL used to send out-of-band diagnostic heartbeat pings (e.g., dead man's switch platforms like healthchecks.io).
+        /// </summary>
+        public string? HeartbeatUrl { get; set; }
+
+        /// <summary>
+        /// Gets or sets the maximum time in seconds allowed for the heartbeat URL request to complete before it is cancelled.
+        /// Default is <see cref="AppConfig.DefaultHeartbeatUrlTimeoutSeconds"/> (Allowed range: <see cref="AppConfig.MinHeartbeatUrlTimeoutSeconds"/> to <see cref="AppConfig.MaxHeartbeatUrlTimeoutSeconds"/> seconds).
+        /// </summary>
+        public string? HeartbeatUrlTimeoutSeconds { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether start/fail status suffixes are appended to the heartbeat URL.
+        /// Default is <see cref="AppConfig.DefaultEnableHeartbeatUrlFlags"/>.
+        /// </summary>
+        public bool EnableHeartbeatUrlFlags { get; set; }
+
+        /// <summary>
+        /// Gets or sets the path to the process to run on failure.
+        /// </summary>
+        public string? FailureProgramPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the working directory for the failure program.
+        /// </summary>
+        public string? FailureProgramStartupDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets the command-line parameters for the failure program.
+        /// </summary>
+        public string? FailureProgramParameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets the environment variables configured for the service.
+        /// Format: key=value, one per line or separated by semicolons.
+        /// </summary>
+        public string? EnvironmentVariables { get; set; }
+
+        /// <summary>
+        /// Gets or sets the defined Windows service dependencies.
+        /// Format: ServiceName, one per line or separated by semicolons.
+        /// </summary>
+        public string? ServiceDependencies { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to run the Windows Service as the Local System account.
+        /// Default is <see cref="AppConfig.DefaultRunAsLocalSystem"/>.
+        /// </summary>
+        public bool RunAsLocalSystem { get; set; }
+
+        /// <summary>
+        /// Gets or sets the service account username (e.g., <c>.\username</c>, <c>DOMAIN\username</c>).
+        /// </summary>
+        public string? UserAccount { get; set; }
+
+        /// <summary>
+        /// Gets or sets the password for the service account.
+        /// </summary>
+        public string? Password { get; set; }
+
+        /// <summary>
+        /// Gets or sets the confirmation copy of the service account password.
+        /// </summary>
+        public string? ConfirmPassword { get; set; }
+
+        /// <summary>
+        /// Gets or sets the path to the pre-launch executable process to run.
+        /// </summary>
+        public string? PreLaunchExecutablePath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the working directory for the pre-launch executable.
+        /// </summary>
+        public string? PreLaunchStartupDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets the command-line parameters for the pre-launch executable.
+        /// </summary>
+        public string? PreLaunchParameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets the environment variables for the pre-launch executable.
+        /// Format: key=value, one per line or separated by semicolons.
+        /// </summary>
+        public string? PreLaunchEnvironmentVariables { get; set; }
+
+        /// <summary>
+        /// Gets or sets the path to the standard output log file for the pre-launch process.
+        /// </summary>
+        public string? PreLaunchStdoutPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the path to the standard error log file for the pre-launch process.
+        /// </summary>
+        public string? PreLaunchStderrPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the timeout in seconds for each pre-launch execution attempt.
+        /// Default is <see cref="AppConfig.DefaultPreLaunchTimeoutSeconds"/> seconds.
+        /// </summary>
+        public string? PreLaunchTimeoutSeconds { get; set; }
+
+        /// <summary>
+        /// Gets or sets the number of retry attempts if the pre-launch process fails.
+        /// Default is <see cref="AppConfig.DefaultPreLaunchRetryAttempts"/>.
+        /// </summary>
+        public string? PreLaunchRetryAttempts { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to start the main service even if the pre-launch process fails.
+        /// Default is <see cref="AppConfig.DefaultPreLaunchIgnoreFailure"/>.
+        /// </summary>
+        public bool PreLaunchIgnoreFailure { get; set; }
+
+        /// <summary>
+        /// Gets or sets the path to the post-launch executable process to run.
+        /// </summary>
+        public string? PostLaunchExecutablePath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the working directory for the post-launch executable.
+        /// </summary>
+        public string? PostLaunchStartupDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets the command-line parameters for the post-launch executable.
+        /// </summary>
+        public string? PostLaunchParameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether debug logs are enabled.
+        /// When enabled, environment variables and process parameters are recorded in the Servy.Service.log file.
+        /// Not recommended for production environments, as these logs may contain sensitive information.
+        /// Default is <see cref="AppConfig.DefaultEnableDebugLogs"/>.
+        /// </summary>
+        public bool EnableDebugLogs { get; set; }
+
+        /// <summary>
+        /// Gets or sets the timeout in seconds to wait for the process to start successfully before considering the startup as failed.
+        /// Default is <see cref="AppConfig.DefaultStartTimeout"/> seconds.
+        /// </summary>
+        public string? StartTimeout { get; set; }
+
+        /// <summary>
+        /// Gets or sets the timeout in seconds to wait for the process to exit.
+        /// Default is <see cref="AppConfig.DefaultStopTimeout"/> seconds.
+        /// </summary>
+        public string? StopTimeout { get; set; }
+
+        /// <summary>
+        /// Gets or sets the optional path to an executable that runs before the service stops.
+        /// </summary>
+        public string? PreStopExecutablePath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the optional startup directory for the pre-stop executable.
+        /// </summary>
+        public string? PreStopStartupDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets the optional parameters for the pre-stop executable.
+        /// </summary>
+        public string? PreStopParameters { get; set; }
+
+        /// <summary>
+        /// Gets or sets the maximum time in seconds to wait for the pre-stop executable to complete.
+        /// Default is <see cref="AppConfig.DefaultPreStopTimeoutSeconds"/> seconds (Allowed range: <see cref="AppConfig.MinPreStopTimeoutSeconds"/> to <see cref="AppConfig.MaxPreStopTimeoutSeconds"/> seconds).
+        /// </summary>
+        public string? PreStopTimeoutSeconds { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether to log pre-stop failure as an error.
+        /// Default is <see cref="AppConfig.DefaultPreStopLogAsError"/>.
+        /// </summary>
+        public bool PreStopLogAsError { get; set; }
+
+        /// <summary>
+        /// Gets or sets the optional path to an executable that runs after the service stops.
+        /// </summary>
+        public string? PostStopExecutablePath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the optional startup directory for the post-stop executable.
+        /// </summary>
+        public string? PostStopStartupDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets the optional parameters for the post-stop executable.
+        /// </summary>
+        public string? PostStopParameters { get; set; }
+    }
+}

@@ -1,0 +1,47 @@
+using System.Diagnostics.CodeAnalysis;
+
+namespace Servy.Core.Helpers
+{
+    /// <summary>
+    /// Represents a snapshot of performance metrics captured from a Windows process or process tree.
+    /// </summary>
+    /// <remarks>
+    /// This object is typically returned by <see cref="ProcessHelper.GetProcessMetrics"/> or
+    /// <see cref="ProcessHelper.GetProcessTreeMetrics"/> to provide atomic access to CPU and RAM data.
+    /// </remarks>
+    [ExcludeFromCodeCoverage]
+    public class ProcessMetrics
+    {
+        /// <summary>
+        /// Gets the CPU usage percentage.
+        /// </summary>
+        /// <value>
+        /// The raw CPU usage percentage as an unrounded <see cref="double"/>.
+        /// For display formatting rounded to one decimal place, see <see cref="IProcessHelper.FormatCpuUsage(double)"/>.
+        /// </value>
+        public double CpuUsage { get; }
+
+        /// <summary>
+        /// Gets the committed private virtual memory usage in bytes.
+        /// </summary>
+        /// <value>
+        /// The number of bytes of committed private virtual memory for the process
+        /// (<see cref="System.Diagnostics.Process.PrivateMemorySize64"/>),
+        /// equivalent to "Commit size" in the Details tab of Windows Task Manager.
+        /// Note: this is NOT the same as "Private Working Set", which measures the
+        /// resident portion of private memory currently in physical RAM.
+        /// </value>
+        public long RamUsage { get; }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="ProcessMetrics"/> class.
+        /// </summary>
+        /// <param name="cpuUsage">The calculated CPU usage percentage.</param>
+        /// <param name="ramUsage">The captured RAM usage in bytes.</param>
+        public ProcessMetrics(double cpuUsage, long ramUsage)
+        {
+            CpuUsage = cpuUsage;
+            RamUsage = ramUsage;
+        }
+    }
+}

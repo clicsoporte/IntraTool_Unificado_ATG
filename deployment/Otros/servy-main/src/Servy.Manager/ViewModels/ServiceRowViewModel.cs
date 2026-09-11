@@ -1,0 +1,372 @@
+using Servy.Core.Enums;
+using Servy.Core.Logging;
+using Servy.Manager.Models;
+using Servy.Manager.Services;
+using Servy.UI.Commands;
+using Servy.UI.Services;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
+
+namespace Servy.Manager.ViewModels
+{
+    /// <summary>
+    /// ViewModel representing a single row in the Services DataGrid.
+    /// Exposes the underlying Service model and row-level commands.
+    /// </summary>
+    public class ServiceRowViewModel : INotifyPropertyChanged, IDisposable
+    {
+        private readonly IServiceCommands _serviceCommands;
+        private readonly ICursorService _cursorService;
+        private bool _isSelected;
+        private bool _isChecked;
+        private bool _disposed;
+
+        /// <summary>
+        /// Initializes a new instance of <see cref="ServiceRowViewModel"/>.
+        /// </summary>
+        /// <param name="service">The service model for this row.</param>
+        /// <param name="serviceCommands">Service commands for row operations.</param>
+        /// <param name="cursorService">Cursor service.</param>
+        public ServiceRowViewModel(Service? service, IServiceCommands? serviceCommands, ICursorService? cursorService)
+        {
+            Service = service ?? throw new ArgumentNullException(nameof(service));
+            _serviceCommands = serviceCommands ?? throw new ArgumentNullException(nameof(serviceCommands));
+            _cursorService = cursorService ?? throw new ArgumentNullException(nameof(cursorService));
+
+            Service.PropertyChanged += Service_PropertyChanged;
+
+            StartCommand = new AsyncCommand(
+                StartServiceAsync,
+                _ => CanExecuteServiceCommand(_) && Service.IsInstalled == true && Service.Status == ServiceStatus.Stopped,
+                name: nameof(StartCommand));
+            StopCommand = new AsyncCommand(StopServiceAsync,
+                _ => CanExecuteServiceCommand(_) && Service.IsInstalled == true && Service.Status == ServiceStatus.Running,
+                name: nameof(StopCommand));
+            RestartCommand = new AsyncCommand(RestartServiceAsync,
+                _ => CanExecuteServiceCommand(_) && Service.IsInstalled == true && Service.Status == ServiceStatus.Running,
+                name: nameof(RestartCommand));
+            ConfigureCommand = new AsyncCommand(ConfigureServiceAsync,
+                CanExecuteServiceCommand,
+                name: nameof(ConfigureCommand));
+            InstallCommand = new AsyncCommand(InstallServiceAsync,
+                CanExecuteServiceCommand, // We don't check Service.IsInstalled != true to allow re-installing an installed service to update its configuration in DB and SCM
+                name: nameof(InstallCommand));
+            UninstallCommand = new AsyncCommand(UninstallServiceAsync,
+                _ => CanExecuteServiceCommand(_) && Service.IsInstalled == true,
+                name: nameof(UninstallCommand));
+            RemoveCommand = new AsyncCommand(RemoveServiceAsync,
+                CanExecuteServiceCommand,
+                name: nameof(RemoveCommand));
+            ExportXmlCommand = new AsyncCommand(ExportServiceToXmlAsync,
+                CanExecuteServiceCommand,
+                name: nameof(ExportXmlCommand));
+            ExportJsonCommand = new AsyncCommand(ExportServiceToJsonAsync,
+                CanExecuteServiceCommand, name: nameof(ExportJsonCommand));
+
+            CopyPidCommand = new AsyncCommand(CopyPidAsync,
+                _ => CanExecuteServiceCommand(_) && Service.Pid != null,
+                name: nameof(CopyPidCommand));
+        }
+
+        #region Properties
+
+        /// <summary>
+        /// The underlying service model.
+        /// </summary>
+        public Service Service { get; }
+
+        /// <summary>
+        /// Gets or sets whether this service row is selected in the UI.
+        /// </summary>
+        public bool IsSelected
+        {
+            get => _isSelected;
+            set
+            {
+                if (_isSelected != value)
+                {
+                    _isSelected = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets or sets whether this service row is checked (for bulk operations).
+        /// </summary>
+        public bool IsChecked
+        {
+            get => _isChecked;
+            set
+            {
+                if (_isChecked != value)
+                {
+                    _isChecked = value;
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the service name, or an empty string when the model has none.
+        /// </summary>
+        public string Name => Service.Name ?? string.Empty;
+
+        /// <summary>
+        /// Gets the description of the service, or an empty string when the model has none.
+        /// </summary>
+        public string Description => Service.Description ?? string.Empty;
+
+        /// <summary>
+        /// Gets the operational status of the service, or <see langword="null"/> when unknown or unavailable.
+        /// </summary>
+        public ServiceStatus? Status => Service.Status;
+
+        /// <summary>
+        /// Gets the startup type of the service, or <see langword="null"/> when unconfigured or unavailable.
+        /// </summary>
+        public ServiceStartType? StartupType => Service.StartupType;
+
+        /// <summary>
+        /// Gets the account identity under which the service runs, or an empty string when unconfigured.
+        /// </summary>
+        public string LogOnAs => Service.LogOnAs ?? string.Empty;
+
+        /// <summary>
+        /// Gets a value indicating whether the service is currently installed in the Windows Service Control Manager (SCM).
+        /// </summary>
+        public bool IsInstalled => Service.IsInstalled;
+
+        /// <summary>
+        /// Gets a value indicating whether an associated desktop application executable is available for this service.
+        /// </summary>
+        public bool IsDesktopAppAvailable => Service.IsDesktopAppAvailable;
+
+        /// <summary>
+        /// Gets the Process ID of the service, or <see langword="null"/> when it is not running.
+        /// </summary>
+        public int? Pid => Service.Pid;
+
+        /// <summary>
+        /// Gets a value indicating whether the Process ID column display is enabled for this row.
+        /// </summary>
+        public bool IsPidEnabled => Service.IsPidEnabled;
+
+        /// <summary>
+        /// Gets the percentage of CPU usage for the service process, or <see langword="null"/> when monitoring is inactive or process is stopped.
+        /// </summary>
+        public double? CpuUsage => Service.CpuUsage;
+
+        /// <summary>
+        /// Gets the RAM usage in bytes for the service process, or <see langword="null"/> when monitoring is inactive or process is stopped.
+        /// </summary>
+        public long? RamUsage => Service.RamUsage;
+
+        #endregion
+
+        #region INotifyPropertyChanged
+
+        /// <summary>
+        /// Occurs when a property value changes.
+        /// </summary>
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        /// <summary>
+        /// Raises the <see cref="PropertyChanged"/> event.
+        /// </summary>
+        /// <param name="propertyName">Name of the changed property.</param>
+        private void OnPropertyChanged([CallerMemberName] string? propertyName = "")
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        /// <summary>
+        /// Handles property changes in the underlying <see cref="Service"/> and forwards them to the UI.
+        /// </summary>
+        /// <remarks>
+        /// Forwards every Service property change 1:1 to the ViewModel: the ViewModel property
+        /// names match the Service model names exactly, so no per-property mapping is needed.
+        /// </remarks>
+        private void Service_PropertyChanged(object? sender, PropertyChangedEventArgs? e)
+        {
+            if (string.IsNullOrEmpty(e?.PropertyName)) return;
+
+            OnPropertyChanged(e.PropertyName);
+
+            if (e.PropertyName == nameof(Service.Status) || e.PropertyName == nameof(Service.IsInstalled) || e.PropertyName == nameof(Service.Pid))
+            {
+                // CommandManager.InvalidateRequerySuggested is global: one call re-queries every row command.
+                StartCommand.RaiseCanExecuteChanged();
+            }
+        }
+
+        #endregion
+
+        #region Row-level Commands
+
+        /// <summary>
+        /// Command to start the service.
+        /// </summary>
+        public IAsyncCommand StartCommand { get; }
+
+        /// <summary>
+        /// Command to stop the service.
+        /// </summary>
+        public IAsyncCommand StopCommand { get; }
+
+        /// <summary>
+        /// Command to restart the service.
+        /// </summary>
+        public IAsyncCommand RestartCommand { get; }
+
+        /// <summary>
+        /// Command to open the configuration for the service.
+        /// </summary>
+        public IAsyncCommand ConfigureCommand { get; }
+
+        /// <summary>
+        /// Command to install the service.
+        /// </summary>
+        public IAsyncCommand InstallCommand { get; }
+
+        /// <summary>
+        /// Command to uninstall the service.
+        /// </summary>
+        public IAsyncCommand UninstallCommand { get; }
+
+        /// <summary>
+        /// Command to remove the service from the UI grid.
+        /// </summary>
+        public IAsyncCommand RemoveCommand { get; }
+
+        /// <summary>
+        /// Command to export the service definition to XML.
+        /// </summary>
+        public IAsyncCommand ExportXmlCommand { get; }
+
+        /// <summary>
+        /// Command to export the service definition to JSON.
+        /// </summary>
+        public IAsyncCommand ExportJsonCommand { get; }
+
+        /// <summary>
+        /// Command to copy PID to clipboard.
+        /// </summary>
+        public IAsyncCommand CopyPidCommand { get; }
+
+        #endregion
+
+        #region Command Handlers
+
+        private async Task StartServiceAsync(object? parameter) =>
+            await ExecuteSafeAsync(nameof(StartCommand), () => _serviceCommands.StartServiceAsync(Service));
+
+        private async Task StopServiceAsync(object? parameter) =>
+            await ExecuteSafeAsync(nameof(StopCommand), () => _serviceCommands.StopServiceAsync(Service));
+
+        private async Task RestartServiceAsync(object? parameter) =>
+            await ExecuteSafeAsync(nameof(RestartCommand), () => _serviceCommands.RestartServiceAsync(Service));
+
+        private async Task ConfigureServiceAsync(object? parameter) =>
+            await ExecuteSafeAsync(nameof(ConfigureCommand), () => _serviceCommands.ConfigureServiceAsync(Service));
+
+        private async Task InstallServiceAsync(object? parameter) =>
+            await ExecuteSafeAsync(nameof(InstallCommand), () => _serviceCommands.InstallServiceAsync(Service));
+
+        private async Task UninstallServiceAsync(object? parameter) =>
+            await ExecuteSafeAsync(nameof(UninstallCommand), () => _serviceCommands.UninstallServiceAsync(Service));
+
+        private async Task RemoveServiceAsync(object? parameter) =>
+            await ExecuteSafeAsync(nameof(RemoveCommand), () => _serviceCommands.RemoveServiceAsync(Service));
+
+        private async Task ExportServiceToXmlAsync(object? parameter) =>
+            await ExecuteSafeAsync(nameof(ExportXmlCommand), () => _serviceCommands.ExportServiceToXmlAsync(Service));
+
+        private async Task ExportServiceToJsonAsync(object? parameter) =>
+            await ExecuteSafeAsync(nameof(ExportJsonCommand), () => _serviceCommands.ExportServiceToJsonAsync(Service));
+
+        private async Task CopyPidAsync(object? parameter) =>
+            await ExecuteSafeAsync(nameof(CopyPidCommand), () => _serviceCommands.CopyPidAsync(Service));
+
+        #endregion
+
+        #region Helpers
+
+        /// <summary>
+        /// Determines if a service command can execute.
+        /// </summary>
+        /// <param name="parameter">Optional command parameter.</param>
+        /// <returns>True if service is valid; otherwise false.</returns>
+        private bool CanExecuteServiceCommand(object? parameter)
+        {
+            return !string.IsNullOrWhiteSpace(Service.Name);
+        }
+
+        /// <summary>
+        /// Executes the given asynchronous action safely and logs any exceptions.
+        /// </summary>
+        /// <param name="commandName">The name of the command being executed.</param>
+        /// <param name="action">The asynchronous action to execute.</param>
+        private async Task ExecuteSafeAsync(string commandName, Func<Task> action)
+        {
+            try
+            {
+                _cursorService.SetWaitCursor();
+                await action();
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected on shutdown / tab switch
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"{commandName} failed for {Service.Name}.", ex);
+            }
+            finally
+            {
+                _cursorService.ResetCursor();
+            }
+        }
+
+        #endregion
+
+        #region IDisposable Implementation
+
+        /// <summary>
+        /// Unsubscribes from the underlying <see cref="Service"/> model's events so the view model
+        /// can be garbage-collected.
+        /// </summary>
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Releases the managed resources used by <see cref="ServiceRowViewModel"/>.
+        /// </summary>
+        /// <param name="disposing">
+        /// <see langword="true"/> when called from <see cref="Dispose()"/>. This type has no finalizer,
+        /// so it is never <see langword="false"/>; the parameter exists for derived types to override.
+        /// </param>
+        /// <remarks>
+        /// This method is critical for breaking the strong reference held by the <see cref="Service"/> model
+        /// through the <see cref="Service.PropertyChanged"/> event. Without this unsubscription,
+        /// the ViewModel would remain rooted in memory, leading to a memory leak.
+        /// </remarks>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (!_disposed)
+            {
+                if (disposing)
+                {
+                    Service.PropertyChanged -= Service_PropertyChanged;
+                }
+
+                _disposed = true;
+            }
+        }
+
+        #endregion
+    }
+}

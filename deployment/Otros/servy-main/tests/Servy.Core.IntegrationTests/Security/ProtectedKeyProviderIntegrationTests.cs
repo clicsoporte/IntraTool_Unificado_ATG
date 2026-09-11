@@ -1,0 +1,460 @@
+using Servy.Core.Config;
+using Servy.Core.Security;
+using Servy.Testing;
+using System.Security.Cryptography;
+
+namespace Servy.Core.IntegrationTests.Security
+{
+    /// <summary>
+    /// Integration tests for the <see cref="ProtectedKeyProvider"/>.
+    /// These tests require a Windows environment due to the reliance on DPAPI (ProtectedData).
+    /// </summary>
+    public class ProtectedKeyProviderIntegrationTests : TempDirectoryTestBase
+    {
+        #region Constructor Tests
+
+        [Theory]
+        [InlineData(null, "valid_iv_path")]
+        [InlineData("", "valid_iv_path")]
+        [InlineData("   ", "valid_iv_path")]
+        [InlineData("valid_key_path", null)]
+        [InlineData("valid_key_path", "")]
+        [InlineData("valid_key_path", "   ")]
+        public void Constructor_InvalidPaths_ThrowsArgumentException(string? keyPath, string? ivPath)
+        {
+            // Act & Assert
+            Assert.Throws<ArgumentException>(() => new ProtectedKeyProvider(keyPath!, ivPath!));
+        }
+
+        [Fact]
+        public void Constructor_IdenticalPaths_ThrowsArgumentException()
+        {
+            // Arrange
+            var path = Path.Combine(TempDirectory, "shared.key");
+
+            // Act & Assert
+            var exception = Assert.Throws<ArgumentException>(() => new ProtectedKeyProvider(path, path));
+            Assert.Contains("different file paths", exception.Message);
+        }
+
+        #endregion
+
+        #region Generation and Retrieval Tests
+
+        [Fact]
+        public void GetKey_FileDoesNotExist_GeneratesAndSavesKey()
+        {
+            // Arrange
+            var keyPath = GetTempFilePath("master.key");
+            var ivPath = GetTempFilePath("master.iv");
+            using (var provider = new ProtectedKeyProvider(keyPath, ivPath))
+            {
+                // Act
+                var key = provider.GetKey();
+
+                // Assert
+                Assert.NotNull(key);
+                Assert.Equal(32, key.Length);
+                Assert.True(File.Exists(keyPath));
+
+                // Verify file actually contains DPAPI encrypted data (not plaintext)
+                byte[] fileBytes = File.ReadAllBytes(keyPath);
+                Assert.NotEqual(key, fileBytes);
+            }
+        }
+
+        [Fact]
+        public void GetIV_FileDoesNotExist_GeneratesAndSavesIV()
+        {
+            // Arrange
+            var keyPath = GetTempFilePath("master.key");
+            var ivPath = GetTempFilePath("master.iv");
+            using (var provider = new ProtectedKeyProvider(keyPath, ivPath))
+            {
+                // Act
+                var iv = provider.GetIV();
+
+                // Assert
+                Assert.NotNull(iv);
+                Assert.Equal(16, iv.Length);
+                Assert.True(File.Exists(ivPath));
+
+                // Verify the IV file is protected, not plaintext
+                byte[] fileBytes = File.ReadAllBytes(ivPath);
+                Assert.NotEqual(iv, fileBytes);
+            }
+        }
+
+        [Fact]
+        public void GetKey_SubsequentCalls_ReturnIdenticalDataButDifferentReferences()
+        {
+            // Arrange
+            var keyPath = GetTempFilePath("master.key");
+            var ivPath = GetTempFilePath("master.iv");
+            using (var provider = new ProtectedKeyProvider(keyPath, ivPath))
+            {
+                // Act
+                var key1 = provider.GetKey();
+                var key2 = provider.GetKey();
+
+                // Assert - Values must be identical
+                Assert.Equal(key1, key2);
+
+                // Assert - References must be different (cloned from cache to prevent mutation)
+                Assert.NotSame(key1, key2);
+
+                // Mutating the returned array should NOT corrupt the internal cache
+                key1[0] = (byte)(key1[0] ^ 0xFF);
+                var key3 = provider.GetKey();
+                Assert.NotEqual(key1, key3);
+                Assert.Equal(key2, key3);
+            }
+        }
+
+        [Fact]
+        public void GetIV_SubsequentCalls_ReturnIdenticalDataButDifferentReferences()
+        {
+            // Arrange
+            var keyPath = GetTempFilePath("master.key");
+            var ivPath = GetTempFilePath("master.iv");
+            using (var provider = new ProtectedKeyProvider(keyPath, ivPath))
+            {
+                // Act
+                var iv1 = provider.GetIV();
+                var iv2 = provider.GetIV();
+
+                // Assert - Verify the expected AES initialization vector length constraint
+                Assert.Equal(16, iv1.Length);
+
+                // Assert - Values must be identical
+                Assert.Equal(iv1, iv2);
+
+                // Assert - References must be different (defensive clone from internal cache field)
+                Assert.NotSame(iv1, iv2);
+
+                // Act - Mutate the returned array to test isolation resilience boundaries
+                iv1[0] = (byte)(iv1[0] ^ 0xFF);
+                var iv3 = provider.GetIV();
+
+                // Assert - Mutating the localized instance should NOT corrupt the internal backing buffer
+                Assert.NotEqual(iv1, iv3);
+                Assert.Equal(iv2, iv3);
+            }
+        }
+
+        [Fact]
+        public void GetKey_ExistingValidFile_UnprotectsSuccessfully()
+        {
+            // Arrange
+            var keyPath = GetTempFilePath("master.key");
+            var ivPath = GetTempFilePath("master.iv");
+            byte[] originalKey;
+
+            // Generation phase
+            using (var generatorProvider = new ProtectedKeyProvider(keyPath, ivPath))
+            {
+                originalKey = generatorProvider.GetKey();
+            } // disposed
+
+            // Act - Retrieval phase (simulating a service restart)
+            using (var readerProvider = new ProtectedKeyProvider(keyPath, ivPath))
+            {
+                var retrievedKey = readerProvider.GetKey();
+
+                // Assert
+                Assert.Equal(originalKey, retrievedKey);
+            }
+        }
+
+        [Fact]
+        public void GetIV_ExistingValidFile_UnprotectsSuccessfully()
+        {
+            // Arrange
+            var keyPath = GetTempFilePath("existing_iv.key");
+            var ivPath = GetTempFilePath("existing_iv.iv");
+            byte[] originalIv;
+
+            // Generation phase
+            using (var generatorProvider = new ProtectedKeyProvider(keyPath, ivPath))
+            {
+                originalIv = generatorProvider.GetIV();
+            } // disposed
+
+            // Act - Retrieval phase (simulating a service restart)
+            using (var readerProvider = new ProtectedKeyProvider(keyPath, ivPath))
+            {
+                var retrievedIv = readerProvider.GetIV();
+
+                // Assert
+                Assert.Equal(originalIv, retrievedIv);
+            }
+        }
+
+        #endregion
+
+        #region Migration and Resilience Tests
+
+        [Fact]
+        public void GetKey_LegacyNoEntropyFile_MigratesToEntropyProtected()
+        {
+            // Arrange
+            var keyPath = GetTempFilePath("legacy.key");
+            var ivPath = GetTempFilePath("legacy.iv");
+
+            // 1. Manually create a legacy v7.8 key without machine entropy
+            var rawLegacyData = new byte[32];
+            using (var rng = RandomNumberGenerator.Create())
+            {
+                rng.GetBytes(rawLegacyData);
+            }
+
+            // Encrypted with NULL entropy
+            byte[] legacyEncrypted = ProtectedData.Protect(rawLegacyData, null, DataProtectionScope.LocalMachine);
+            File.WriteAllBytes(keyPath, legacyEncrypted);
+
+            // Capture the exact file bytes prior to migration
+            byte[] bytesBeforeMigration = File.ReadAllBytes(keyPath);
+
+            // Act
+            using (var provider = new ProtectedKeyProvider(keyPath, ivPath))
+            {
+                var retrievedKey = provider.GetKey();
+
+                // Assert 1: Must successfully decrypt the legacy data
+                Assert.Equal(rawLegacyData, retrievedKey);
+
+                // Assert 2: The file on disk was rewritten
+                byte[] bytesAfterMigration = File.ReadAllBytes(keyPath);
+                Assert.NotEqual(bytesBeforeMigration, bytesAfterMigration);
+            }
+
+            // Assert 3: Verify the migrated file is genuinely entropy-protected
+            // Path A: A fresh provider instance can successfully read it (using machine entropy)
+            using (var freshProvider = new ProtectedKeyProvider(keyPath, ivPath))
+            {
+                var roundTripKey = freshProvider.GetKey();
+                Assert.Equal(rawLegacyData, roundTripKey);
+            }
+
+            // Path B: Raw decryption without entropy MUST fail
+            byte[] migratedBytes = File.ReadAllBytes(keyPath);
+            Assert.Throws<CryptographicException>(() =>
+            {
+                ProtectedData.Unprotect(migratedBytes, null, DataProtectionScope.LocalMachine);
+            });
+        }
+
+        [Fact]
+        public void GetIV_LegacyNoEntropyFile_MigratesToEntropyProtected()
+        {
+            // Arrange
+            var keyPath = GetTempFilePath("legacy_iv_migration.key");
+            var ivPath = GetTempFilePath("legacy_iv_migration.iv");
+
+            // 1. Manually create a v7.8 legacy IV (16 bytes) without machine-unique entropy
+            var rawLegacyIvData = new byte[16];
+            using (var rng = RandomNumberGenerator.Create())
+            {
+                rng.GetBytes(rawLegacyIvData);
+            }
+
+            byte[] legacyEncrypted = ProtectedData.Protect(rawLegacyIvData, null, DataProtectionScope.LocalMachine);
+            File.WriteAllBytes(ivPath, legacyEncrypted);
+
+            // Capture the raw file bytes state prior to executing the migration routing loop
+            byte[] bytesBeforeMigration = File.ReadAllBytes(ivPath);
+
+            // Act
+            using (var provider = new ProtectedKeyProvider(keyPath, ivPath))
+            {
+                var retrievedIv = provider.GetIV();
+
+                // Assert - Must successfully fallback to null-entropy and decrypt the original data
+                Assert.Equal(rawLegacyIvData, retrievedIv);
+
+                // Assert - Verify that automatic migration occurred by asserting the file payload changed on disk
+                byte[] bytesAfterMigration = File.ReadAllBytes(ivPath);
+                Assert.NotEqual(bytesBeforeMigration, bytesAfterMigration);
+            }
+
+            // Assert 3: Verify the migrated file is genuinely entropy-protected.
+            // The byte comparison above cannot show this on its own - DPAPI output differs on every
+            // Protect call, so it would also pass if the migration rewrote the IV without entropy.
+            // Path A: A fresh provider instance can successfully read it (using machine entropy)
+            using (var freshProvider = new ProtectedKeyProvider(keyPath, ivPath))
+            {
+                var roundTripIv = freshProvider.GetIV();
+                Assert.Equal(rawLegacyIvData, roundTripIv);
+            }
+
+            // Path B: Raw decryption without entropy MUST fail
+            byte[] migratedBytes = File.ReadAllBytes(ivPath);
+            Assert.Throws<CryptographicException>(() =>
+            {
+                ProtectedData.Unprotect(migratedBytes, null, DataProtectionScope.LocalMachine);
+            });
+        }
+
+        [Theory]
+        [InlineData("key", "Failed to unprotect encryption key")]
+        [InlineData("iv", "Failed to unprotect encryption IV")]
+        public void GetMaterial_CorruptedFile_ThrowsInvalidOperationException(string targetType, string expectedMessageToken)
+        {
+            // Arrange
+            var keyPath = GetTempFilePath("corrupt.key");
+            var ivPath = GetTempFilePath("corrupt.iv");
+            var targetPath = targetType == "key" ? keyPath : ivPath;
+
+            // Write garbage bytes that DPAPI cannot unprotect
+            File.WriteAllBytes(targetPath, new byte[] { 0x01, 0x02, 0x03, 0x04, 0x05 });
+
+            using (var provider = new ProtectedKeyProvider(keyPath, ivPath))
+            {
+                // Act & Assert
+                var ex = Assert.Throws<InvalidOperationException>(() =>
+                    targetType == "key" ? provider.GetKey() : provider.GetIV());
+
+                Assert.Contains(expectedMessageToken, ex.Message);
+            }
+        }
+
+        [Theory]
+        [InlineData("key")]
+        [InlineData("iv")]
+        public void GetMaterial_FileLocked_RetriesAndEventuallyThrows(string targetType)
+        {
+            // Arrange
+            var keyPath = GetTempFilePath($"locked_{targetType}.key");
+            var ivPath = GetTempFilePath($"locked_{targetType}.iv");
+            var targetPath = targetType == "key" ? keyPath : ivPath;
+
+            // Save some mock dummy payload data to force execution past the file creation stage
+            // directly into the ReadAllBytes runtime sequence block.
+            File.WriteAllBytes(targetPath, new byte[] { 0x01, 0x02, 0x03, 0x04 });
+
+            using (var provider = new ProtectedKeyProvider(keyPath, ivPath))
+            // Lock the target file exclusively on this thread execution boundary
+            using (var lockStream = new FileStream(targetPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                // Measure the exact elapsed execution time to verify the backoff retries took place
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+                // Act
+                var exception = Assert.ThrowsAny<Exception>(() =>
+                    targetType == "key" ? provider.GetKey() : provider.GetIV());
+
+                stopwatch.Stop();
+
+                // Assert
+                // 1. Verify the structural type of the exception bubble context matches the filesystem failure path
+                var baseException = exception is InvalidOperationException && exception.InnerException != null
+                    ? exception.InnerException
+                    : exception;
+
+                // The read-retry loop catches and, on the final attempt, rethrows exactly IOException
+                // (other than the not-found pair) and UnauthorizedAccessException, so those are the
+                // two classes a caller can observe from this path.
+                Assert.True(baseException is IOException || baseException is UnauthorizedAccessException,
+                    $"Expected filesystem access error, but instead caught: {baseException.GetType().Name}");
+
+                // 2. Verify the backoff retry time logic contract.
+                // Both ends of that contract live in AppConfig: every attempt but the last sleeps
+                // KeyProviderReadRetryBackoffBaseMs * 2^attempt, and the last one rethrows without
+                // sleeping, so the total is the sum over KeyProviderReadMaxRetries - 1 attempts.
+                int expectedSleepMs = 0;
+                for (int attempt = 0; attempt < AppConfig.KeyProviderReadMaxRetries - 1; attempt++)
+                {
+                    expectedSleepMs += AppConfig.KeyProviderReadRetryBackoffBaseMs * (1 << attempt);
+                }
+
+                // Thread.Sleep(n) never returns early, so the lower bound needs no slack.
+                var elapsedMs = stopwatch.ElapsedMilliseconds;
+                Assert.True(elapsedMs >= expectedSleepMs,
+                    $"The key provider did not retry or back off exponentially. Expected at least {expectedSleepMs}ms of accumulated backoff, but total execution time was only {elapsedMs}ms.");
+
+                // Bound it from above too, so a grown retry count or base cannot pass unnoticed.
+                Assert.True(elapsedMs < expectedSleepMs * 3 + TestTimeouts.CiGenerousMs,
+                    $"The backoff took {elapsedMs}ms, far beyond the {expectedSleepMs}ms the retry policy allows - the retry count or the backoff base may have grown.");
+            }
+        }
+
+        #endregion
+
+        #region Disposal Tests
+
+        [Fact]
+        public void Dispose_ZeroesInternalState_ThrowsOnSubsequentAccess()
+        {
+            // Arrange
+            var keyPath = GetTempFilePath("master.key");
+            var ivPath = GetTempFilePath("master.iv");
+            var provider = new ProtectedKeyProvider(keyPath, ivPath);
+
+            // Populate the cache
+            provider.GetKey();
+            provider.GetIV();
+
+            // GetKey/GetIV hand out defensive clones, so hold the internal buffers instead:
+            // those are the arrays Dispose zeroes in place before nulling the fields.
+            var internalKey = TestReflection.GetField<byte[]>(provider, "_cachedKey");
+            var internalIv = TestReflection.GetField<byte[]>(provider, "_cachedIv");
+
+            // Baseline, so an all-zero buffer cannot make the zeroing assertions vacuous
+            Assert.Contains(internalKey, b => b != 0);
+            Assert.Contains(internalIv, b => b != 0);
+
+            // Act
+            provider.Dispose();
+
+            // Assert
+            // Verify that subsequent access throws ObjectDisposedException
+            Assert.Throws<ObjectDisposedException>(provider.GetKey);
+            Assert.Throws<ObjectDisposedException>(provider.GetIV);
+
+            // Verify the buffers were actually zeroed, not merely dropped
+            Assert.All(internalKey, b => Assert.Equal(0, b));
+            Assert.All(internalIv, b => Assert.Equal(0, b));
+
+            // Verify the backing fields are fully cleared out to null post-disposal
+            var cachedKey = TestReflection.GetField<byte[]?>(provider, "_cachedKey");
+            var cachedIv = TestReflection.GetField<byte[]?>(provider, "_cachedIv");
+
+            Assert.Null(cachedKey);
+            Assert.Null(cachedIv);
+        }
+
+        [Fact]
+        public void Dispose_CanBeCalledMultipleTimesSafely()
+        {
+            // Arrange
+            var provider = new ProtectedKeyProvider(GetTempFilePath("k.key"), GetTempFilePath("i.iv"));
+
+            // Populate the cache, so the zeroing branch of Dispose runs on the first call
+            // and has to stay safe on the second and third
+            provider.GetKey();
+            provider.GetIV();
+
+            // Act
+            var exception = Record.Exception(() =>
+            {
+                provider.Dispose();
+                provider.Dispose();
+                provider.Dispose();
+            });
+
+            // Assert
+            Assert.Null(exception); // Should not throw on multiple disposes
+        }
+
+        #endregion
+
+        #region Test Lifecycle
+
+        private string GetTempFilePath(string fileName)
+        {
+            return Path.Combine(TempDirectory, fileName);
+        }
+
+        #endregion
+    }
+}

@@ -1,0 +1,298 @@
+using Servy.Core.Data;
+using Servy.Core.Logging;
+using Servy.Core.Services;
+using Servy.Manager.Config;
+using Servy.Manager.Design;
+using Servy.Manager.Models;
+using Servy.Manager.Resources;
+using Servy.Manager.Services;
+using Servy.UI.Commands;
+using Servy.UI.Services;
+using System.Collections.ObjectModel;
+using System.Windows.Input;
+
+namespace Servy.Manager.ViewModels
+{
+    /// <summary>
+    /// ViewModel for the Dependency view for viewing service dependencies.
+    /// </summary>
+    public class DependenciesViewModel : MonitoringViewModelBase
+    {
+        #region Fields
+
+        private readonly IServiceRepository _serviceRepository;
+        private readonly IServiceManager _serviceManager;
+
+        private CancellationTokenSource? _loadTreeCts;
+
+        private readonly IAppConfiguration _appConfig;
+        private readonly IMessageBoxService _messageBoxService;
+
+        #endregion
+
+        #region Properties - Service Data
+
+        private DependencyService? _selectedService;
+
+        /// <summary>
+        /// Gets or sets the currently selected service.
+        /// Changing this reloads the dependency tree and restarts PID monitoring for the new service.
+        /// </summary>
+        public DependencyService? SelectedService
+        {
+            get => _selectedService;
+            set
+            {
+                if (ReferenceEquals(_selectedService, value)) return;
+                _selectedService = value;
+                OnPropertyChanged(nameof(SelectedService));
+                OnPropertyChanged(nameof(IsServiceSelected));
+                SetPidText(value); // value may be null; SetPidText already falls back to NotAvailable
+                _ = LoadDependencyTreeAsync(null);
+                CopyPidCommand.RaiseCanExecuteChanged();
+                StopMonitoring();
+                StartMonitoring();
+            }
+        }
+
+        /// <summary>
+        /// Indicates whether a service is selected or not.
+        /// </summary>
+        public bool IsServiceSelected { get => SelectedService != null; }
+
+        /// <summary>
+        /// Service dependency tree.
+        /// </summary>
+        public ObservableCollection<ServiceDependencyNode> DependencyTree { get; } = new ObservableCollection<ServiceDependencyNode>();
+
+        #endregion
+
+        #region Commands
+
+        /// <summary>
+        /// Command to refresh dependency tree.
+        /// </summary>
+        public IAsyncCommand RefreshCommand { get; }
+
+        /// <summary>
+        /// Command to expand all dependency tree.
+        /// </summary>
+        public ICommand ExpandAllCommand { get; }
+
+        /// <summary>
+        /// Command to collapse all dependency tree nodes.
+        /// </summary>
+        public ICommand CollapseAllCommand { get; }
+
+        #endregion
+
+        #region Constructors
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="DependenciesViewModel"/> class.
+        /// </summary>
+        /// <param name="serviceRepository">Repository for service data access.</param>
+        /// <param name="serviceManager">Service manager.</param>
+        /// <param name="serviceCommands">Commands for service operations.</param>
+        /// <param name="appConfig">Application configuration settings.</param>
+        /// <param name="cursorService">Service used to control the cursor state.</param>
+        /// <param name="uiDispatcher">Dispatcher for UI thread operations.</param>
+        /// <param name="messageBoxService">Service used to display modal dialogs (e.g. error popups).</param>
+        public DependenciesViewModel(
+            IServiceRepository serviceRepository,
+            IServiceManager serviceManager,
+            IServiceCommands serviceCommands,
+            IAppConfiguration appConfig,
+            ICursorService cursorService,
+            IUiDispatcher uiDispatcher,
+            IMessageBoxService messageBoxService) : base(cursorService, uiDispatcher, serviceCommands)
+        {
+            _serviceRepository = serviceRepository ?? throw new ArgumentNullException(nameof(serviceRepository));
+            _serviceManager = serviceManager ?? throw new ArgumentNullException(nameof(serviceManager));
+            _appConfig = appConfig ?? throw new ArgumentNullException(nameof(appConfig));
+            _messageBoxService = messageBoxService ?? throw new ArgumentNullException(nameof(messageBoxService));
+
+            RefreshCommand = new AsyncCommand(LoadDependencyTreeAsync, name: nameof(RefreshCommand));
+            ExpandAllCommand = new RelayCommand<object>(_ => SetExpansion(DependencyTree, true));
+            CollapseAllCommand = new RelayCommand<object>(_ => SetExpansion(DependencyTree, false));
+
+            InitTimer();
+        }
+
+        /// <summary>
+        /// Design-Time constructor.
+        /// </summary>
+        public DependenciesViewModel() : this(
+            new UI.Design.DesignTimeServiceRepository(),
+            new UI.Design.DesignTimeServiceManager(),
+            new DesignTimeServiceCommands(),
+            new DesignTimeAppConfig(),
+            new UI.Design.DesignTimeCursorService(),
+            new UI.Design.DesignTimeUiDispatcher(),
+            new UI.Design.DesignTimeMessageBoxService()
+            )
+        { }
+
+        #endregion
+
+        #region MonitoringViewModelBase Implementation
+
+        /// <inheritdoc />
+        protected override ServiceItemBase? SelectedServiceItem => SelectedService;
+
+        /// <inheritdoc />
+        protected override int RefreshIntervalMs => _appConfig.DependenciesRefreshIntervalInMs;
+
+        /// <inheritdoc />
+        protected override ServiceItemBase CreateServiceItem(Service? service)
+        {
+            return new DependencyService { Name = service?.Name, Pid = service?.Pid };
+        }
+
+        /// <inheritdoc />
+        protected override void ResetMonitoringState()
+        {
+            ResetPid();
+        }
+
+        /// <inheritdoc />
+        protected override async Task ApplyTickAsync(ServiceItemBase selection, CancellationToken token)
+        {
+            var currentSelection = (DependencyService)selection;
+            var currentPid = await _serviceRepository.GetServicePidAsync(currentSelection.Name, token);
+
+            // Drop this tick if the user switched services while we were awaiting the DB call.
+            if (!ReferenceEquals(currentSelection, SelectedService) || token.IsCancellationRequested) return;
+
+            if (!currentPid.HasValue)
+            {
+                if (currentSelection.Pid != null)      // only act on the running -> stopped transition
+                {
+                    ResetPid();
+                    currentSelection.Pid = null;
+                    CopyPidCommand.RaiseCanExecuteChanged();
+                }
+                return;
+            }
+
+            if (currentSelection.Pid != currentPid)
+            {
+                currentSelection.Pid = currentPid;
+                CopyPidCommand.RaiseCanExecuteChanged();
+                SetPidText(currentSelection);
+            }
+        }
+
+        #endregion
+
+        #region Private Methods
+
+        /// <summary>
+        /// Iteratively sets the expansion state of the specified collection of dependency nodes and all their children.
+        /// Uses an explicit stack to prevent stack overflow on deep graphs and a visited set to guard against cycles.
+        /// </summary>
+        /// <param name="nodes">The collection of <see cref="ServiceDependencyNode"/> to process.</param>
+        /// <param name="isExpanded">
+        /// <see langword="true"/> to expand the nodes; <see langword="false"/> to collapse them.
+        /// </param>
+        private void SetExpansion(IEnumerable<ServiceDependencyNode> nodes, bool isExpanded)
+        {
+            var visited = new HashSet<ServiceDependencyNode>();
+            var stack = new Stack<ServiceDependencyNode>(nodes);
+
+            while (stack.Count > 0)
+            {
+                var node = stack.Pop();
+                if (!visited.Add(node)) continue;
+
+                node.IsExpanded = isExpanded;
+
+                if (node.Dependencies != null)
+                {
+                    foreach (var child in node.Dependencies)
+                    {
+                        stack.Push(child);
+                    }
+                }
+            }
+        }
+
+        #endregion
+
+        #region Public Methods
+
+        /// <summary>
+        /// Asynchronously retrieves and sets the dependency tree for the current selected service.
+        /// </summary>
+        public async Task LoadDependencyTreeAsync(object? parameter)
+        {
+            // 1. Thread-safe atomic swap to cancel any existing load operation
+            var newCts = new CancellationTokenSource();
+            var token = newCts.Token;
+            var oldCts = Interlocked.Exchange(ref _loadTreeCts, newCts);
+
+            if (oldCts != null)
+            {
+                Helpers.Helper.CancelAndDisposeSafely(oldCts);
+            }
+
+            string? serviceName = null;
+            try
+            {
+                if (SelectedService == null)
+                {
+                    DependencyTree.Clear();   // explicit reset to empty is fine here
+                    return;
+                }
+                serviceName = SelectedService.Name;
+
+                IsBusy = true;
+                DependencyTree.Clear();
+
+                // 2. Offload the synchronous SCM call to a background thread
+                var root = await Task.Run(() =>
+                    _serviceManager.GetDependencies(serviceName, cancellationToken: token), token);
+
+                // 3. Check if we are still on the same service/task before updating UI
+                if (token.IsCancellationRequested) return;
+
+                if (root != null)
+                {
+                    root.IsExpanded = true;
+                    DependencyTree.Add(root);
+                }
+            }
+            catch (OperationCanceledException) { /* Ignored */ }
+            catch (Exception ex)
+            {
+                Logger.Error($"Failed to load dependency tree for {serviceName}", ex);
+                await _messageBoxService.ShowErrorAsync(Strings.Msg_FailedToLoadDependencyTree, UiAppConfig.Caption);
+            }
+            finally
+            {
+                if (ReferenceEquals(Volatile.Read(ref _loadTreeCts), newCts))
+                {
+                    IsBusy = false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Cleans up resources, cancels background tasks, and explicitly unsubscribes
+        /// from timer events to prevent memory leaks.
+        /// </summary>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                // Dispose Tree Loading CTS
+                var oldLoadTreeCts = Interlocked.Exchange(ref _loadTreeCts, null);
+                Helpers.Helper.CancelAndDisposeSafely(oldLoadTreeCts);
+            }
+
+            base.Dispose(disposing);
+        }
+
+        #endregion
+    }
+}

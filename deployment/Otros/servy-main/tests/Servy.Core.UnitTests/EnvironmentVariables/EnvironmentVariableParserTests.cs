@@ -1,0 +1,411 @@
+using Servy.Core.EnvironmentVariables;
+using Servy.Core.Resources;
+
+namespace Servy.Core.UnitTests.EnvironmentVariables
+{
+    public class EnvironmentVariableParserTests
+    {
+        [Fact]
+        public void Parse_Null_ReturnsEmptyList()
+        {
+            // Arrange & Act
+            var result = EnvironmentVariableParser.Parse(null);
+
+            // Assert
+            Assert.Empty(result);
+        }
+
+        [Fact]
+        public void Parse_EmptyString_ReturnsEmptyList()
+        {
+            // Arrange & Act
+            var result = EnvironmentVariableParser.Parse("");
+
+            // Assert
+            Assert.Empty(result);
+        }
+
+        [Fact]
+        public void Parse_SingleVariable_ParsesCorrectly()
+        {
+            // Arrange
+            var input = "KEY=VALUE";
+
+            // Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal("KEY", result[0].Name);
+            Assert.Equal("VALUE", result[0].Value);
+        }
+
+        [Fact]
+        public void Parse_MultipleVariablesSeparatedBySemicolon_ParsesCorrectly()
+        {
+            // Arrange
+            var input = "KEY1=VALUE1;KEY2=VALUE2;KEY3=\"VALUE3\";KEY4= \"VALUE4\" ;KEY5=  VALUE5 ; KEY6 = \" VALUE6 \"";
+
+            // Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Equal(6, result.Count);
+            Assert.Equal("KEY1", result[0].Name);
+            Assert.Equal("VALUE1", result[0].Value);
+            Assert.Equal("KEY2", result[1].Name);
+            Assert.Equal("VALUE2", result[1].Value);
+            Assert.Equal("KEY3", result[2].Name);
+            Assert.Equal("VALUE3", result[2].Value);
+            Assert.Equal("KEY4", result[3].Name);
+            Assert.Equal("VALUE4", result[3].Value);
+            Assert.Equal("KEY5", result[4].Name);
+            Assert.Equal("VALUE5", result[4].Value);
+            Assert.Equal("KEY6", result[5].Name);
+            Assert.Equal(" VALUE6 ", result[5].Value);
+        }
+
+        [Fact]
+        public void Parse_MultipleVariablesSeparatedByNewline_ParsesCorrectly()
+        {
+            // Arrange
+            // KEY3 contains structural double quotes that must be cleanly stripped following the newline parsing pass
+            var input = "KEY1=VALUE1\nKEY2=VALUE2\nKEY3=\"VALUE3\"";
+
+            // Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Equal(3, result.Count);
+
+            Assert.Equal("KEY1", result[0].Name);
+            Assert.Equal("VALUE1", result[0].Value);
+
+            Assert.Equal("KEY2", result[1].Name);
+            Assert.Equal("VALUE2", result[1].Value);
+
+            // Ensure quote-stripping rules behavior acts symmetrically on the newline path
+            Assert.Equal("KEY3", result[2].Name);
+            Assert.Equal("VALUE3", result[2].Value);
+        }
+
+        [Fact]
+        public void Parse_MultipleVariablesSeparatedByWindowsNewline_ParsesCorrectly()
+        {
+            // Arrange
+            var input = "KEY1=VALUE1\r\nKEY2=VALUE2\r\nKEY3=\"VALUE3\"";
+
+            // Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Equal(3, result.Count);
+
+            Assert.Equal("KEY1", result[0].Name);
+            Assert.Equal("VALUE1", result[0].Value);
+
+            Assert.Equal("KEY2", result[1].Name);
+            Assert.Equal("VALUE2", result[1].Value);
+
+            Assert.Equal("KEY3", result[2].Name);
+            Assert.Equal("VALUE3", result[2].Value);
+        }
+
+        [Fact]
+        public void Parse_MixedDelimiters_ParsesCorrectly()
+        {
+            // Arrange
+            var input = "KEY1=VALUE1;KEY2=VALUE2\nKEY3=VALUE3\r\nKEY4=\"VALUE4\"";
+
+            // Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Equal(4, result.Count);
+
+            Assert.Equal("KEY1", result[0].Name);
+            Assert.Equal("VALUE1", result[0].Value);
+
+            Assert.Equal("KEY2", result[1].Name);
+            Assert.Equal("VALUE2", result[1].Value);
+
+            Assert.Equal("KEY3", result[2].Name);
+            Assert.Equal("VALUE3", result[2].Value);
+
+            Assert.Equal("KEY4", result[3].Name);
+            Assert.Equal("VALUE4", result[3].Value);
+        }
+
+        [Fact]
+        public void Parse_SupportsEscapedSemicolonInValue()
+        {
+            // Arrange
+            var input = "KEY1=VALUE\\;WITHSEMICOLON;KEY2=OK";
+
+            // Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Equal("VALUE;WITHSEMICOLON", result[0].Value);
+            Assert.Equal("OK", result[1].Value);
+        }
+
+        [Fact]
+        public void Parse_SupportsEscapedEqualsInValue()
+        {
+            // Arrange
+            var input = "KEY=VAL\\=UE";
+
+            // Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal("KEY", result[0].Name);
+            Assert.Equal("VAL=UE", result[0].Value);
+        }
+
+        [Fact]
+        public void Parse_SupportsEscapedDoubleQuotesInValue()
+        {
+            // Arrange
+            var input = "KEY=VAL\\\"UE";
+
+            // Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal("KEY", result[0].Name);
+            Assert.Equal("VAL\"UE", result[0].Value);
+
+            // Arrange (Nested Variant)
+            input = "KEY=\"\\\"VAL\\\"UE\\\"\"";
+
+            // Act
+            result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal("KEY", result[0].Name);
+            Assert.Equal("\"VAL\"UE\"", result[0].Value);
+        }
+
+        [Fact]
+        public void Parse_SupportsEscapedBackslash()
+        {
+            // Arrange
+            var input = "KEY=VAL\\\\UE";
+
+            // Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal("KEY", result[0].Name);
+            Assert.Equal("VAL\\UE", result[0].Value);
+        }
+
+        [Fact]
+        public void Parse_UnknownEscapeSequence_PreservesBackslash()
+        {
+            // Arrange
+            var input = "KEY=VAL\\XUE";
+
+            // Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal("VAL\\XUE", result[0].Value);
+        }
+
+        [Fact]
+        public void Parse_TrailingBackslash_PreservesBackslash()
+        {
+            // Arrange
+            var input = "KEY=VALUE\\";
+
+            // Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal("VALUE\\", result[0].Value);
+        }
+
+        [Fact]
+        public void Parse_EmptyKey_ThrowsFormatException()
+        {
+            // Arrange
+            var input = "=VALUE";
+
+            // Act & Assert
+            var ex = Assert.Throws<FormatException>(() => EnvironmentVariableParser.Parse(input));
+            Assert.Contains("Environment variable key cannot be empty", ex.Message);
+        }
+
+        [Theory]
+        [InlineData(@"KEY\=NOEQUAL")]
+        [InlineData(@"KEY\\\=NOEQUAL")]
+        public void Parse_NoUnescapedEquals_ThrowsFormatException(string input)
+        {
+            // Arrange & Act
+            var ex = Assert.Throws<FormatException>(() => EnvironmentVariableParser.Parse(input));
+
+            // Assert
+            Assert.Contains("no unescaped '='", ex.Message);
+        }
+
+        [Theory]
+        [InlineData(@"KEY\\=NOEQUAL", @"KEY\")]
+        [InlineData(@"KEY\\\\=NOEQUAL", @"KEY\\")]
+        public void Parse_EscapeBackslash(string input, string expectedName)
+        {
+            // Arrange & Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal(expectedName, result[0].Name);
+            Assert.Equal("NOEQUAL", result[0].Value);
+        }
+
+        [Fact]
+        public void Parse_IgnoresEmptySegments()
+        {
+            // Arrange
+            var input = "KEY1=VAL1;;KEY2=VAL2;";
+
+            // Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Equal(2, result.Count);
+            Assert.Equal("KEY1", result[0].Name);
+            Assert.Equal("KEY2", result[1].Name);
+        }
+
+        [Theory]
+        [InlineData("KEY=\"hello\"", "hello")]           // Standard structural quotes
+        [InlineData("KEY= \"hello\" ", "hello")]         // Structural quotes with surrounding whitespace
+        [InlineData("KEY='hello'", "'hello'")]           // Single quotes are NOT structural; preserved literally
+        [InlineData("KEY=\"hello", "\"hello")]           // Unmatched quotes are preserved literally
+        public void Parse_StructuralQuotes_Behavior(string input, string expectedValue)
+        {
+            // Arrange & Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Equal(expectedValue, result[0].Value);
+        }
+
+        [Theory]
+        [InlineData("KEY=\\\"hello\\\"", "\"hello\"")]
+        [InlineData("KEY=\\\"\\\"", "\"\"")]
+        public void Parse_LiteralQuotes_PreservedWhenEscaped(string input, string expectedValue)
+        {
+            // Arrange & Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Equal(expectedValue, result[0].Value);
+        }
+
+        [Fact]
+        public void Parse_NestedQuotes_PreservedWhenOuterAreStructural()
+        {
+            // Arrange
+            var input = "KEY=\"\\\"hello\\\"\"";
+
+            // Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Single(result);
+            Assert.Equal("\"hello\"", result[0].Value);
+        }
+
+        [Fact]
+        public void Parse_HandlesComplexEscapingWithQuotes()
+        {
+            // Arrange
+            var input = "KEY=\"Value\\;WithSemicolon\";KEY2=NEXT";
+
+            // Act
+            var result = EnvironmentVariableParser.Parse(input);
+
+            // Assert
+            Assert.Equal(2, result.Count);
+            Assert.Equal("Value;WithSemicolon", result[0].Value);
+            Assert.Equal("NEXT", result[1].Value);
+        }
+
+        [Theory]
+        [InlineData("KEY=Line1\\\nLine2")]
+        [InlineData("KEY=Line1\\\rLine2")]
+        [InlineData("KEY=Line1\\\r\\\nLine2")]
+        public void Parse_ValueContainsForbiddenNewline_ThrowsFormatException(string input)
+        {
+            // Arrange & Act
+            const string key = "KEY";
+            var ex = Assert.Throws<FormatException>(() => EnvironmentVariableParser.Parse(input));
+
+            // Assert
+            Assert.Contains($"Environment variable '{key}' contains a forbidden newline character", ex.Message);
+            Assert.Contains("Multi-line values are not supported", ex.Message);
+        }
+
+        [Theory]
+        [InlineData("KEY=Line1\nLine2")]
+        [InlineData("KEY=Line1\rLine2")]
+        [InlineData("KEY=Line1\r\nLine2")]
+        public void Parse_UnquotedRawNewline_ThrowsStructuralFormatException(string input)
+        {
+            // Act & Assert
+            var ex = Assert.Throws<FormatException>(() => EnvironmentVariableParser.Parse(input));
+
+            // Verify exception message describes missing '=' without echoing raw values
+            Assert.Contains("no unescaped '='", ex.Message);
+            Assert.Contains("position ", ex.Message);
+            Assert.DoesNotContain("Line2", ex.Message);
+        }
+
+        [Fact]
+        public void Parse_KeyContainingEquals_ThrowsFormatExceptionWithValidatorMessage()
+        {
+            // Arrange
+            var input = @"K\=EY=VAL";
+
+            // Act
+            var ex = Assert.Throws<FormatException>(() => EnvironmentVariableParser.Parse(input));
+
+            // Assert
+            Assert.Equal(string.Format(Strings.Msg_EnvironmentVariableKeyInvalidChars, "K=EY"), ex.Message);
+        }
+
+        [Theory]
+        // Value-side guard -> Msg_EnvironmentVariableValueInvalidChars, formatted with the key
+        [InlineData("KEY=VAL\0UE", "KEY", false)]
+        // Key-side guard -> Msg_EnvironmentVariableKeyInvalidChars, formatted with the unescaped key
+        [InlineData("K\0EY=VALUE", "K\0EY", true)]
+        public void Parse_NulCharacter_ThrowsFormatExceptionWithValidatorMessage(string input, string expectedName, bool keySide)
+        {
+            // Arrange & Act
+            var ex = Assert.Throws<FormatException>(() => EnvironmentVariableParser.Parse(input));
+
+            // Assert
+            var expected = string.Format(
+                keySide ? Strings.Msg_EnvironmentVariableKeyInvalidChars : Strings.Msg_EnvironmentVariableValueInvalidChars,
+                expectedName);
+
+            // The validator's own message has to survive the GeneralFailure arm ...
+            Assert.Equal(expected, ex.Message);
+
+            // ... rather than being misreported as a newline failure or degrading to the arm's
+            // blank-errorMessage fallback.
+            Assert.DoesNotContain("forbidden newline", ex.Message);
+            Assert.DoesNotContain("failed validation tracking", ex.Message);
+        }
+    }
+}

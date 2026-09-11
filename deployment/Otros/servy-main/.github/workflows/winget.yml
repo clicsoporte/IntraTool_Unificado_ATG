@@ -1,0 +1,47 @@
+# ==========================================================================================
+# GitHub Actions Workflow - WinGet
+# ------------------------------------------------------------------------------------------
+# Publishes the latest Servy release to WinGet
+# when a new release is published.
+# ==========================================================================================
+
+name: winget
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.1)'
+        required: false
+
+concurrency:
+  group: winget-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 #v6.0.3
+
+      - name: Resolve release version
+        uses: ./.github/actions/resolve-version
+        with:
+          manual_tag: ${{ github.event.inputs.tag }}
+          release_tag: ${{ github.event.release.tag_name }}
+
+      - name: Publish Servy to WinGet
+        uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e #v2
+        with:
+          identifier: aelassas.Servy
+          token: ${{ secrets.WINGET_TOKEN }}
+          installers-regex: "servy-\\d+\\.\\d+-(x64|arm64)-installer\\.exe$"
+          release-tag: ${{ env.TAG }}
+          fork-user: aelassas

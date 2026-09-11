@@ -1,0 +1,17 @@
+{
+  "name": "nodejs-app-env-vars",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node.js fixtures used to verify environment-variable injection and graceful shutdown under Servy.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [],
+  "author": "Akram El Assas",
+  "license": "MIT",
+  "type": "module",
+  "devDependencies": {
+    "@types/node": "^24.2.1"
+  }
+}

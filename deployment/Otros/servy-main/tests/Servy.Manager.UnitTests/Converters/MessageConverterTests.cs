@@ -1,0 +1,69 @@
+using Servy.Manager.Converters;
+using System.Globalization;
+using System.Windows.Data;
+
+namespace Servy.Manager.UnitTests.Converters
+{
+    public class MessageConverterTests
+    {
+        private readonly MessageConverter _converter = new MessageConverter();
+
+        [Fact]
+        public void Convert_NullValue_ReturnsEmptyString()
+        {
+            // Act
+            var result = _converter.Convert(null!, typeof(string), null!, CultureInfo.InvariantCulture);
+
+            // Assert
+            Assert.Equal(string.Empty, result);
+        }
+
+        [Fact]
+        public void Convert_NonStringValue_ReturnsFirstLineOfToString()
+        {
+            // Arrange - an exception renders multi-line only once it has been thrown and its
+            // StackTrace populated; an unthrown one is a single "Type: Message" line.
+            InvalidOperationException value;
+            try { throw new InvalidOperationException("Boom"); }
+            catch (InvalidOperationException ex) { value = ex; }
+
+            // Guard the arrange: if the premise stops holding the test must fail here rather
+            // than degrade to comparing a single line with itself.
+            Assert.Contains('\n', value.ToString());
+
+            // Act
+            var result = _converter.Convert(value, typeof(string), null!, CultureInfo.InvariantCulture);
+
+            // Assert
+            Assert.Equal("System.InvalidOperationException: Boom", result);
+            Assert.DoesNotContain('\n', (string)result);
+        }
+
+        [Theory]
+        [InlineData("Single line", "Single line")]
+        [InlineData("First line\nSecond line", "First line")]
+        [InlineData("First line\r\nSecond line", "First line")]
+        [InlineData("First line\rSecond line", "First line")]
+        [InlineData("", "")]
+        public void Convert_ValidString_ReturnsFirstLine(string input, string expected)
+        {
+            // Act
+            var result = _converter.Convert(input, typeof(string), null!, CultureInfo.InvariantCulture);
+
+            // Assert
+            Assert.Equal(expected, result);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("Any UI value")]
+        public void ConvertBack_ReturnsDoNothing(object? value)
+        {
+            // Act
+            var result = _converter.ConvertBack(value!, typeof(string), null!, CultureInfo.InvariantCulture);
+
+            // Assert
+            Assert.Equal(Binding.DoNothing, result);
+        }
+    }
+}

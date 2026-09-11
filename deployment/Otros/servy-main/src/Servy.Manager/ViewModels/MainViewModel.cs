@@ -1,0 +1,1214 @@
+using Servy.Core.Config;
+using Servy.Core.Data;
+using Servy.Core.DTOs;
+using Servy.Core.Enums;
+using Servy.Core.Helpers;
+using Servy.Core.Logging;
+using Servy.Core.Services;
+using Servy.Manager.Config;
+using Servy.Manager.Design;
+using Servy.Manager.Mappers;
+using Servy.Manager.Models;
+using Servy.Manager.Resources;
+using Servy.Manager.Services;
+using Servy.UI;
+using Servy.UI.Commands;
+using Servy.UI.Services;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Windows;
+using System.Windows.Data;
+using System.Windows.Threading;
+
+namespace Servy.Manager.ViewModels
+{
+    /// <summary>
+    /// ViewModel for the main window of Servy Manager.
+    /// Holds the list of services and exposes commands for managing them.
+    /// </summary>
+    public class MainViewModel : SearchableViewModelBase
+    {
+        #region Private Fields
+
+        private readonly Dispatcher _dispatcher;
+        private readonly IServiceManager _serviceManager;
+        private readonly IServiceRepository _serviceRepository;
+        private readonly IMessageBoxService _messageBoxService;
+        private readonly IHelpService _helpService;
+        private IServiceCommands _serviceCommands;
+
+        private CancellationTokenSource? _cts;
+
+        private DispatcherTimer? _refreshTimer;
+        private readonly BulkObservableCollection<ServiceRowViewModel> _services = new BulkObservableCollection<ServiceRowViewModel>();
+        private bool _isConfiguratorEnabled = false;
+        private string? _searchText;
+        private bool? _selectAll;
+        private bool _isUpdatingSelectAll;
+        private readonly object _servicesLock = new object();
+        private int _isRefreshingFlag = 0; // 0 = false, 1 = true
+        private readonly IAppConfiguration _appConfig;
+        private readonly IProcessHelper _processHelper;
+
+        #endregion
+
+        #region Properties
+
+        /// <summary>
+        /// Gets the performance view model.
+        /// </summary>
+        public PerformanceViewModel PerformanceVM { get; }
+
+        /// <summary>
+        /// Gets the console view model.
+        /// </summary>
+        public ConsoleViewModel ConsoleVM { get; }
+
+        /// <summary>
+        /// Get the dependencies view model.
+        /// </summary>
+        public DependenciesViewModel DependenciesVM { get; }
+
+        /// <summary>
+        /// Get the logs view model.
+        /// </summary>
+        public LogsViewModel LogsVM { get; }
+
+        /// <summary>
+        /// Gets or sets the search text used for filtering or querying services.
+        /// </summary>
+        public string? SearchText
+        {
+            get => _searchText;
+            set => Set(ref _searchText, value);
+        }
+
+        /// <summary>
+        /// The set of service commands available for each service row.
+        /// </summary>
+        public IServiceCommands ServiceCommands
+        {
+            get => _serviceCommands;
+            set
+            {
+                _serviceCommands = value ?? throw new ArgumentNullException(nameof(value));
+                PerformanceVM.ServiceCommands = value;
+                ConsoleVM.ServiceCommands = value;
+                DependenciesVM.ServiceCommands = value;
+                OnPropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// Collection of services displayed in the DataGrid.
+        /// </summary>
+        public ICollectionView ServicesView { get; }
+
+        /// <summary>
+        /// Indicates whether any services are currently selected.
+        /// </summary>
+        public bool HasSelectedServices => _services.Any(s => s.IsChecked);
+
+        /// <summary>
+        /// Gets or sets the tri-state "Select All" value for the services.
+        /// </summary>
+        /// <remarks>
+        /// Setting this property does two things to every row: it applies the new check state
+        /// (<see cref="ServiceRowViewModel.IsChecked"/>) and it clears the row highlight
+        /// (<see cref="ServiceRowViewModel.IsSelected"/>), so a single highlighted row is not shown
+        /// alongside a bulk selection. Checking a row by hand does not clear the highlight, so the
+        /// two paths are deliberately asymmetric.
+        /// The <c>_isUpdatingSelectAll</c> guard skips the loop while the header state is being
+        /// recomputed from the rows by <see cref="UpdateSelectAllState"/>, which is what stops a
+        /// background refresh from clearing the highlight.
+        /// </remarks>
+        public bool? SelectAll
+        {
+            get => _selectAll;
+            set
+            {
+                if (_selectAll == value) return;
+
+                _selectAll = value;
+                OnPropertyChanged();
+
+                if (!_isUpdatingSelectAll)
+                {
+                    _isUpdatingSelectAll = true;
+
+                    try
+                    {
+                        bool targetState = value == true;
+
+                        // Apply the target check-state to every row in a single pass, and clear the
+                        // row highlight as well so a highlighted row is not left next to a bulk selection.
+                        foreach (var service in _services)
+                        {
+                            service.IsChecked = targetState;
+                            service.IsSelected = false;
+                        }
+                    }
+                    finally
+                    {
+                        _isUpdatingSelectAll = false;
+                    }
+
+                    // This updates the header state based on the children's new values
+                    UpdateSelectAllState();
+                    OnPropertyChanged(nameof(HasSelectedServices));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Determines whether the configuration app launch button is enabled.
+        /// </summary>
+        public bool IsConfiguratorEnabled
+        {
+            get => _isConfiguratorEnabled;
+            set => Set(ref _isConfiguratorEnabled, value);
+        }
+
+        #endregion
+
+        #region Commands
+
+        /// <summary>
+        /// Command to search services.
+        /// </summary>
+        public IAsyncCommand SearchCommand { get; }
+
+        /// <summary>
+        /// Command to open the configuration for a service.
+        /// </summary>
+        public IAsyncCommand ConfigureCommand { get; }
+
+        /// <summary>
+        /// Command to browse and import an XML configuration file.
+        /// </summary>
+        public IAsyncCommand ImportXmlCommand { get; }
+
+        /// <summary>
+        /// Command to browse and import a JSON configuration file.
+        /// </summary>
+        public IAsyncCommand ImportJsonCommand { get; }
+
+        /// <summary>
+        /// Start selected services command.
+        /// </summary>
+        public IAsyncCommand StartSelectedCommand { get; }
+
+        /// <summary>
+        /// Stop selected services command.
+        /// </summary>
+        public IAsyncCommand StopSelectedCommand { get; }
+
+        /// <summary>
+        /// Restart selected services command.
+        /// </summary>
+        public IAsyncCommand RestartSelectedCommand { get; }
+
+        /// <summary>
+        /// Command to open documentation.
+        /// </summary>
+        public IAsyncCommand OpenDocumentationCommand { get; }
+
+        /// <summary>
+        /// Command to check for updates.
+        /// </summary>
+        public IAsyncCommand CheckUpdatesCommand { get; }
+
+        /// <summary>
+        /// Command to open about dialog.
+        /// </summary>
+        public IAsyncCommand OpenAboutDialogCommand { get; }
+
+        #endregion
+
+        #region Constructors
+
+        /// <summary>
+        /// Initializes a new instance of <see cref="MainViewModel"/>.
+        /// </summary>
+        public MainViewModel(
+            IServiceManager serviceManager,
+            IServiceRepository serviceRepository,
+            IServiceCommands serviceCommands,
+            IHelpService helpService,
+            IMessageBoxService messageBoxService,
+            PerformanceViewModel performanceVM,
+            ConsoleViewModel consoleVM,
+            DependenciesViewModel dependenciesVM,
+            LogsViewModel logsVM,
+            IAppConfiguration appConfig,
+            ICursorService cursorService,
+            IProcessHelper processHelper,
+            Dispatcher? dispatcher = null
+            ) : base(cursorService)
+        {
+            _serviceManager = serviceManager ?? throw new ArgumentNullException(nameof(serviceManager));
+            _serviceRepository = serviceRepository ?? throw new ArgumentNullException(nameof(serviceRepository));
+            _serviceCommands = serviceCommands ?? throw new ArgumentNullException(nameof(serviceCommands));
+            _appConfig = appConfig ?? throw new ArgumentNullException(nameof(appConfig));
+            _helpService = helpService ?? throw new ArgumentNullException(nameof(helpService));
+            _messageBoxService = messageBoxService ?? throw new ArgumentNullException(nameof(messageBoxService));
+            _dispatcher = dispatcher ?? Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+            _selectAll = false;
+
+            _processHelper = processHelper ?? throw new ArgumentNullException(nameof(processHelper));
+
+            // Assign child ViewModels injected via DI
+            PerformanceVM = performanceVM ?? throw new ArgumentNullException(nameof(performanceVM));
+            ConsoleVM = consoleVM ?? throw new ArgumentNullException(nameof(consoleVM));
+            DependenciesVM = dependenciesVM ?? throw new ArgumentNullException(nameof(dependenciesVM));
+            LogsVM = logsVM ?? throw new ArgumentNullException(nameof(logsVM));
+            ServiceCommands = _serviceCommands;
+
+            ServicesView = new ListCollectionView(_services);
+
+            SearchCommand = new AsyncCommand(SearchServicesAsync, name: nameof(SearchCommand));
+            ConfigureCommand = new AsyncCommand(ConfigureServiceAsync, name: nameof(ConfigureCommand));
+            ImportXmlCommand = new AsyncCommand(ImportXmlConfigAsync, name: nameof(ImportXmlCommand));
+            ImportJsonCommand = new AsyncCommand(ImportJsonConfigAsync, name: nameof(ImportJsonCommand));
+            StartSelectedCommand = new AsyncCommand(StartSelectedAsync, name: nameof(StartSelectedCommand));
+            StopSelectedCommand = new AsyncCommand(StopSelectedAsync, name: nameof(StopSelectedCommand));
+            RestartSelectedCommand = new AsyncCommand(RestartSelectedAsync, name: nameof(RestartSelectedCommand));
+            OpenDocumentationCommand = new AsyncCommand(OpenDocumentationAsync, name: nameof(OpenDocumentationCommand));
+            CheckUpdatesCommand = new AsyncCommand(CheckUpdatesAsync, name: nameof(CheckUpdatesCommand));
+            OpenAboutDialogCommand = new AsyncCommand(OpenAboutDialogAsync, name: nameof(OpenAboutDialogCommand));
+
+            IsConfiguratorEnabled = _appConfig.IsDesktopAppAvailable;
+            _appConfig.PropertyChanged += AppConfig_PropertyChanged;
+
+            CreateAndStartTimer();
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="MainViewModel"/> class for design-time support.
+        /// </summary>
+        /// <remarks>
+        /// This constructor provides lightweight, no-op implementations of mandatory dependencies
+        /// to prevent <see cref="ArgumentNullException"/> when the XAML designer instantiates the VM.
+        /// </remarks>
+        public MainViewModel() : this(
+            new UI.Design.DesignTimeServiceManager(),     // IServiceManager
+            new UI.Design.DesignTimeServiceRepository(),  // IServiceRepository
+            new DesignTimeServiceCommands(),              // IServiceCommands
+            new UI.Design.DesignTimeHelpService(),        // HelpService
+            new UI.Design.DesignTimeMessageBoxService(),  // IMessageBoxService
+            new PerformanceViewModel(),                   // Design-time PerformanceVM
+            new ConsoleViewModel(),                       // Design-time ConsoleVM
+            new DependenciesViewModel(),                  // Design-time DependenciesVM
+            new LogsViewModel(),                          // Design-time LogsVM
+            new DesignTimeAppConfig(),                    // AppConfig placeholder
+            new UI.Design.DesignTimeCursorService(),      // CursorService placeholder
+            new UI.Design.DesignTimeProcessHelper(),      // ProcessHelper placeholder
+            null                                          // dispatcher
+        )
+        { }
+
+        #endregion
+
+        #region Private Methods/Events
+
+        /// <summary>
+        /// PropertyChanged event handler to capture dynamically updated settings from the application.
+        /// </summary>
+        private void AppConfig_PropertyChanged(object? sender, PropertyChangedEventArgs? e)
+        {
+            if (e?.PropertyName == nameof(IAppConfiguration.IsDesktopAppAvailable))
+            {
+                IsConfiguratorEnabled = _appConfig.IsDesktopAppAvailable;
+            }
+        }
+
+        /// <summary>
+        /// Triggers when a property on a service row changes.
+        /// </summary>
+        private void Service_PropertyChanged(object? sender, PropertyChangedEventArgs? e)
+        {
+            if (e?.PropertyName == nameof(ServiceRowViewModel.IsChecked))
+            {
+                if (_isUpdatingSelectAll) return;
+                UpdateSelectAllState();
+                OnPropertyChanged(nameof(HasSelectedServices));
+            }
+        }
+
+        /// <summary>
+        /// Updates the <see cref="SelectAll"/> property based on the current state of all services.
+        /// </summary>
+        private void UpdateSelectAllState()
+        {
+            if (_isUpdatingSelectAll) return;
+
+            _isUpdatingSelectAll = true;
+            try
+            {
+                if (_services.Any() && _services.All(s => s.IsChecked))
+                {
+                    SelectAll = true;
+                }
+                else if (_services.Any(s => s.IsChecked))
+                {
+                    SelectAll = null;
+                }
+                else
+                {
+                    SelectAll = false;
+                }
+            }
+            finally
+            {
+                _isUpdatingSelectAll = false;
+            }
+        }
+
+        /// <summary>
+        /// Creates a new <see cref="DispatcherTimer"/> configured with the application's refresh interval.
+        /// </summary>
+        private DispatcherTimer CreateTimer()
+        {
+            var timer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromSeconds(_appConfig.RefreshIntervalInSeconds)
+            };
+
+            timer.Tick += OnTick;
+
+            return timer;
+        }
+
+        /// <summary>
+        /// Handles the <see cref="DispatcherTimer.Tick"/> event for refreshing services.
+        /// Uses an <see cref="Interlocked"/> re-entrancy flag (<see cref="_isRefreshingFlag"/>) so an in-progress
+        /// refresh causes subsequent ticks to return immediately; the timer itself is not stopped.
+        /// </summary>
+        private async void OnTick(object? sender, EventArgs? e)
+        {
+            if (Interlocked.CompareExchange(ref _isRefreshingFlag, 1, 0) == 1)
+            {
+                Logger.Debug("Timer tick skipped; a service refresh is already in flight.");
+                return;
+            }
+
+            try
+            {
+                // Local copy pattern to protect against UI navigation/Search resets
+                var cts = _cts;
+                if (cts == null || cts.IsCancellationRequested) return;
+
+                var token = cts.Token;
+
+                await RefreshAllServicesAsync(token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Clean exit
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Failed background refresh.", ex);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _isRefreshingFlag, 0);
+            }
+        }
+
+        #endregion
+
+        #region Service Commands
+
+        /// <summary>
+        /// Performs search of services asynchronously.
+        /// </summary>
+        private async Task SearchServicesAsync(object? parameter)
+        {
+            await ExecuteSearchPipelineAsync(
+                async (token) =>
+                {
+                    // fetchAndApplyAsync 1 of 4 (runs inside the pipeline's step 5 & 6):
+                    // fetch data off UI thread
+                    var stopwatch = Stopwatch.StartNew();
+                    var results = await Task.Run(() => ServiceCommands.SearchServicesAsync(SearchText, true, token), token);
+                    stopwatch.Stop();
+                    Logger.Debug($"Fetched {results.Count} services in {stopwatch.ElapsedMilliseconds} ms");
+
+                    // fetchAndApplyAsync 2 of 4: build the row view models off UI thread
+                    stopwatch = Stopwatch.StartNew();
+                    var vms = await Task.Run(() =>
+                        results.Select(s => new ServiceRowViewModel(s, ServiceCommands, _cursorService)).ToList()
+                    , token);
+                    stopwatch.Stop();
+                    Logger.Debug($"Created {vms.Count} ServiceRowViewModels in {stopwatch.ElapsedMilliseconds} ms");
+
+                    // fetchAndApplyAsync 3 of 4: update collection on UI thread
+                    await _dispatcher.InvokeAsync(() =>
+                    {
+                        // Mutual exclusion: prevents the background refresh thread from
+                        // accessing the collection while we are rebuilding it.
+                        lock (_servicesLock)
+                        {
+                            // Explicitly dispose of existing ViewModels before clearing the collection
+                            foreach (var oldVm in _services)
+                            {
+                                oldVm.PropertyChanged -= Service_PropertyChanged;
+                                oldVm.Dispose();
+                            }
+
+                            _services.Clear();
+
+                            // 1. Hook up property changed events first
+                            foreach (var vm in vms)
+                            {
+                                vm.PropertyChanged += Service_PropertyChanged;
+                            }
+
+                            // 2. Add all items at once to trigger a single UI layout pass
+                            _services.AddRange(vms);
+                        }
+
+                        // Properties updated outside the lock to avoid potential nested UI notifications
+                        // while holding a synchronization primitive.
+                        SelectAll = false;
+
+                        // Notify that bulk action availability changed
+                        OnPropertyChanged(nameof(HasSelectedServices));
+                    }, DispatcherPriority.Background);
+
+                    // fetchAndApplyAsync 4 of 4: refresh all service statuses and details in the background.
+                    // Cancel any in-flight timer refresh targeting old row ViewModels and assign a fresh token source.
+                    var oldCts = Interlocked.Exchange(ref _cts, new CancellationTokenSource());
+                    if (oldCts != null)
+                    {
+                        Helpers.Helper.CancelAndDisposeSafely(oldCts);
+                    }
+
+                    var freshCts = _cts;
+                    var refreshToken = freshCts?.Token ?? token;
+
+                    _ = Task.Run(async () =>
+                    {
+                        // Wait out any canceling tick that is currently releasing _isRefreshingFlag
+                        while (Interlocked.CompareExchange(ref _isRefreshingFlag, 1, 0) == 1)
+                        {
+                            if (refreshToken.IsCancellationRequested) return;
+                            await Task.Delay(10, refreshToken).ConfigureAwait(false);
+                        }
+
+                        try
+                        {
+                            await RefreshAllServicesAsync(refreshToken);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            // expected when cancelled
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.Error($"RefreshAllServicesAsync failed.", ex);
+                        }
+                        finally { Interlocked.Exchange(ref _isRefreshingFlag, 0); }
+                    }, refreshToken);
+
+                    return vms.Count;
+                },
+                noneFormat: Strings.Footer_Service_None,
+                oneFormat: Strings.Footer_Service_One,
+                manyFormat: Strings.Footer_Service_Many,
+                onPreFetchYieldAsync: async () =>
+                {
+                    // onPreFetchYieldAsync hook (runs inside the pipeline's step 3 & 4):
+                    // allow WPF to repaint the button and show progress bar
+                    await _dispatcher.InvokeAsync(() => { }, DispatcherPriority.Background);
+                });
+        }
+
+        /// <summary>
+        /// Surfaces a search-pipeline failure to the user as a modal warning dialog.
+        /// </summary>
+        protected override async Task HandleSearchExceptionAsync(Exception ex)
+        {
+            await _messageBoxService.ShowWarningAsync(Strings.Msg_UnexpectedError, UiAppConfig.Caption);
+        }
+
+        /// <summary>
+        /// Launches configuration for the given service.
+        /// </summary>
+        private async Task ConfigureServiceAsync(object? parameter)
+        {
+            await ServiceCommands.ConfigureServiceAsync(parameter as Service, cancellationToken: _cts?.Token ?? CancellationToken.None);
+        }
+
+        /// <summary>
+        /// Imports XML configuration for services.
+        /// </summary>
+        private async Task ImportXmlConfigAsync(object? parameter)
+        {
+            await ServiceCommands.ImportXmlConfigAsync(cancellationToken: _cts?.Token ?? CancellationToken.None);
+        }
+
+        /// <summary>
+        /// Imports JSON configuration for services.
+        /// </summary>
+        private async Task ImportJsonConfigAsync(object? parameter)
+        {
+            await ServiceCommands.ImportJsonConfigAsync(cancellationToken: _cts?.Token ?? CancellationToken.None);
+        }
+
+        /// <summary>
+        /// Start all selected services.
+        /// </summary>
+        private Task StartSelectedAsync(object? parameter) =>
+            ExecuteBulkOperationAsync(
+                (s, token) =>
+                {
+                    return ServiceCommands.StartServiceAsync(s, showMessageBox: false, cancellationToken: token);
+                },
+                Strings.Confirm_StartSelectedServices,
+                "Failed to start selected services",
+                _cts?.Token ?? CancellationToken.None);
+
+        /// <summary>
+        /// Stop all selected services.
+        /// </summary>
+        private Task StopSelectedAsync(object? parameter) =>
+            ExecuteBulkOperationAsync(
+                (s, token) =>
+                {
+                    return ServiceCommands.StopServiceAsync(s, showMessageBox: false, cancellationToken: token);
+                },
+                Strings.Confirm_StopSelectedServices,
+                "Failed to stop selected services",
+                _cts?.Token ?? CancellationToken.None);
+
+        /// <summary>
+        /// Restart all selected services.
+        /// </summary>
+        private Task RestartSelectedAsync(object? parameter) =>
+            ExecuteBulkOperationAsync(
+                (s, token) =>
+                {
+                    return ServiceCommands.RestartServiceAsync(s, showMessageBox: false, cancellationToken: token);
+                },
+                Strings.Confirm_RestartSelectedServices,
+                "Failed to restart selected services",
+                _cts?.Token ?? CancellationToken.None);
+
+        #endregion
+
+        #region Help/Updates/About Commands
+
+        /// <summary>
+        /// Opens the Servy documentation page in the default browser.
+        /// </summary>
+        private async Task OpenDocumentationAsync(object? parameter)
+        {
+            await _helpService.OpenDocumentationAsync(UiAppConfig.Caption);
+        }
+
+        /// <summary>
+        /// Checks for the latest Servy release on GitHub and prompts the user if an update is available.
+        /// </summary>
+        private async Task CheckUpdatesAsync(object? parameter)
+        {
+            await _helpService.CheckUpdatesAsync(UiAppConfig.Caption);
+        }
+
+        /// <summary>
+        /// Displays the "About Servy" dialog with version and copyright information.
+        /// </summary>
+        private async Task OpenAboutDialogAsync(object? parameter)
+        {
+            await _helpService.OpenAboutDialogAsync(
+               string.Format(Strings.Text_About,
+               Core.Config.AppConfig.Version,
+               Helper.GetBuiltWithFramework(),
+               DateTime.Now.Year),
+               UiAppConfig.Caption);
+        }
+
+        #endregion
+
+        #region Public Methods
+
+        /// <summary>
+        /// Stops and cleans up the refresh timer to release resources and prevent references
+        /// from keeping the UI Dispatcher alive. Should be called when the window or view model is closing.
+        /// </summary>
+        public void StopRefreshTimer()
+        {
+            // Thread-safe disposal pattern
+            var oldCts = Interlocked.Exchange(ref _cts, null);
+            if (oldCts != null)
+            {
+                Helpers.Helper.CancelAndDisposeSafely(oldCts);
+            }
+
+            if (_refreshTimer != null)
+            {
+                _refreshTimer.Stop();         // Stop the timer
+                _refreshTimer.Tick -= OnTick; // Unsubscribe event
+                _refreshTimer = null;
+            }
+        }
+
+        /// <summary>
+        /// Ensures the refresh timer exists and is running. Creates the timer if it does not exist,
+        /// and starts it if it is not already enabled.
+        /// </summary>
+        public void CreateAndStartTimer()
+        {
+            if (Volatile.Read(ref _isDisposed) != 0) return;
+
+            // Resync state in case AppConfig changed while the Main tab was deactivated
+            IsConfiguratorEnabled = _appConfig.IsDesktopAppAvailable;
+
+            Interlocked.CompareExchange(ref _cts, new CancellationTokenSource(), null);
+
+            if (_refreshTimer == null)
+            {
+                _refreshTimer = CreateTimer();
+            }
+
+            // Start the timer only if it is not already running
+            if (!_refreshTimer.IsEnabled)
+            {
+                _refreshTimer.Start();
+            }
+        }
+
+        #endregion
+
+        #region Helpers
+
+        /// <summary>
+        /// Executes a bulk operation on all selected and installed services.
+        /// </summary>
+        /// <param name="operation">
+        /// The asynchronous action delegate to execute for each service. Must handle any UI updates safely on the UI thread.
+        /// </param>
+        /// <param name="confirmMessage">Confirmation prompt displayed to the user before starting the operation.</param>
+        /// <param name="logErrorMessage">Error message logged if the overall bulk operation fails.</param>
+        /// <param name="token">Cancellation token to observe during execution.</param>
+        private async Task ExecuteBulkOperationAsync(
+            Func<Service?, CancellationToken, Task<bool>> operation,
+            string confirmMessage,
+            string logErrorMessage,
+            CancellationToken token)
+        {
+            bool busyEntered = false;
+
+            try
+            {
+                token.ThrowIfCancellationRequested();
+
+                // 1. Identify selected and installed services
+                var selectedServices = _services
+                    .Where(s => s.IsInstalled && s.IsChecked)
+                    .Select(s => s.Service)
+                    .ToList();
+
+                if (selectedServices.Count == 0)
+                {
+                    await _messageBoxService.ShowInfoAsync(Strings.Msg_NoServicesSelected, UiAppConfig.Caption);
+                    return;
+                }
+
+                // 2. Request user confirmation
+                if (!await _messageBoxService.ShowConfirmAsync(confirmMessage, UiAppConfig.Caption))
+                    return;
+
+                await SetBusyStateAsync(true);
+                busyEntered = true;
+
+                // 3. Dispatch all operations concurrently: Scale parallelism up to 2x logical CPU cores, capped by application configuration.
+                int maxDegreeOfParallelism = Math.Max(1, Math.Min(Environment.ProcessorCount * 2, _appConfig.MaxBulkOperationParallelism));
+
+                using (var throttler = new SemaphoreSlim(maxDegreeOfParallelism))
+                {
+                    var operationTasks = selectedServices.Select(async service =>
+                    {
+                        await throttler.WaitAsync(token).ConfigureAwait(false);
+                        try
+                        {
+                            token.ThrowIfCancellationRequested();
+
+                            bool success = await operation(service, token).ConfigureAwait(false);
+                            return new { ServiceName = service?.Name ?? string.Empty, Success = success };
+                        }
+                        finally
+                        {
+                            throttler.Release();
+                        }
+                    }).ToList();
+
+                    var results = await Task.WhenAll(operationTasks).ConfigureAwait(false);
+
+                    // Filter out the failed ones
+                    var failed = results.Where(r => !r.Success).Select(r => r.ServiceName).ToList();
+
+                    // 4. Handle results and UI feedback
+                    await await _dispatcher.InvokeAsync(new Func<Task>(async () =>
+                    {
+                        if (failed.Count == 0)
+                        {
+                            await _messageBoxService.ShowInfoAsync(Strings.Msg_OperationCompletedSuccessfully, UiAppConfig.Caption);
+                        }
+                        else
+                        {
+                            var message = failed.Count == selectedServices.Count
+                                ? Strings.Msg_AllOperationsFailed
+                                : string.Format(Strings.Msg_OperationCompletedWithErrorsDetails, string.Join(", ", failed));
+
+                            await _messageBoxService.ShowWarningAsync(message, UiAppConfig.Caption);
+                        }
+                    }));
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected cleanup execution path on application close
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"{logErrorMessage}.", ex);
+            }
+            finally
+            {
+                if (busyEntered)
+                {
+                    await SetBusyStateAsync(false);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Refresh all services description, status, startup type, user and installation state without blocking the UI thread.
+        /// </summary>
+        /// <param name="token">Explicit cancellation token to prevent mid-execution NullReferenceExceptions.</param>
+        private async Task RefreshAllServicesAsync(CancellationToken token)
+        {
+            try
+            {
+                token.ThrowIfCancellationRequested();
+
+                // 1. Take snapshot of services safely
+                var snapshot = new List<Service>();
+                lock (_servicesLock)
+                {
+                    snapshot = _services.Select(r => r.Service).ToList();
+                }
+
+                if (snapshot.Count == 0)
+                {
+                    return; // nothing to refresh: skip the SCM enumeration and the decrypting DB read
+                }
+
+                // 2. Fetch OS Info in bulk (Off UI thread)
+#if DEBUG
+                var stopwatch = Stopwatch.StartNew();
+#endif
+                var allServicesList = await Task.Run(() => _serviceManager.GetAllServices(token), token);
+#if DEBUG
+                stopwatch.Stop();
+                Logger.Debug($"GetAllServices finished in {stopwatch.ElapsedMilliseconds} ms");
+#endif
+                var allServicesDict = BuildUniqueNameDictionary(allServicesList, s => s.Name);
+
+                // 3. Fetch all Repository DTOs in bulk
+                var allDtosList = await _serviceRepository.GetAllAsync(decrypt: true, token);
+                var allDtosDict = BuildUniqueNameDictionary(allDtosList, d => d.Name);
+
+                // 4. Process data collection in parallel
+                // We collect the updates in thread-safe bags instead of applying them immediately
+                var changedDtos = new System.Collections.Concurrent.ConcurrentBag<ServiceDto>();
+                var uiUpdates = new System.Collections.Concurrent.ConcurrentBag<ServiceUpdateInfo>();
+                // Scale parallelism up to 2x logical CPU cores, capped by application configuration.
+                int maxRefreshDegreeOfParallelism = Math.Max(1, Math.Min(Environment.ProcessorCount * 2, _appConfig.MaxBulkOperationParallelism));
+
+                await Task.Run(() =>
+                {
+                    Parallel.ForEach(
+                        snapshot,
+                        new ParallelOptions
+                        {
+                            MaxDegreeOfParallelism = maxRefreshDegreeOfParallelism,
+                            CancellationToken = token
+                        },
+                        service =>
+                        {
+                            if (service == null || string.IsNullOrWhiteSpace(service.Name)) return;
+                            allDtosDict.TryGetValue(service.Name, out var dto);
+
+                            // Collect updates without touching the UI model yet
+                            var result = GetServiceUpdateInfo(service, allServicesDict, dto, token);
+
+                            if (result.UpdateInfo != null)
+                                uiUpdates.Add(result.UpdateInfo);
+
+                            if (result.UpdatedDto != null)
+                                changedDtos.Add(result.UpdatedDto);
+                        });
+                }, token);
+
+                // 5. Batch-Apply all UI updates to the UI thread in one go
+                // This prevents the "Collection modified" crash by ensuring
+                // property changes happen in a controlled, sequential batch.
+                if (!uiUpdates.IsEmpty)
+                {
+                    await _dispatcher.InvokeAsync(() =>
+                    {
+                        foreach (var info in uiUpdates)
+                        {
+                            ApplyServiceUpdate(info);
+                        }
+
+                        // Run this once after the batch finishes to stabilize the UI state
+                        UpdateSelectAllState();
+                    }, DispatcherPriority.Background, cancellationToken: token);
+                }
+
+                // 6. Execute a single atomic database batch write for all drifted services
+                if (changedDtos.Any())
+                {
+                    await _serviceRepository.UpsertBatchAsync(changedDtos, token);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected on cancellation
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Failed to refresh all services.", ex);
+            }
+        }
+
+        /// <summary>
+        /// Aggregates an enumerable collection of entities into a case-insensitive dictionary by name.
+        /// Filters out blank entries and logs structured warning alerts for duplicate name variants.
+        /// </summary>
+        /// <typeparam name="T">The type of the entity model within the collection.</typeparam>
+        /// <param name="sourceList">The incoming database or system source collection.</param>
+        /// <param name="nameExtractor">A delegate to retrieve the naming string property from the entity.</param>
+        /// <returns>
+        /// A dictionary keyed by name using <see cref="StringComparer.OrdinalIgnoreCase"/>;
+        /// blank names are skipped and case-insensitive duplicates keep the first occurrence (a warning is logged for the rest).
+        /// </returns>
+        private static Dictionary<string, T> BuildUniqueNameDictionary<T>(
+            IEnumerable<T> sourceList,
+            Func<T, string?> nameExtractor) where T : class
+        {
+            var dictionary = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+
+            if (sourceList == null) return dictionary;
+
+            foreach (var item in sourceList)
+            {
+                string? name = nameExtractor(item);
+
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    Logger.Warn("Service with no name ignored during refresh.");
+                    continue;
+                }
+
+                if (!dictionary.ContainsKey(name))
+                {
+                    dictionary[name] = item;
+                }
+                else
+                {
+                    Logger.Warn($"Duplicate service name under OrdinalIgnoreCase ignored during refresh: '{name}'.");
+                }
+            }
+
+            return dictionary;
+        }
+
+        /// <summary>
+        /// Pure logic method to calculate what needs to change without touching UI models.
+        /// </summary>
+        private (ServiceUpdateInfo? UpdateInfo, ServiceDto? UpdatedDto) GetServiceUpdateInfo(
+            Service service,
+            Dictionary<string, ServiceInfo>? allServices,
+            ServiceDto? serviceDto,
+            CancellationToken token)
+        {
+            try
+            {
+                token.ThrowIfCancellationRequested();
+
+                var update = new ServiceUpdateInfo(service);
+
+                // 1. Evaluate OS Status First
+                if (allServices != null && !string.IsNullOrWhiteSpace(service.Name) && allServices.TryGetValue(service.Name, out var info) && info != null)
+                {
+                    update.IsInstalled = true;
+                    update.Status = info.Status;
+                    update.StartupType = info.StartupType;
+                    update.LogOnAs = ServiceMapper.GetLogOnAsDisplayName(info.LogOnAs ?? UiAppConfig.LocalSystem);
+                    update.Description = info.Description;
+                }
+                else
+                {
+                    update.IsInstalled = false;
+                    update.Status = ServiceStatus.NotInstalled;
+                }
+
+                // 2. Determine if the wrapper is actually dead according to Windows
+                bool isProcessDead = update.Status == ServiceStatus.Stopped || update.Status == ServiceStatus.NotInstalled;
+
+                // 3. Prioritize DB PID, but force to null if the process is dead (Ignore Ghost PIDs)
+                int? targetPid = isProcessDead ? null : (serviceDto?.Pid ?? service.Pid);
+
+                // Gather metrics using the safe targetPid
+                double? cpu = null;
+                long? ram = null;
+                if (targetPid.HasValue && targetPid.Value > 0)
+                {
+                    _processHelper.MaintainCache();
+                    var metrics = _processHelper.GetProcessTreeMetrics(targetPid.Value);
+                    cpu = metrics.CpuUsage;
+                    ram = metrics.RamUsage;
+                }
+
+                update.CpuUsage = cpu;
+                update.RamUsage = ram;
+
+                if (update.StartupType == null && serviceDto != null && serviceDto.StartupType.HasValue)
+                {
+                    update.StartupType = ConfigParser.ParseEnum(serviceDto.StartupType, AppConfig.DefaultStartupType);
+                }
+
+                ServiceDto? resultDto = null;
+                if (serviceDto != null)
+                {
+                    // 4. Sync PID to UI. Because we use targetPid, this correctly pushes 'null'
+                    // to the UI if the service crashed, even if the DB is stuck on 7020.
+                    if (service.Pid != targetPid)
+                    {
+                        update.RequiresPidUpdate = true;
+                        update.NewPid = targetPid;
+                    }
+
+                    // Check for DB metadata drift
+                    var currentDescription = update.Description ?? service.Description;
+                    var currentStartupType = update.StartupType ?? service.StartupType;
+
+                    var dbDesc = serviceDto.Description ?? string.Empty;
+                    var currDesc = currentDescription ?? string.Empty;
+
+                    bool descDrifted = !string.Equals(dbDesc, currDesc, StringComparison.Ordinal);
+                    bool startupDrifted = currentStartupType.HasValue && serviceDto.StartupType != (int)currentStartupType.Value;
+
+                    if (descDrifted || startupDrifted)
+                    {
+                        serviceDto.Description = currentDescription;
+                        if (currentStartupType.HasValue)
+                        {
+                            serviceDto.StartupType = (int)currentStartupType.Value;
+                        }
+
+                        // Note: We are deliberately NOT modifying serviceDto.Pid here,
+                        // leaving database writes exclusively to the wrapper.
+                        resultDto = serviceDto;
+                    }
+                }
+                else
+                {
+                    update.RequiresPidUpdate = true;
+                    update.NewPid = null;
+                }
+
+                return (update, resultDto);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error($"Failed to prepare refresh for {service.Name}.", ex);
+                return (null, null);
+            }
+        }
+
+        /// <summary>
+        /// Safely applies a gathered update to the UI model. Must be called from the UI thread.
+        /// </summary>
+        private void ApplyServiceUpdate(ServiceUpdateInfo info)
+        {
+            var service = info.Target;
+
+            if (info.RequiresPidUpdate)
+            {
+                service.Pid = info.NewPid;
+                service.IsPidEnabled = service.Pid != null;
+            }
+
+            service.CpuUsage = info.CpuUsage;
+            service.RamUsage = info.RamUsage;
+            service.IsInstalled = info.IsInstalled;
+
+            if (info.Status.HasValue && service.Status != info.Status.Value)
+                service.Status = info.Status.Value;
+
+            if (info.StartupType.HasValue && service.StartupType != info.StartupType.Value)
+                service.StartupType = info.StartupType.Value;
+
+            if (info.LogOnAs != null && service.LogOnAs != info.LogOnAs)
+                service.LogOnAs = info.LogOnAs;
+
+            if (info.Description != null && service.Description != info.Description)
+                service.Description = info.Description;
+        }
+
+        /// <summary>
+        /// Simple nested class to hold the results of background work.
+        /// </summary>
+        internal sealed class ServiceUpdateInfo
+        {
+            public Service Target { get; }
+
+            public bool RequiresPidUpdate { get; set; }
+            public int? NewPid { get; set; }
+            public double? CpuUsage { get; set; }
+            public long? RamUsage { get; set; }
+            public bool IsInstalled { get; set; }
+            public ServiceStatus? Status { get; set; }
+            public ServiceStartType? StartupType { get; set; }
+            public string? LogOnAs { get; set; }
+            public string? Description { get; set; }
+
+            public ServiceUpdateInfo(Service target)
+            {
+                Target = target;
+            }
+        }
+
+        /// <summary>
+        /// Sets the busy state and updates the mouse cursor accordingly without blocking the calling thread.
+        /// </summary>
+        private async Task SetBusyStateAsync(bool busy)
+        {
+            await _dispatcher.InvokeAsync(() =>
+            {
+                IsBusy = busy;
+                if (busy)
+                {
+                    _cursorService.SetWaitCursor();
+                }
+                else
+                {
+                    _cursorService.ResetCursor();
+                }
+            });
+        }
+
+        /// <summary>
+        /// Removes a service from the services collection, unsubscribes from its events,
+        /// and refreshes the view. This method is thread-safe and dispatches to the UI thread.
+        /// </summary>
+        /// <remarks>
+        /// Also cancels any in-flight search via <see cref="SearchableViewModelBase.ClearActiveSearchContext"/>: its results
+        /// would describe a list this removal has already changed. The search is abandoned silently -
+        /// the footer keeps the previous search's row count until the next search runs.
+        /// </remarks>
+        public void RemoveService(string serviceName)
+        {
+            if (string.IsNullOrWhiteSpace(serviceName)) return;
+
+            Action action = () =>
+            {
+                var stopwatch = Stopwatch.StartNew();
+                ServiceRowViewModel? itemToRemove;
+
+                lock (_servicesLock)
+                {
+                    itemToRemove = _services.FirstOrDefault(s =>
+                        string.Equals(s.Service?.Name, serviceName, StringComparison.OrdinalIgnoreCase));
+                    if (itemToRemove == null)
+                    {
+                        Logger.Warn($"RemoveService({serviceName}) called, but no matching service found in the collection.");
+                        return;
+                    }
+
+                    itemToRemove.PropertyChanged -= Service_PropertyChanged;
+                    _services.Remove(itemToRemove);
+                }
+
+                itemToRemove.Dispose();
+                ServicesView.Refresh();
+
+                stopwatch.Stop();
+                Logger.Debug($"RemoveService({serviceName}) finished in {stopwatch.ElapsedMilliseconds} ms");
+                ClearActiveSearchContext();
+                UpdateSelectAllState();
+            };
+
+            if (_dispatcher.CheckAccess())
+            {
+                action();
+            }
+            else
+            {
+                _dispatcher.InvokeAsync(action, DispatcherPriority.Background);
+            }
+        }
+
+        /// <summary>
+        /// Refreshes the services list by re-running the search.
+        /// </summary>
+        public async Task RefreshAsync()
+        {
+            await SearchServicesAsync(null);
+        }
+
+        #endregion
+
+        #region IDisposable implementation
+
+        /// <summary>
+        /// Protected virtual dispose method following the standard pattern.
+        /// </summary>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                _appConfig.PropertyChanged -= AppConfig_PropertyChanged;
+
+                // Stop the main timer first so no more ticks reach ServiceCommands.
+                StopRefreshTimer();
+
+                // Dispose child VMs so their timers/CTS/tailers stop before we tear down
+                // the shared ServiceCommands instance they still reference.
+                (PerformanceVM as IDisposable)?.Dispose();
+                (ConsoleVM as IDisposable)?.Dispose();
+                (DependenciesVM as IDisposable)?.Dispose();
+                (LogsVM as IDisposable)?.Dispose();
+
+                // Drain the row VM list - unhook MainViewModel's handler and
+                // dispose each row so its own Service.PropertyChanged unsubscription runs.
+                lock (_servicesLock)
+                {
+                    foreach (var vm in _services)
+                    {
+                        vm.PropertyChanged -= Service_PropertyChanged;
+                        vm.Dispose();
+                    }
+                    _services.Clear();
+                }
+
+                // Now safe to dispose the shared command engine.
+                ServiceCommands?.Dispose();
+            }
+
+            base.Dispose(disposing);
+        }
+
+        #endregion
+    }
+}

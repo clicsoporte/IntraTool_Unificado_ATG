@@ -1,0 +1,112 @@
+﻿#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Runs unit tests and integration tests, and generates code coverage reports.
+
+.DESCRIPTION
+    This script performs the following tasks:
+    1. Cleans up previous test results and coverage reports.
+    2. Runs unit tests for dynamically discovered test projects using 'dotnet test'.
+    3. Collects code coverage in Cobertura format.
+    4. Generates an aggregated HTML coverage report using ReportGenerator.
+
+.PARAMETER IncludeStress
+    When specified, includes tests tagged with Category=Stress. Defaults to excluding them.
+
+.EXAMPLE
+    ./test.ps1
+    Runs all unit tests (excluding Stress tests) and generates the coverage report.
+
+.EXAMPLE
+    ./test.ps1 -IncludeStress
+    Runs all unit tests, including Stress tests, and generates the coverage report.
+
+.NOTES
+    Author: Akram El Assas
+
+    Requirements:
+        - .NET SDK installed and accessible in PATH.
+        - ReportGenerator tool installed and available in PATH.
+#>
+param(
+    [switch]$IncludeStress
+)
+
+$ErrorActionPreference = "Stop"
+
+# Load shared coverage configuration filters
+$CoverageFilters = . (Join-Path $PSScriptRoot "coverage-filters.ps1")
+
+# Directories
+$ScriptDir = $PSScriptRoot
+$TestResultsDir = Join-Path -Path $ScriptDir -ChildPath "TestResults"
+$CoverageReportDir = Join-Path -Path $ScriptDir -ChildPath "coveragereport"
+
+# Cleanup previous results
+if (Test-Path $TestResultsDir) {
+    Write-Host "Cleaning up previous test results..."
+    Remove-Item -Path $TestResultsDir -Recurse -Force
+}
+
+if (Test-Path $CoverageReportDir) {
+    Write-Host "Cleaning up previous coverage report..."
+    Remove-Item -Path $CoverageReportDir -Recurse -Force
+}
+
+# The native filesystem globbing filter (*Tests.csproj) already naturally excludes 'Servy.Testing.csproj'.
+$RawTestProjects = Get-ChildItem -Path $ScriptDir -Recurse -Filter '*Tests.csproj'
+
+if (-not $RawTestProjects) {
+    Write-Host "No '*Tests.csproj' projects found under $ScriptDir - nothing to test." -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "Discovered $($RawTestProjects.Count) test project(s)." -ForegroundColor Cyan
+
+# Run tests and collect coverage for each project
+foreach ($ProjFile in $RawTestProjects) {
+    $Proj = $ProjFile.FullName
+    $ProjName = $ProjFile.BaseName
+
+    Write-Host "Running tests for $($Proj)..." -ForegroundColor Cyan
+
+    $resultsPath = Join-Path $TestResultsDir $ProjName
+
+    # Build pure MTP v2 'dotnet test' arguments
+    $dotnetArgs = @(
+        'test', $Proj,
+        '--configuration', 'Debug'
+    )
+
+    if (-not $IncludeStress) {
+        $dotnetArgs += @('--filter', 'Category!=Stress')
+    }
+
+    $dotnetArgs += @(
+        '--results-directory', $resultsPath,
+        '--',
+        '--coverage',
+        '--coverage-output-format', 'cobertura',
+        '--coverage-output', 'coverage.cobertura.xml'
+    )
+
+    & dotnet @dotnetArgs
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "dotnet test failed for $Proj (exit $LASTEXITCODE)" -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
+}
+
+# Generate a global coverage report
+$CoverageFiles = Join-Path -Path $TestResultsDir -ChildPath "**/*.cobertura.xml"
+Write-Host "Generating global coverage report..."
+reportgenerator `
+    -reports:$CoverageFiles `
+    -targetdir:$CoverageReportDir `
+    -reporttypes:Html `
+    -assemblyfilters:$CoverageFilters.Assemblies `
+    -filefilters:$CoverageFilters.Files
+
+if ($LASTEXITCODE -ne 0) { Write-Host "reportgenerator failed"; exit $LASTEXITCODE }
+
+Write-Host "Coverage report generated at $CoverageReportDir"

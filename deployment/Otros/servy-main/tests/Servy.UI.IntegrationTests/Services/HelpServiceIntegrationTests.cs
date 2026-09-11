@@ -1,0 +1,409 @@
+using Moq;
+using Moq.Protected;
+using Servy.Testing;
+using Servy.UI.Resources;
+using Servy.UI.Services;
+using System.Net;
+using System.Reflection;
+
+namespace Servy.UI.IntegrationTests.Services
+{
+    [Collection(UiStaCollection.Name)]
+    public class HelpServiceIntegrationTests : IDisposable
+    {
+        private readonly Mock<IMessageBoxService> _mockMessageBox;
+        private readonly HelpService _service;
+        private const string Caption = "Help Test";
+
+        private HttpMessageHandler? _originalHandler;
+        private HttpClient? _targetClient;
+
+        public HelpServiceIntegrationTests()
+        {
+            _mockMessageBox = new Mock<IMessageBoxService>();
+            _service = new HelpService(_mockMessageBox.Object);
+        }
+
+        public void Dispose()
+        {
+            // Restore the original handler to avoid cross-test static state pollution
+            if (_targetClient != null && _originalHandler != null)
+            {
+                try
+                {
+                    SetHandlerField(_targetClient, _originalHandler);
+                }
+                catch
+                {
+                    // Best effort cleanup during tear-down
+                }
+            }
+        }
+
+        #region Constructor Tests
+
+        [Fact]
+        public void Constructor_NullMessageBoxService_ThrowsArgumentNullException()
+        {
+            // Arrange & Act & Assert
+            // Branch: messageBoxService ?? throw new ArgumentNullException
+            Assert.Throws<ArgumentNullException>(() => new HelpService(null!));
+        }
+
+        #endregion
+
+        #region OpenDocumentation Tests
+
+        [Fact]
+        public async Task OpenDocumentation_InHeadlessMode_GracefullyDropsExecutionWithoutError()
+        {
+            // Arrange & Act
+            // UiHeadless is enabled via fixture, so OpenExternalUrl short-circuits before Process.Start;
+            // verify no error dialog is raised.
+            await _service.OpenDocumentationAsync(Caption);
+
+            // Assert
+            _mockMessageBox.Verify(m => m.ShowErrorAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        }
+
+        #endregion
+
+        #region OpenAboutDialog Tests
+
+        [Fact]
+        public async Task OpenAboutDialog_InvokesMessageBox()
+        {
+            // Arrange
+            const string aboutText = "Servy v1.0";
+
+            // Act
+            await _service.OpenAboutDialogAsync(aboutText, Caption);
+
+            // Assert
+            _mockMessageBox.Verify(m => m.ShowInfoAsync(aboutText, Caption), Times.Once);
+        }
+
+        #endregion
+
+        #region CheckUpdates Tests
+
+        [Fact]
+        public async Task CheckUpdates_NoTagNameInJson_ShowsNoUpdates()
+        {
+            // Arrange
+            // Branch: if (string.IsNullOrEmpty(tagName))
+            var mockHandler = new Mock<HttpMessageHandler>(MockBehavior.Strict);
+            mockHandler
+                .Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync(new HttpResponseMessage
+                {
+                    StatusCode = HttpStatusCode.OK,
+                    Content = new StringContent("{ \"name\": \"Draft Release\", \"tag_name\": \"\" }")
+                });
+
+            // Inject our mock handler directly into the existing static HttpClient instance
+            InjectMockHandlerIntoStaticClient(mockHandler.Object);
+
+            // Act
+            await _service.CheckUpdatesAsync(Caption);
+
+            // Assert
+            _mockMessageBox.Verify(
+                m => m.ShowErrorAsync(
+                    It.Is<string>(s => s == string.Format(Strings.Msg_UpdateCheckInvalidTag, "<missing>")),
+                    Caption),
+                Times.Once);
+        }
+
+        [Fact]
+        public async Task CheckUpdates_VersionIsOlder_ShowsNoUpdates()
+        {
+            // Arrange
+            // Branch: else { await _messageBoxService.ShowInfoAsync(Strings.Msg_NoUpdatesAvailable...) }
+            var mockHandler = new Mock<HttpMessageHandler>(MockBehavior.Strict);
+            mockHandler
+                .Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync(new HttpResponseMessage
+                {
+                    StatusCode = HttpStatusCode.OK,
+                    Content = new StringContent("{ \"tag_name\": \"v1.0.0\" }")
+                });
+
+            // Inject our mock handler directly into the existing static HttpClient instance
+            InjectMockHandlerIntoStaticClient(mockHandler.Object);
+
+            // Act
+            await _service.CheckUpdatesAsync(Caption);
+
+            // Assert
+            _mockMessageBox.Verify(
+                m => m.ShowInfoAsync(It.Is<string>(s => s == Strings.Msg_NoUpdatesAvailable), Caption),
+                Times.Once);
+        }
+
+        [Fact]
+        public async Task CheckUpdates_NewerVersionAvailable_UserConfirms_InHeadlessMode_DoesNotOpenBrowser()
+        {
+            // Arrange
+            // 1. Mock GitHub API returning a newer version tag
+            var mockHandler = new Mock<HttpMessageHandler>(MockBehavior.Strict);
+            mockHandler
+                .Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync(new HttpResponseMessage
+                {
+                    StatusCode = HttpStatusCode.OK,
+                    Content = new StringContent("{ \"tag_name\": \"v9999.0\", \"html_url\": \"https://github.com/aelassas/servy/releases/tag/v9999.0\" }")
+                });
+
+            InjectMockHandlerIntoStaticClient(mockHandler.Object);
+
+            // 2. Mock user clicking "Yes" on the update prompt
+            _mockMessageBox
+                .Setup(m => m.ShowConfirmAsync(It.IsAny<string>(), Caption))
+                .ReturnsAsync(true);
+
+            // Act
+            // Because UiHeadless.IsEnabled is true (via UiHeadlessFixture),
+            // HelpService.OpenExternalUrl short-circuits and will NOT call Process.Start.
+            await _service.CheckUpdatesAsync(Caption);
+
+            // Assert
+            _mockMessageBox.Verify(m => m.ShowConfirmAsync(It.IsAny<string>(), Caption), Times.Once);
+        }
+
+        [Fact]
+        public async Task CheckUpdates_NewerVersionAvailable_UserDeclines_DoesNothingFurther()
+        {
+            // Arrange
+            // Branch: if (normalizedLatest > normalizedCurrent) { var res = ...; if (res) } with res == false.
+            // Same newer-version fixture as the UserConfirms test above; only the answer differs.
+            SetupHandlerResponse("{ \"tag_name\": \"v9999.0\", \"html_url\": \"https://github.com/aelassas/servy/releases/tag/v9999.0\" }");
+
+            // Mock user clicking "No" on the update prompt
+            _mockMessageBox
+                .Setup(m => m.ShowConfirmAsync(It.IsAny<string>(), Caption))
+                .ReturnsAsync(false);
+
+            // Act
+            await _service.CheckUpdatesAsync(Caption);
+
+            // Assert
+            // Declining ends the method: the prompt was shown once and nothing else was reported.
+            _mockMessageBox.Verify(m => m.ShowConfirmAsync(It.IsAny<string>(), Caption), Times.Once);
+            _mockMessageBox.Verify(m => m.ShowErrorAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+            _mockMessageBox.Verify(m => m.ShowInfoAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task CheckUpdates_UnparseableTag_ShowsInvalidTagError()
+        {
+            // Arrange
+            // Branch: ROBUSTNESS guard, if (latestVersion == null)
+            // A non-empty tag clears the IsNullOrEmpty guard above it, and "not-a-version" does not
+            // start with a digit, so the sanitization regex does not match and ParseVersion returns null.
+            const string tagName = "not-a-version";
+
+            SetupHandlerResponse($"{{ \"tag_name\": \"{tagName}\" }}");
+
+            // Act
+            await _service.CheckUpdatesAsync(Caption);
+
+            // Assert
+            _mockMessageBox.Verify(
+                m => m.ShowErrorAsync(
+                    It.Is<string>(s => s == string.Format(Strings.Msg_UpdateCheckInvalidTag, tagName)),
+                    Caption),
+                Times.Once);
+
+            // Without the guard this tag reaches the comparison and is reported as "No updates available"
+            _mockMessageBox.Verify(m => m.ShowInfoAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task CheckUpdates_RequestTimesOut_ShowsTimeoutError()
+        {
+            // Arrange
+            // Branch: catch (OperationCanceledException)
+            SetupHandlerFailure(new OperationCanceledException());
+
+            // Act
+            await _service.CheckUpdatesAsync(Caption);
+
+            // Assert
+            _mockMessageBox.Verify(
+                m => m.ShowErrorAsync(It.Is<string>(s => s == Strings.Msg_UpdateCheckTimeout), Caption),
+                Times.Once);
+            _mockMessageBox.Verify(m => m.ShowInfoAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        }
+
+        [Fact]
+        public async Task CheckUpdates_RequestFails_ShowsUpdateCheckFailedError()
+        {
+            // Arrange
+            // Branch: catch (Exception ex)
+            SetupHandlerFailure(new HttpRequestException("no route to host"));
+
+            string shownError = string.Empty;
+            _mockMessageBox
+                .Setup(m => m.ShowErrorAsync(It.IsAny<string>(), Caption))
+                .Callback<string, string>((message, _) => shownError = message)
+                .Returns(Task.CompletedTask);
+
+            // Act
+            await _service.CheckUpdatesAsync(Caption);
+
+            // Assert
+            // The substituted text is the exception message HttpClient surfaces, which is not pinned here;
+            // the literal head of the format string is, so the assertion still fails if the general arm
+            // starts reporting through a different resource.
+            string prefix = FormatPrefix(Strings.Msg_UpdateCheckFailed);
+            Assert.NotEmpty(prefix);
+
+            _mockMessageBox.Verify(m => m.ShowErrorAsync(It.IsAny<string>(), Caption), Times.Once);
+            Assert.StartsWith(prefix, shownError);
+            _mockMessageBox.Verify(m => m.ShowInfoAsync(It.IsAny<string>(), It.IsAny<string>()), Times.Never);
+        }
+
+        /// <summary>
+        /// Injects a strict handler mock that answers every request with an OK response carrying the given body.
+        /// </summary>
+        /// <param name="json">The response body the mocked GitHub release endpoint returns.</param>
+        private void SetupHandlerResponse(string json)
+        {
+            var mockHandler = new Mock<HttpMessageHandler>(MockBehavior.Strict);
+            mockHandler
+                .Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .ReturnsAsync(new HttpResponseMessage
+                {
+                    StatusCode = HttpStatusCode.OK,
+                    Content = new StringContent(json)
+                });
+
+            InjectMockHandlerIntoStaticClient(mockHandler.Object);
+        }
+
+        /// <summary>
+        /// Injects a strict handler mock that fails every request with the given exception.
+        /// </summary>
+        /// <param name="exception">The exception the mocked transport raises.</param>
+        private void SetupHandlerFailure(Exception exception)
+        {
+            var mockHandler = new Mock<HttpMessageHandler>(MockBehavior.Strict);
+            mockHandler
+                .Protected()
+                .Setup<Task<HttpResponseMessage>>(
+                    "SendAsync",
+                    ItExpr.IsAny<HttpRequestMessage>(),
+                    ItExpr.IsAny<CancellationToken>())
+                .ThrowsAsync(exception);
+
+            InjectMockHandlerIntoStaticClient(mockHandler.Object);
+        }
+
+        /// <summary>
+        /// Returns the literal head of a composite format string, i.e. everything before its first
+        /// placeholder, so an assertion can pin which resource produced a message without depending
+        /// on the runtime text substituted into it.
+        /// </summary>
+        /// <param name="format">The composite format string to inspect.</param>
+        private static string FormatPrefix(string format)
+        {
+            int placeholder = format.IndexOf("{0}", StringComparison.Ordinal);
+            return placeholder < 0 ? format : format.Substring(0, placeholder);
+        }
+
+        #endregion
+
+        #region Private Mock Injection Framework
+
+        /// <summary>
+        /// Bypasses runtime initonly restrictions by modifying the private execution handler
+        /// instance deep inside the existing static HttpClient instance across .NET Core/5+ and .NET Framework 4.8.
+        /// </summary>
+        private void InjectMockHandlerIntoStaticClient(HttpMessageHandler mockHandler)
+        {
+            // 1. Extract the active static HttpClient instance from HelpService
+            _targetClient = TestReflection.GetFieldStatic<HttpClient>(typeof(HelpService), "_httpClient");
+
+            // 2. Capture the original handler before replacing it to support tear-down restoration
+            if (_originalHandler == null)
+            {
+                _originalHandler = GetHandlerField(_targetClient);
+            }
+
+            // 3. Set the mock handler into the private field using runtime-compatible field lookup
+            SetHandlerField(_targetClient, mockHandler);
+        }
+
+        private static HttpMessageHandler? GetHandlerField(HttpClient client)
+        {
+            var fieldInfo = GetHandlerFieldInfo(client);
+            return (HttpMessageHandler?)fieldInfo.GetValue(client);
+        }
+
+        private static void SetHandlerField(HttpClient client, HttpMessageHandler mockHandler)
+        {
+            var fieldInfo = GetHandlerFieldInfo(client);
+            fieldInfo.SetValue(client, mockHandler);
+        }
+
+        private static FieldInfo GetHandlerFieldInfo(HttpClient client)
+        {
+            var type = client.GetType();
+            while (type != null)
+            {
+                var field = type.GetField("_handler", BindingFlags.Instance | BindingFlags.NonPublic)
+                         ?? type.GetField("handler", BindingFlags.Instance | BindingFlags.NonPublic);
+
+                if (field != null)
+                {
+                    return field;
+                }
+
+                type = type.BaseType;
+            }
+
+            throw new InvalidOperationException("Could not locate handler field (_handler or handler) on HttpClient for this target framework.");
+        }
+
+        #endregion
+
+        #region NormalizeVersion Private Method Reflection Tests
+
+        [Fact]
+        public void NormalizeVersion_PartialVersionsWithNegativeFields_PadsMissingPartsToZero()
+        {
+            // Arrange
+            // System.Version elements constructed with 2 parts assign -1 automatically to Build and Revision fields
+            var incompleteVersion = new Version(4, 2);
+
+            // Act
+            // Non-public static invocation is routed cleanly via the centralized test reflection helper
+            var result = (Version)TestReflection.InvokeNonPublicStatic(typeof(HelpService), "NormalizeVersion", incompleteVersion)!;
+
+            // Assert
+            Assert.Equal(4, result.Major);
+            Assert.Equal(2, result.Minor);
+            Assert.Equal(0, result.Build);
+            Assert.Equal(0, result.Revision);
+        }
+
+        #endregion
+    }
+}

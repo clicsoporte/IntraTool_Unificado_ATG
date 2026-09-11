@@ -1,0 +1,331 @@
+using Servy.Core.Config;
+using Servy.Core.Logging;
+using Servy.Manager.Mappers;
+using Servy.Manager.Models;
+using Servy.Manager.Services;
+using Servy.UI.Commands;
+using Servy.UI.Constants;
+using Servy.UI.Services;
+using System.Windows.Threading;
+
+namespace Servy.Manager.ViewModels
+{
+    /// <summary>
+    /// Base class that provides robust, re-entrant-safe monitoring timer logic.
+    /// </summary>
+    /// <remarks>
+    /// This class utilizes <see cref="Interlocked"/> operations to ensure that overlapping timer ticks
+    /// do not result in concurrent execution of the polling logic. It also prevents the timer
+    /// from "resurrecting" if a stop request is issued while a tick is currently processing.
+    /// </remarks>
+    public abstract class MonitoringViewModelBase : ServiceSearchViewModelBase
+    {
+        /// <summary>
+        /// The timer used to trigger periodic monitoring updates on the UI thread dispatcher.
+        /// </summary>
+        private DispatcherTimer? _timer;
+
+        /// <summary>
+        /// Provides a cancellation token to background tasks associated with the current active monitoring session.
+        /// </summary>
+        private CancellationTokenSource? _monitoringCts;
+
+        /// <summary>
+        /// Atomic flag representing the overall monitoring state.
+        /// 0 = Stopped, 1 = Monitoring.
+        /// </summary>
+        private int _isMonitoringFlag = 0;
+
+        /// <summary>
+        /// Atomic flag representing the execution state of the current tick.
+        /// 0 = Idle, 1 = Processing.
+        /// </summary>
+        private int _isTickRunningFlag = 0;
+
+        /// <summary>
+        /// Tracks the total number of sequential monitoring failures to support log rate-limiting.
+        /// </summary>
+        private long _tickErrorCount = 0;
+
+        /// <summary>
+        /// Backing field for <see cref="Pid"/>; holds <see cref="UiConstants.NotAvailable"/> while no process is known.
+        /// </summary>
+        private string _pid = UiConstants.NotAvailable;
+
+        /// <summary>
+        /// Whether the previous tick had a service selected, used to detect the selection-lost transition.
+        /// </summary>
+        private bool _hadSelectedService;
+
+        /// <summary>
+        /// Gets or sets the Process ID string for display in the UI.
+        /// </summary>
+        public string Pid
+        {
+            get => _pid;
+            set => Set(ref _pid, value);
+        }
+
+        /// <summary>
+        /// Command to copy the current Process ID to the clipboard.
+        /// </summary>
+        public IAsyncCommand CopyPidCommand { get; }
+
+        /// <summary>
+        /// When overridden in a derived class, exposes the currently selected service item base reference.
+        /// </summary>
+        protected abstract ServiceItemBase? SelectedServiceItem { get; }
+
+        /// <summary>
+        /// Gets the refresh interval in milliseconds for the monitoring timer.
+        /// </summary>
+        /// <value>The delay between consecutive monitoring ticks.</value>
+        protected abstract int RefreshIntervalMs { get; }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="MonitoringViewModelBase"/> class.
+        /// </summary>
+        /// <param name="cursorService">Service to manage cursor state.</param>
+        /// <param name="uiDispatcher">Dispatcher for UI thread operations.</param>
+        /// <param name="serviceCommands">Commands for service operations.</param>
+        protected MonitoringViewModelBase(ICursorService cursorService, IUiDispatcher uiDispatcher, IServiceCommands serviceCommands)
+            : base(cursorService, uiDispatcher, serviceCommands)
+        {
+            CopyPidCommand = new AsyncCommand(CopyPidAsync, _ => SelectedServiceItem?.Pid != null, name: nameof(CopyPidCommand));
+        }
+
+        /// <summary>
+        /// Initializes the <see cref="DispatcherTimer"/> if it has not been created yet,
+        /// binding it to the defined <see cref="RefreshIntervalMs"/> and hooking the tick event.
+        /// </summary>
+        protected void InitTimer()
+        {
+            if (_timer == null)
+            {
+                _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(RefreshIntervalMs) };
+                _timer.Tick += OnTick;
+            }
+        }
+
+        /// <summary>
+        /// Handles the <see cref="DispatcherTimer.Tick"/> event.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">An object that contains no event data.</param>
+        /// <remarks>
+        /// This method implements an atomic guard to prevent re-entrancy. The timer is explicitly stopped
+        /// during the asynchronous execution of <see cref="OnTickAsync"/> and restarted in the finally block
+        /// only if <see cref="_isMonitoringFlag"/> indicates monitoring is still requested.
+        /// </remarks>
+        private async void OnTick(object? sender, EventArgs? e)
+        {
+            // 1. Atomic Guard: Must be monitoring AND not already running a tick
+            if (Volatile.Read(ref _isMonitoringFlag) == 0 ||
+                Interlocked.CompareExchange(ref _isTickRunningFlag, 1, 0) == 1)
+            {
+                return;
+            }
+
+            _timer?.Stop();
+
+            try
+            {
+                await OnTickAsync();
+
+                // Reset error counter upon a completely successful operation sequence
+                Interlocked.Exchange(ref _tickErrorCount, 0);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected behavior during shutdown or monitoring reset.
+                Interlocked.Exchange(ref _tickErrorCount, 0);
+            }
+            catch (Exception ex)
+            {
+                // Interlocked keeps this consistent with the two Exchange resets above; ticks themselves
+                // are already serialised by _isTickRunningFlag, and the counter is per view model instance.
+                long currentErrorCount = Interlocked.Increment(ref _tickErrorCount);
+
+                if (currentErrorCount == 1 || currentErrorCount % AppConfig.MonitoringTickErrorLogThrottlingInterval == 0)
+                {
+                    Logger.Warn($"Background monitoring tick failed in {GetType().Name} (Consecutive Failure Count: {currentErrorCount}).", ex);
+                }
+
+                // Do NOT rethrow - async void would terminate the dispatcher and crash the Manager UI.
+            }
+            finally
+            {
+                // Release the execution flag
+                Interlocked.Exchange(ref _isTickRunningFlag, 0);
+
+                // 2. Safety Check: Only restart if we are STILL supposed to be monitoring
+                if (Volatile.Read(ref _isMonitoringFlag) == 1)
+                {
+                    _timer?.Start();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Performs the centralized asynchronous monitoring execution loop logic, managing selection states
+        /// and providing standardized hooks to derived context implementations.
+        /// </summary>
+        /// <returns>A <see cref="Task"/> representing the asynchronous execution sequence operation.</returns>
+        protected async Task OnTickAsync()
+        {
+            var token = GetCurrentMonitoringToken();
+            var currentSelection = SelectedServiceItem;
+
+            if (currentSelection == null)
+            {
+                if (_hadSelectedService)
+                {
+                    ResetMonitoringState();
+                    _hadSelectedService = false;
+                    CopyPidCommand.RaiseCanExecuteChanged();
+                }
+                return;
+            }
+            _hadSelectedService = true;
+
+            await ApplyTickAsync(currentSelection, token);
+        }
+
+        /// <summary>
+        /// When overridden in a derived class, resets view-specific components when active service selection is lost.
+        /// </summary>
+        protected abstract void ResetMonitoringState();
+
+        /// <summary>
+        /// When overridden in a derived class, performs the per-tick refresh for the selected service.
+        /// </summary>
+        /// <param name="selection">The currently selected service; never <see langword="null"/>.</param>
+        /// <param name="token">Token for the current monitoring session; may already be cancelled.</param>
+        /// <returns>A task that completes when the tick's work is done.</returns>
+        protected abstract Task ApplyTickAsync(ServiceItemBase selection, CancellationToken token);
+
+        /// <summary>
+        /// Thread-safely cancels any active monitoring operations and creates a fresh <see cref="CancellationTokenSource"/>.
+        /// </summary>
+        protected void ResetMonitoringCts()
+        {
+            var newCts = new CancellationTokenSource();
+            var oldCts = Interlocked.Exchange(ref _monitoringCts, newCts);
+            if (oldCts != null)
+            {
+                Helpers.Helper.CancelAndDisposeSafely(oldCts);
+            }
+        }
+
+        /// <summary>
+        /// Starts the monitoring timer, initializes the cancellation context,
+        /// and atomically sets the monitoring flag to active.
+        /// </summary>
+        public virtual void StartMonitoring()
+        {
+            if (Volatile.Read(ref _isDisposed) != 0) return;
+            ResetMonitoringCts();
+            Interlocked.Exchange(ref _tickErrorCount, 0); // start each session with a fresh throttle window
+            Interlocked.Exchange(ref _isMonitoringFlag, 1);
+            InitTimer();
+            _timer?.Start();
+        }
+
+        /// <summary>
+        /// Stops the monitoring timer, cancels any in-flight background operations,
+        /// and atomically sets the monitoring flag to stopped.
+        /// </summary>
+        public virtual void StopMonitoring()
+        {
+            _monitoringCts?.Cancel();
+            Interlocked.Exchange(ref _isMonitoringFlag, 0);
+            _timer?.Stop();
+
+            // Unconditionally fire the stop extension point so derived models can run teardown logic
+            OnMonitoringStopped();
+        }
+
+        /// <summary>
+        /// Invoked unconditionally by <see cref="StopMonitoring"/> to allow derived classes to execute
+        /// teardown logic, state persistence, or view clearing operations.
+        /// </summary>
+        protected virtual void OnMonitoringStopped()
+        {
+        }
+
+        /// <summary>
+        /// Safely retrieves the current monitoring cancellation token.
+        /// Returns <see cref="CancellationToken.None"/> when no monitoring session has been started yet,
+        /// and also after <see cref="Dispose(bool)"/>, which clears the source rather than leaving it in place.
+        /// Returns a pre-cancelled token if the source is observed mid-swap in <see cref="ResetMonitoringCts"/>
+        /// and has already been disposed by the time its token is read.
+        /// </summary>
+        /// <returns>A valid <see cref="CancellationToken"/> linked to the current monitoring lifecycle.</returns>
+        protected CancellationToken GetCurrentMonitoringToken()
+        {
+            var cts = Volatile.Read(ref _monitoringCts);
+            if (cts == null) return CancellationToken.None;
+            try { return cts.Token; }
+            catch (ObjectDisposedException) { return new CancellationToken(canceled: true); }
+        }
+
+        /// <summary>
+        /// Updates the PID display text based on the selected service's current state.
+        /// </summary>
+        /// <param name="service">Service model.</param>
+        protected void SetPidText(ServiceItemBase? service)
+        {
+            Pid = service?.Pid?.ToString() ?? UiConstants.NotAvailable;
+        }
+
+        /// <summary>
+        /// Resets PID text.
+        /// </summary>
+        protected void ResetPid()
+        {
+            Pid = UiConstants.NotAvailable;
+        }
+
+        /// <summary>
+        /// Copies the Process ID of the currently selected service to the system clipboard.
+        /// </summary>
+        /// <param name="parameter">Unused command parameter.</param>
+        private async Task CopyPidAsync(object? parameter)
+        {
+            if (SelectedServiceItem?.Pid != null)
+            {
+                var service = ServiceMapper.ToModel(SelectedServiceItem);
+                await ServiceCommands.CopyPidAsync(service);
+            }
+        }
+
+        /// <summary>
+        /// Releases the managed resources used by <see cref="MonitoringViewModelBase"/>, explicitly
+        /// stopping the timer and unhooking its tick event to prevent <see cref="DispatcherTimer"/> memory leaks.
+        /// </summary>
+        /// <param name="disposing">
+        /// <see langword="true"/> when called from <see cref="IDisposable.Dispose()"/>. This type has no finalizer,
+        /// so it is never <see langword="false"/>; the parameter exists for derived types to override.
+        /// </param>
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                var oldMonitoringCts = Interlocked.Exchange(ref _monitoringCts, null);
+                if (oldMonitoringCts != null)
+                {
+                    Helpers.Helper.CancelAndDisposeSafely(oldMonitoringCts);
+                }
+
+                if (_timer != null)
+                {
+                    _timer.Stop();
+                    _timer.Tick -= OnTick; // CRITICAL: Prevents the Dispatcher leak
+                    _timer = null;
+                }
+            }
+
+            base.Dispose(disposing);
+        }
+    }
+}

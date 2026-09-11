@@ -1,0 +1,23 @@
+using Servy.Core.DTOs;
+using Servy.Services;
+
+namespace Servy.Design
+{
+    /// <summary>
+    /// Lightweight no-op implementation of IServiceCommands for XAML design-time support.
+    /// </summary>
+    public class DesignTimeServiceCommands : IServiceCommands
+    {
+        public Task<bool> InstallServiceAsync(ServiceDto dto, string? confirmPassword = null, bool runAsLocalSystem = true, CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public Task<bool> UninstallServiceAsync(string? serviceName, CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public Task<bool> StartServiceAsync(string? serviceName, CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public Task<bool> StopServiceAsync(string? serviceName, CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public Task<bool> RestartServiceAsync(string? serviceName, CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public Task ExportXmlConfigAsync(string? confirmPassword, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ExportJsonConfigAsync(string? confirmPassword, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ImportXmlConfigAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ImportJsonConfigAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task OpenManagerAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task OpenSecurityHardeningGuideAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+}

@@ -1,0 +1,293 @@
+using Servy.Core.Config;
+using Servy.Core.Logging;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+using static Servy.Core.Native.NativeMethods;
+
+namespace Servy.Core.Native
+{
+    /// <summary>
+    /// Provides methods to ensure that a given account has the "Log on as a service" privilege.
+    /// </summary>
+    public static class LogonAsServiceGrant
+    {
+        private const string SE_SERVICE_LOGON_NAME = "SeServiceLogonRight";
+
+        /// <summary>NTSTATUS: the referenced object name (e.g. LSA account entry) was not found.</summary>
+        private const int STATUS_OBJECT_NAME_NOT_FOUND = unchecked((int)0xC0000034);
+
+        /// <summary>
+        /// Ensures the specified account has the "Log on as a service" right.
+        /// </summary>
+        /// <param name="accountName">
+        /// The account to grant the right to. Can be a domain account (DOMAIN\user),
+        /// or a local account (.\user or MACHINE_NAME\user).
+        /// </param>
+        /// <exception cref="ArgumentException">Thrown if <paramref name="accountName"/> is null or whitespace.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown if the account cannot be resolved to a SID. LSA policy failures (including access
+        /// denied for a non-elevated caller) are logged as warnings and do not propagate.
+        /// </exception>
+        public static void Ensure(string accountName)
+        {
+            if (ServiceAccounts.IsBuiltInServiceAccount(accountName)) return;
+
+            var sid = AccountToSidOrThrow(accountName);
+
+            try
+            {
+                if (!HasDirectLogonAsServiceRight(sid))
+                {
+                    GrantLogonAsService(sid);
+                }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException || ex is UnauthorizedAccessException)
+            {
+                Logger.Warn($"Could not verify or grant the direct 'Log on as a service' right for account '{accountName}'. If the privilege is assigned via Group Policy or group membership, or the caller is not elevated, this is expected and service creation will proceed. Details: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Translates a Windows account name into its corresponding <see cref="SecurityIdentifier"/>.
+        /// </summary>
+        /// <param name="account">The account name to resolve. Handles the ".\" shorthand for local machine accounts.</param>
+        /// <returns>A <see cref="SecurityIdentifier"/> representing the specified account.</returns>
+        /// <exception cref="ArgumentException">Thrown if the account name is null or whitespace.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// Thrown if the account cannot be resolved to a SID, often due to a non-existent account
+        /// or an unreachable Domain Controller.
+        /// </exception>
+        private static SecurityIdentifier AccountToSidOrThrow(string account)
+        {
+            if (string.IsNullOrWhiteSpace(account))
+                throw new ArgumentException("Account name cannot be empty.", nameof(account));
+
+            // Clean up potential copy-paste whitespace
+            account = account.Trim();
+
+            // Replace ".\" with machine name for local accounts
+            if (account.StartsWith(@".\", StringComparison.OrdinalIgnoreCase))
+            {
+                string machine = Environment.MachineName;
+                account = $"{machine}\\{account.Substring(2)}";
+            }
+
+            try
+            {
+                return (SecurityIdentifier)new NTAccount(account).Translate(typeof(SecurityIdentifier));
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"Cannot resolve SID for '{account}'. The account may not exist, be misspelled, or the domain controller may be unreachable.",
+                    ex);
+            }
+        }
+
+        /// <summary>
+        /// Retrieves the system error message corresponding to the specified NTSTATUS code.
+        /// </summary>
+        /// <remarks>This method converts an NTSTATUS code to a Win32 error code before retrieving the
+        /// error message. The returned message is localized based on the current system culture.</remarks>
+        /// <param name="status">The NTSTATUS code for which to obtain the associated Win32 error message.</param>
+        /// <returns>A string containing the system-provided error message for the specified status code. If the code does not
+        /// correspond to a known error, a generic message is returned.</returns>
+        private static string GetWin32ErrorMessage(int status)
+        {
+            int win = LsaNtStatusToWinError(status);
+            string msg = new Win32Exception(win).Message;
+            return msg;
+        }
+
+        /// <summary>
+        /// Centralized helper to initialize object attributes, request an unmanaged LSA policy handle, and throw a formatted exception on error.
+        /// </summary>
+        private static IntPtr OpenPolicyOrThrow(uint accessMask)
+        {
+            var oa = new LSA_OBJECT_ATTRIBUTES
+            {
+                Length = Marshal.SizeOf<LSA_OBJECT_ATTRIBUTES>()
+            };
+
+            int status = LsaOpenPolicy(IntPtr.Zero, ref oa, accessMask, out IntPtr policy);
+            if (status != 0)
+            {
+                var msg = GetWin32ErrorMessage(status);
+                throw new InvalidOperationException($"LsaOpenPolicy failed: {msg} (NTSTATUS 0x{status:X})");
+            }
+
+            return policy;
+        }
+
+        /// <summary>
+        /// Allocates unmanaged HGlobal memory and copies a SecurityIdentifier's binary layout into it.
+        /// </summary>
+        private static IntPtr AllocAndCopySid(SecurityIdentifier sid)
+        {
+            byte[] sidBytes = sid.GetBinaryForm();
+            IntPtr sidPtr = Marshal.AllocHGlobal(sidBytes.Length);
+            Marshal.Copy(sidBytes, 0, sidPtr, sidBytes.Length);
+            return sidPtr;
+        }
+
+        /// <summary>
+        /// Checks whether the specified account has the "Log on as a service" right assigned directly to its LSA account object.
+        /// </summary>
+        /// <remarks>
+        /// Note: This method enumerates direct account rights only and does not evaluate indirect rights inherited through Windows group membership.
+        /// </remarks>
+        /// <param name="sid">The security identifier of the account.</param>
+        /// <returns>True if the account has a direct right assignment; otherwise false.</returns>
+        private static bool HasDirectLogonAsServiceRight(SecurityIdentifier sid)
+        {
+            IntPtr sidPtr = IntPtr.Zero;
+            IntPtr policy = IntPtr.Zero;
+            IntPtr rightsPtr = IntPtr.Zero;
+
+            try
+            {
+                policy = OpenPolicyOrThrow(POLICY_ACCESS.POLICY_LOOKUP_NAMES);
+
+                uint rightsCount = 0;
+
+                sidPtr = AllocAndCopySid(sid);
+
+                int status = LsaEnumerateAccountRights(policy, sidPtr, out rightsPtr, out rightsCount);
+
+                // STATUS_OBJECT_NAME_NOT_FOUND -> the account has *no* rights at all
+                if (status == STATUS_OBJECT_NAME_NOT_FOUND)
+                {
+                    return false;
+                }
+
+                if (status != 0)
+                {
+                    var msg = GetWin32ErrorMessage(status);
+                    throw new InvalidOperationException($"LsaEnumerateAccountRights failed: {msg} (NTSTATUS 0x{status:X})");
+                }
+
+                int structSize = Marshal.SizeOf<LSA_UNICODE_STRING>();
+                for (int i = 0; i < rightsCount; i++)
+                {
+                    IntPtr itemPtr = IntPtr.Add(rightsPtr, i * structSize);
+                    var lus = Marshal.PtrToStructure<LSA_UNICODE_STRING>(itemPtr);
+
+                    if (lus.Buffer == IntPtr.Zero || lus.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    string right = Marshal.PtrToStringUni(lus.Buffer, lus.Length / 2)!;
+                    if (string.Equals(right, SE_SERVICE_LOGON_NAME, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            finally
+            {
+                if (sidPtr != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(sidPtr);
+                }
+                if (rightsPtr != IntPtr.Zero)
+                {
+                    // A failed LsaFreeMemory leaks the rights buffer; log it rather than
+                    // masking any exception already in flight from the try block.
+                    int freeStatus = LsaFreeMemory(rightsPtr);
+                    if (freeStatus != 0)
+                    {
+                        Logger.Warn($"LsaFreeMemory failed to release unmanaged account rights buffer. (NTSTATUS 0x{freeStatus:X})");
+                    }
+                }
+
+                SafeLsaClose(policy, "account rights check");
+            }
+        }
+
+        /// <summary>
+        /// Grants the "Log on as a service" right to the specified account SID.
+        /// </summary>
+        /// <param name="sid">The security identifier of the account.</param>
+        private static void GrantLogonAsService(SecurityIdentifier sid)
+        {
+            IntPtr sidPtr = IntPtr.Zero;
+            IntPtr policy = IntPtr.Zero;
+            IntPtr buffer = IntPtr.Zero;
+
+            try
+            {
+                // Request only the minimal rights required to add account privileges.
+                // POLICY_LOOKUP_NAMES: To resolve SIDs/Names.
+                // POLICY_CREATE_ACCOUNT: To create the account entry in LSA if it doesn't exist.
+                // POLICY_ASSIGN_PRIVILEGE: Required specifically by LsaAddAccountRights.
+                uint accessMask = POLICY_ACCESS.POLICY_LOOKUP_NAMES |
+                                  POLICY_ACCESS.POLICY_CREATE_ACCOUNT |
+                                  POLICY_ACCESS.POLICY_ASSIGN_PRIVILEGE;
+
+                policy = OpenPolicyOrThrow(accessMask);
+
+                buffer = Marshal.StringToHGlobalUni(SE_SERVICE_LOGON_NAME);
+                var lus = new LSA_UNICODE_STRING
+                {
+                    Length = (ushort)(SE_SERVICE_LOGON_NAME.Length * 2),
+                    MaximumLength = (ushort)((SE_SERVICE_LOGON_NAME.Length * 2) + 2),
+                    Buffer = buffer
+                };
+                var rights = new[] { lus };
+
+                sidPtr = AllocAndCopySid(sid);
+
+                int status = LsaAddAccountRights(policy, sidPtr, rights, 1);
+                if (status != 0)
+                {
+                    var msg = GetWin32ErrorMessage(status);
+                    throw new InvalidOperationException($"LsaAddAccountRights failed: {msg} (NTSTATUS 0x{status:X})");
+                }
+            }
+            finally
+            {
+                if (sidPtr != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(sidPtr);
+                }
+                if (buffer != IntPtr.Zero)
+                {
+                    Marshal.FreeHGlobal(buffer);
+                }
+
+                SafeLsaClose(policy, "privilege assignment");
+            }
+        }
+
+        /// <summary>
+        /// Safely closes a Local Security Authority (LSA) policy handle and logs a warning on failure.
+        /// </summary>
+        /// <param name="policy">The unmanaged LSA policy handle to close.</param>
+        /// <param name="context">The contextual description of the operation invoking the close routine.</param>
+        private static void SafeLsaClose(IntPtr policy, string context)
+        {
+            if (policy != IntPtr.Zero)
+            {
+                int closeStatus = LsaClose(policy);
+                if (closeStatus != 0)
+                {
+                    Logger.Warn($"LsaClose failed to safely release the Local Security Authority policy handle during {context}. (NTSTATUS 0x{closeStatus:X})");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Returns the binary form of a SecurityIdentifier.
+        /// </summary>
+        private static byte[] GetBinaryForm(this SecurityIdentifier sid)
+        {
+            var bytes = new byte[sid.BinaryLength];
+            sid.GetBinaryForm(bytes, 0);
+            return bytes;
+        }
+    }
+}

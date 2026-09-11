@@ -1,0 +1,143 @@
+using Servy.Core.DTOs;
+using Servy.Core.Services;
+using Servy.Validation;
+
+namespace Servy.Services
+{
+    /// <summary>
+    /// Defines commands for managing Windows services - install, uninstall, start, stop and restart -
+    /// plus importing/exporting service configuration (XML/JSON), launching Servy Manager and
+    /// opening the security hardening guide.
+    /// </summary>
+    public interface IServiceCommands
+    {
+        /// <summary>
+        /// Orchestrates the installation of a new Windows service using the provided configuration DTO.
+        /// </summary>
+        /// <param name="dto">
+        /// The <see cref="ServiceDto"/> snapshot containing all process paths,
+        /// startup parameters, and lifecycle hook settings.
+        /// </param>
+        /// <param name="confirmPassword">Optional password confirmation string for user credential validation.</param>
+        /// <param name="runAsLocalSystem">Indicates whether the service runs under the LocalSystem account.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>
+        /// A task representing the asynchronous installation operation, returning <c>true</c> if the service was installed successfully;
+        /// otherwise, <c>false</c> when installation fails - including due to insufficient administrative privileges or unexpected SCM and file I/O errors - after reporting the error to the user.
+        /// </returns>
+        /// <remarks>
+        /// <para>
+        /// This method serves as the primary controller for the service installation workflow.
+        /// It performs several critical steps:
+        /// <list type="bullet">
+        /// <item><description>Locates and validates the Servy UI service wrapper executable.</description></item>
+        /// <item><description>Triggers comprehensive validation via the <see cref="IServiceConfigurationValidator"/>.</description></item>
+        /// <item><description>Checks for existing service name collisions in the Windows SCM.</description></item>
+        /// <item><description>Invokes the <see cref="IServiceManager"/> to perform the actual OS-level installation.</description></item>
+        /// </list>
+        /// </para>
+        /// <para>
+        /// <b>Security:</b> User credentials (account and password) are handled according to the
+        /// <paramref name="runAsLocalSystem"/> flag. Credentials are encrypted
+        /// before being stored in the repository.
+        /// </para>
+        /// </remarks>
+        Task<bool> InstallServiceAsync(
+            ServiceDto dto,
+            string? confirmPassword = null,
+            bool runAsLocalSystem = true,
+            CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Uninstalls the specified Windows service.
+        /// </summary>
+        /// <param name="serviceName">The name of the service to uninstall.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A task representing the asynchronous uninstallation operation.</returns>
+        Task<bool> UninstallServiceAsync(string? serviceName, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Starts the specified Windows service.
+        /// </summary>
+        /// <param name="serviceName">The name of the service to start.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A task representing the asynchronous start operation.</returns>
+        Task<bool> StartServiceAsync(string? serviceName, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Stops the specified Windows service.
+        /// </summary>
+        /// <param name="serviceName">The name of the service to stop.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A task representing the asynchronous stop operation.</returns>
+        Task<bool> StopServiceAsync(string? serviceName, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Restarts the specified Windows service.
+        /// </summary>
+        /// <param name="serviceName">The name of the service to restart.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A task representing the asynchronous restart operation.</returns>
+        Task<bool> RestartServiceAsync(string? serviceName, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Prompts for an XML file, validates the current configuration
+        /// (including the password confirmation), and writes the file only if validation succeeds.
+        /// If validation fails, the first error is shown and nothing is written.
+        /// </summary>
+        /// <param name="confirmPassword">
+        /// The confirmation of the service account password, checked against the configured password
+        /// as part of the validation pass.
+        /// </param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        Task ExportXmlConfigAsync(string? confirmPassword, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Prompts for a JSON file, validates the current configuration
+        /// (including the password confirmation), and writes the file only if validation succeeds.
+        /// If validation fails, the first error is shown and nothing is written.
+        /// </summary>
+        /// <param name="confirmPassword">
+        /// The confirmation of the service account password, checked against the configured password
+        /// as part of the validation pass.
+        /// </param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        Task ExportJsonConfigAsync(string? confirmPassword, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Opens a file dialog to select an XML configuration file for a service,
+        /// validates the XML against the expected <see cref="ServiceDto"/> structure,
+        /// and maps the values to the main view model.
+        /// Shows an error message if the XML is invalid, deserialization fails, or any exception occurs.
+        /// </summary>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        Task ImportXmlConfigAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Opens a file dialog to select a JSON configuration file for a service,
+        /// validates the JSON against the expected <see cref="ServiceDto"/> structure,
+        /// and maps the values to the main view model.
+        /// Shows an error message if the JSON is invalid, deserialization fails, or any exception occurs.
+        /// </summary>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        Task ImportJsonConfigAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Opens Servy Manager to manage services.
+        /// </summary>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        Task OpenManagerAsync(CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Opens the security hardening guide in the default web browser.
+        /// </summary>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A task that represents the asynchronous operation.</returns>
+        Task OpenSecurityHardeningGuideAsync(CancellationToken cancellationToken = default);
+    }
+}

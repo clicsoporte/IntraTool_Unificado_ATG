@@ -1,0 +1,133 @@
+﻿#Requires -Version 5.0
+
+<#
+.SYNOPSIS
+    Shared build and publish utilities for Servy projects.
+
+.DESCRIPTION
+    Provides standard functions to check exit codes, retry unreliable commands,
+    and invoke project publishing, ensuring DRY compliance across all project scripts.
+#>
+$ErrorActionPreference = "Stop"
+$BC_ScriptDir = $PSScriptRoot
+
+# Import helpers
+. (Join-Path $BC_ScriptDir "common-helpers.ps1")
+
+<#
+.SYNOPSIS
+    Executes a scriptblock with automatic retries on failure.
+#>
+function Invoke-WithRetry {
+    param(
+        [Parameter(Mandatory=$true)]
+        [scriptblock]$Command,
+
+        [Parameter(Mandatory=$true)]
+        [string]$ErrorMessage,
+
+        [int]$MaxRetries = 3,
+        [int]$RetryDelaySeconds = 5
+    )
+
+    $attempt = 0
+    $success = $false
+
+    while ($attempt -lt $MaxRetries) {
+        $attempt++
+        if ($attempt -gt 1) {
+            Write-Host "Retrying command (Attempt $attempt of $MaxRetries)..." -ForegroundColor Yellow
+        }
+
+        # Reset exit code before execution
+        $global:LASTEXITCODE = 0
+
+        & $Command
+
+        if ($global:LASTEXITCODE -eq 0) {
+            $success = $true
+            break
+        } else {
+            Write-Warning "Command exited with code $($global:LASTEXITCODE)."
+            if ($attempt -lt $MaxRetries) {
+                Write-Host "Waiting $RetryDelaySeconds seconds before next attempt..." -ForegroundColor DarkGray
+                Start-Sleep -Seconds $RetryDelaySeconds
+            }
+        }
+    }
+
+    if (-not $success) {
+        throw "$ErrorMessage (Failed after $MaxRetries attempts)"
+    }
+}
+
+function Invoke-StandardPublish {
+    param(
+        [Parameter(Mandatory=$true)][string]$ProjectDir,
+        [Parameter(Mandatory=$true)][string]$ProjectName,
+        [string]$Tfm = "net10.0-windows",
+        [string]$Runtime = "win-x64",
+        [string]$BuildConfiguration = "Release"
+    )
+
+    # Step 0: Publish resources if script exists
+    $resSuffix = if ($BuildConfiguration -eq "Debug") { "debug" } else { "release" }
+    $publishResScript = Join-Path $ProjectDir "publish-res-$resSuffix.ps1"
+
+    if (Test-Path $publishResScript) {
+        Write-Host "=== Running publish-res-$resSuffix.ps1 ===" -ForegroundColor Cyan
+        & $publishResScript -Tfm $Tfm -Runtime $Runtime
+        Assert-LastExitCode "publish-res-$resSuffix.ps1 failed"
+        Write-Host "=== Completed publish-res-$resSuffix.ps1 ===`n"
+    }
+
+    # Step 1: Build and Publish
+    $projectPath = Join-Path $ProjectDir "$ProjectName.csproj"
+    if (-not (Test-Path $projectPath)) {
+        throw "Project file not found: $projectPath"
+    }
+
+    Write-Host "=== Publishing $ProjectName.csproj ===" -ForegroundColor Cyan
+    Write-Host "Target Framework : $Tfm"
+    Write-Host "Configuration    : $BuildConfiguration"
+    Write-Host "Runtime          : $Runtime"
+
+    Invoke-WithRetry -ErrorMessage "dotnet restore failed" -Command {
+        & dotnet restore $projectPath -r $Runtime
+    }
+
+    Invoke-WithRetry -ErrorMessage "Project clean failed" -Command {
+        & dotnet clean $projectPath -c $BuildConfiguration
+    }
+
+    Invoke-WithRetry -ErrorMessage "dotnet publish failed" -Command {
+        & dotnet publish $projectPath `
+            -c $BuildConfiguration `
+            -r $Runtime `
+            --self-contained true `
+            --no-restore `
+            --force `
+            /p:DeleteExistingFiles=true
+    }
+
+    # Step 2: Sign the published executable if signing is enabled
+    if ($BuildConfiguration -eq "Release") {
+        $signPath = Join-Path $BC_ScriptDir "signpath.ps1"
+        $publishFolder = Join-Path $ProjectDir "bin\$BuildConfiguration\$Tfm\$Runtime\publish"
+        $exePath       = Join-Path $publishFolder "$ProjectName.exe"
+
+        if (Test-Path $exePath) {
+            if (Test-Path $signPath) {
+                Write-Host "=== Signing $ProjectName.exe ===" -ForegroundColor Cyan
+                & $signPath $exePath
+                Assert-LastExitCode "Code signing failed"
+            } else {
+                Write-Warning "SignPath script not found at: $signPath. Signing will be skipped."
+            }
+        } else {
+            Write-Error "Published executable not found at: $exePath. Ensure TFM and Runtime variables match the project output."
+        }
+    }
+
+    Write-Host "=== $ProjectName.csproj published successfully ===" -ForegroundColor Green
+}
