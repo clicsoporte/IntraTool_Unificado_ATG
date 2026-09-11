@@ -111,7 +111,9 @@ export const MASTER_SCHEMA: Record<string, string[]> = {
         'asignacion_id', 'creado_por', 'entregado', 'estado', 'fecha_registro', 
         'fecha_entrega', 'comentario', 'release_code_id', 'canal_registro', 
         'gestionado_por', 'telegram_lock_at', 'telegram_lock_by', 'tipo_documento_erp', 
-        'factura_original', 'latitud', 'longitud', 'foto_evidencia', 'foto_factura'
+        'factura_original', 'latitud', 'longitud', 'foto_evidencia', 'foto_factura',
+        'boleta_numero', 'motivo_salida', 'referencia_doc', 'requiere_autorizacion',
+        'autorizado_por', 'fecha_autorizacion', 'direccion_embarque_id'
     ],
     ops_delivery_lines: [
         'id', 'delivery_order_id', 'producto_codigo', 'producto_descripcion', 
