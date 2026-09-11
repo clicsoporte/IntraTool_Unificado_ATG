@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useToast } from '@/modules/core/hooks/use-toast';
 import { usePageTitle } from '@/modules/core/hooks/usePageTitle';
 import { useAuthorization } from '@/modules/core/hooks/useAuthorization';
@@ -33,12 +33,7 @@ export default function VouchersAdminPage() {
         boletas_require_authorization: 'false'
     });
 
-    useEffect(() => {
-        setTitle('Configuración de Boletas Operativas');
-        loadData();
-    }, [setTitle]);
-
-    async function loadData() {
+    const loadData = useCallback(async () => {
         setLoading(true);
         try {
             const data = await getDeliverySettings();
@@ -48,7 +43,12 @@ export default function VouchersAdminPage() {
         } finally {
             setLoading(false);
         }
-    }
+    }, [toast]);
+
+    useEffect(() => {
+        setTitle('Configuración de Boletas Operativas');
+        loadData();
+    }, [setTitle, loadData]);
 
     const handleSave = async () => {
         setSaving(true);
@@ -116,7 +116,7 @@ export default function VouchersAdminPage() {
                         <div className="space-y-1">
                             <Label className="text-sm font-bold">Requerir Autorización de Jefatura</Label>
                             <p className="text-xs text-muted-foreground">
-                                Si está activo, las nuevas boletas ingresan en estado 'Por Autorizar' y no aparecen en el despacho hasta que un supervisor presione 'Autorizar'.
+                                Si está activo, las nuevas boletas ingresan en estado &apos;Por Autorizar&apos; y no aparecen en el despacho hasta que un supervisor presione &apos;Autorizar&apos;.
                             </p>
                         </div>
                         <Switch

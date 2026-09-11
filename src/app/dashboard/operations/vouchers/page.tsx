@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useToast } from '@/modules/core/hooks/use-toast';
 import { usePageTitle } from '@/modules/core/hooks/usePageTitle';
 import { useAuthorization } from '@/modules/core/hooks/useAuthorization';
@@ -102,12 +102,7 @@ export default function VouchersPage() {
     const [isPrintOpen, setIsPrintOpen] = useState(false);
     const [loadingPrint, setLoadingPrint] = useState(false);
 
-    useEffect(() => {
-        setTitle('Boletas Operativas (Salidas de Bodega)');
-        loadData();
-    }, [setTitle]);
-
-    async function loadData() {
+    const loadData = useCallback(async () => {
         setLoading(true);
         try {
             const data = await getBoletasOperativasAction({
@@ -121,7 +116,12 @@ export default function VouchersPage() {
         } finally {
             setLoading(false);
         }
-    }
+    }, [filterMotivo, filterEstado, searchQuery, toast]);
+
+    useEffect(() => {
+        setTitle('Boletas Operativas (Salidas de Bodega)');
+        loadData();
+    }, [setTitle, loadData]);
 
     const handleAddItem = () => {
         setItems(prev => [...prev, { codigo: '', descripcion: '', cantidad: 1 }]);
