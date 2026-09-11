@@ -599,6 +599,7 @@ export async function initializeOperationsSchema(db: Database) {
         if (!cols.includes('requiere_autorizacion')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN requiere_autorizacion INTEGER DEFAULT 0;`);
         if (!cols.includes('autorizado_por')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN autorizado_por TEXT;`);
         if (!cols.includes('fecha_autorizacion')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN fecha_autorizacion TEXT;`);
+        if (!cols.includes('direccion_embarque_id')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN direccion_embarque_id TEXT;`);
     } catch (e: any) {
         console.warn('Self-healing ops_delivery_queue check warning:', e.message);
     }
@@ -765,6 +766,7 @@ export async function initializeOperationsSchema(db: Database) {
         if (!queueCols.includes('geocerca_auto_llegada')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN geocerca_auto_llegada INTEGER DEFAULT 0;`);
         if (!queueCols.includes('geocerca_auto_salida')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN geocerca_auto_salida INTEGER DEFAULT 0;`);
         if (!queueCols.includes('ralenti_cliente_minutos')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN ralenti_cliente_minutos INTEGER DEFAULT 0;`);
+        if (!queueCols.includes('direccion_embarque_id')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN direccion_embarque_id TEXT;`);
 
         const custCols = db.prepare("PRAGMA table_info('core_customers')").all().map((c: any) => c.name);
         if (!custCols.includes('latitude')) db.exec(`ALTER TABLE core_customers ADD COLUMN latitude REAL;`);

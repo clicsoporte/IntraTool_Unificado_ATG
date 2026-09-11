@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useDebounce } from 'use-debounce';
 import { useToast } from '@/modules/core/hooks/use-toast';
 import { usePageTitle } from '@/modules/core/hooks/usePageTitle';
 import { useAuthorization } from '@/modules/core/hooks/useAuthorization';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -40,8 +41,6 @@ import {
     Search,
     Printer,
     CheckCircle2,
-    Clock,
-    AlertCircle,
     ArrowLeft,
     RefreshCw,
     Trash2,
@@ -51,7 +50,10 @@ import {
     RotateCcw,
     Layers,
     Edit3,
-    Save
+    Save,
+    MapPin,
+    Sparkles,
+    Building2
 } from 'lucide-react';
 import Link from 'next/link';
 import {
@@ -59,7 +61,12 @@ import {
     updateBoletaOperativaAction,
     getBoletasOperativasAction,
     approveBoletaOperativaAction,
-    getBoletaPrintHtmlAction
+    getBoletaPrintHtmlAction,
+    searchErpInvoicesAction,
+    getErpInvoiceDetailAction,
+    searchCustomersAction,
+    getCustomerShipmentAddressesAction,
+    searchProductsAction
 } from '@/modules/operations/lib/actions';
 
 export default function VouchersPage() {
@@ -82,7 +89,20 @@ export default function VouchersPage() {
     const [filterEstado, setFilterEstado] = useState<string>('all');
     const [searchQuery, setSearchQuery] = useState<string>('');
 
-    // Modal para Nueva Boleta Operativa
+    // Dynamic system debounce time from admin config
+    const [searchDebounceMs, setSearchDebounceMs] = useState<number>(300);
+
+    useEffect(() => {
+        import('@/modules/core/lib/actions').then(({ getCompanySettingsAction }) => {
+            getCompanySettingsAction().then(settings => {
+                if (settings?.searchDebounceTime) {
+                    setSearchDebounceMs(Number(settings.searchDebounceTime) || 300);
+                }
+            });
+        });
+    }, []);
+
+    // Modal state for Nueva Boleta Operativa
     const [isCreateOpen, setIsCreateOpen] = useState(false);
     const [creating, setCreating] = useState(false);
     const [formData, setFormData] = useState({
@@ -90,17 +110,45 @@ export default function VouchersPage() {
         clienteNombre: '',
         motivoSalida: 'faltante' as 'faltante' | 'devolucion' | 'muestra' | 'regalia' | 'otro',
         referenciaDoc: '',
-        comentario: ''
+        comentario: '',
+        direccionEmbarqueId: ''
     });
 
+    // Reference Document search state
+    const [refDocSearch, setRefDocSearch] = useState('');
+    const [debouncedRefDocSearch] = useDebounce(refDocSearch, searchDebounceMs);
+    const [refDocResults, setRefDocResults] = useState<any[]>([]);
+    const [showRefDocDropdown, setShowRefDocDropdown] = useState(false);
+    const [loadingRefDoc, setLoadingRefDoc] = useState(false);
+    const [preloadPromptInvoice, setPreloadPromptInvoice] = useState<any | null>(null);
+
+    // Customer search state
+    const [customerSearch, setCustomerSearch] = useState('');
+    const [debouncedCustomerSearch] = useDebounce(customerSearch, searchDebounceMs);
+    const [customerResults, setCustomerResults] = useState<any[]>([]);
+    const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+    const [loadingCustomer, setLoadingCustomer] = useState(false);
+
+    // Shipment addresses for selected customer
+    const [shipmentAddresses, setShipmentAddresses] = useState<any[]>([]);
+    const [loadingAddresses, setLoadingAddresses] = useState(false);
+
+    // Product search per line item state
     const [items, setItems] = useState<Array<{ codigo: string; descripcion: string; cantidad: number }>>([
         { codigo: '', descripcion: '', cantidad: 1 }
     ]);
+    const [activeProductIndex, setActiveProductIndex] = useState<number | null>(null);
+    const [productSearchInputs, setProductSearchInputs] = useState<Record<number, string>>({});
+    const [debouncedProductInput] = useDebounce(
+        activeProductIndex !== null ? (productSearchInputs[activeProductIndex] || '') : '',
+        searchDebounceMs
+    );
+    const [productSearchResults, setProductSearchResults] = useState<any[]>([]);
+    const [showProductDropdown, setShowProductDropdown] = useState(false);
 
     // Preview / Printing
     const [printHtml, setPrintHtml] = useState<string | null>(null);
     const [isPrintOpen, setIsPrintOpen] = useState(false);
-    const [loadingPrint, setLoadingPrint] = useState(false);
 
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -123,6 +171,140 @@ export default function VouchersPage() {
         loadData();
     }, [setTitle, loadData]);
 
+    // Load customer shipment addresses when customerId changes
+    const loadCustomerAddresses = useCallback(async (cliId: string) => {
+        if (!cliId) {
+            setShipmentAddresses([]);
+            return;
+        }
+        setLoadingAddresses(true);
+        try {
+            const addrs = await getCustomerShipmentAddressesAction(cliId);
+            setShipmentAddresses(addrs);
+        } catch (e) {
+            setShipmentAddresses([]);
+        } finally {
+            setLoadingAddresses(false);
+        }
+    }, []);
+
+    // Debounced search for reference document
+    useEffect(() => {
+        if (!debouncedRefDocSearch || debouncedRefDocSearch.trim().length < 2) {
+            setRefDocResults([]);
+            setShowRefDocDropdown(false);
+            return;
+        }
+        let isMounted = true;
+        setLoadingRefDoc(true);
+        searchErpInvoicesAction(debouncedRefDocSearch).then(results => {
+            if (isMounted) {
+                setRefDocResults(results);
+                setShowRefDocDropdown(true);
+                setLoadingRefDoc(false);
+            }
+        });
+        return () => { isMounted = false; };
+    }, [debouncedRefDocSearch]);
+
+    // Debounced search for customers
+    useEffect(() => {
+        if (!debouncedCustomerSearch || debouncedCustomerSearch.trim().length < 2) {
+            setCustomerResults([]);
+            setShowCustomerDropdown(false);
+            return;
+        }
+        let isMounted = true;
+        setLoadingCustomer(true);
+        searchCustomersAction(debouncedCustomerSearch).then(results => {
+            if (isMounted) {
+                setCustomerResults(results);
+                setShowCustomerDropdown(true);
+                setLoadingCustomer(false);
+            }
+        });
+        return () => { isMounted = false; };
+    }, [debouncedCustomerSearch]);
+
+    // Debounced search for products
+    useEffect(() => {
+        if (!debouncedProductInput || debouncedProductInput.trim().length < 2) {
+            setProductSearchResults([]);
+            setShowProductDropdown(false);
+            return;
+        }
+        let isMounted = true;
+        searchProductsAction(debouncedProductInput).then(results => {
+            if (isMounted) {
+                setProductSearchResults(results);
+                setShowProductDropdown(true);
+            }
+        });
+        return () => { isMounted = false; };
+    }, [debouncedProductInput]);
+
+    const handleSelectCustomer = (cust: any) => {
+        setFormData(prev => ({
+            ...prev,
+            clienteId: cust.id,
+            clienteNombre: cust.nombre,
+            direccionEmbarqueId: ''
+        }));
+        setCustomerSearch(`${cust.id} - ${cust.nombre}`);
+        setShowCustomerDropdown(false);
+        loadCustomerAddresses(cust.id);
+    };
+
+    const handleSelectRefDoc = (inv: any) => {
+        setFormData(prev => ({
+            ...prev,
+            referenciaDoc: inv.factura,
+            clienteId: inv.clienteId || prev.clienteId,
+            clienteNombre: inv.clienteNombre || prev.clienteNombre
+        }));
+        setRefDocSearch(inv.factura);
+        setShowRefDocDropdown(false);
+        setPreloadPromptInvoice(inv);
+    };
+
+    const handlePreloadInvoiceData = async (facturaNum: string) => {
+        setLoading(true);
+        try {
+            const detail = await getErpInvoiceDetailAction(facturaNum);
+            if (detail.success && detail.header) {
+                setFormData(prev => ({
+                    ...prev,
+                    clienteId: detail.header.clienteId || prev.clienteId,
+                    clienteNombre: detail.header.clienteNombre || prev.clienteNombre,
+                    direccionEmbarqueId: detail.header.direccionEmbarque || '',
+                    referenciaDoc: detail.header.factura
+                }));
+                if (detail.header.clienteId) {
+                    setCustomerSearch(`${detail.header.clienteId} - ${detail.header.clienteNombre}`);
+                    if (detail.shipmentAddresses && detail.shipmentAddresses.length > 0) {
+                        setShipmentAddresses(detail.shipmentAddresses);
+                    } else {
+                        loadCustomerAddresses(detail.header.clienteId);
+                    }
+                }
+                if (detail.lines && detail.lines.length > 0) {
+                    setItems(detail.lines);
+                }
+                toast({
+                    title: 'Datos Precargados',
+                    description: `Se cargaron ${detail.lines?.length || 0} productos y los datos de ${detail.header.clienteNombre} desde la Factura #${facturaNum}.`
+                });
+            } else {
+                toast({ title: 'Error', description: detail.error || 'No se pudieron precargar los datos.', variant: 'destructive' });
+            }
+        } catch (e: any) {
+            toast({ title: 'Error', description: e.message, variant: 'destructive' });
+        } finally {
+            setLoading(false);
+            setPreloadPromptInvoice(null);
+        }
+    };
+
     const handleAddItem = () => {
         setItems(prev => [...prev, { codigo: '', descripcion: '', cantidad: 1 }]);
     };
@@ -137,6 +319,22 @@ export default function VouchersPage() {
             next[index] = { ...next[index], [field]: value };
             return next;
         });
+    };
+
+    const handleSelectProduct = (prod: any) => {
+        if (activeProductIndex !== null) {
+            setItems(prev => {
+                const next = [...prev];
+                next[activeProductIndex] = {
+                    ...next[activeProductIndex],
+                    codigo: prod.codigo,
+                    descripcion: prod.descripcion
+                };
+                return next;
+            });
+            setShowProductDropdown(false);
+            setActiveProductIndex(null);
+        }
     };
 
     const handleCreateBoleta = async (e: React.FormEvent) => {
@@ -165,7 +363,10 @@ export default function VouchersPage() {
                     description: `Se ha generado la Boleta #${res.boletaNumero} exitosamente.`,
                 });
                 setIsCreateOpen(false);
-                setFormData({ clienteId: '', clienteNombre: '', motivoSalida: 'faltante', referenciaDoc: '', comentario: '' });
+                setFormData({ clienteId: '', clienteNombre: '', motivoSalida: 'faltante', referenciaDoc: '', comentario: '', direccionEmbarqueId: '' });
+                setRefDocSearch('');
+                setCustomerSearch('');
+                setShipmentAddresses([]);
                 setItems([{ codigo: '', descripcion: '', cantidad: 1 }]);
                 loadData();
             } else {
@@ -178,24 +379,42 @@ export default function VouchersPage() {
         }
     };
 
-    // Modal para Editar Boleta
+    // Modal state for Editar Boleta
     const [isEditOpen, setIsEditOpen] = useState(false);
     const [editingBoleta, setEditingBoleta] = useState<any | null>(null);
     const [editFormData, setEditFormData] = useState({
+        clienteId: '',
         clienteNombre: '',
         referenciaDoc: '',
-        comentario: ''
+        comentario: '',
+        direccionEmbarqueId: ''
     });
+    const [editShipmentAddresses, setEditShipmentAddresses] = useState<any[]>([]);
     const [editItems, setEditItems] = useState<Array<{ codigo: string; descripcion: string; cantidad: number }>>([]);
     const [savingEdit, setSavingEdit] = useState(false);
 
-    const handleOpenEdit = (boleta: any) => {
+    const handleOpenEdit = async (boleta: any) => {
         setEditingBoleta(boleta);
+        const cliId = boleta.cliente_id || '';
         setEditFormData({
+            clienteId: cliId,
             clienteNombre: boleta.cliente_nombre || '',
             referenciaDoc: boleta.referencia_doc || (boleta.documento_numero && boleta.documento_numero.includes('-PARTIAL') ? boleta.documento_numero.replace('-PARTIAL', '').replace('-RETRY', '') : ''),
-            comentario: boleta.comentario || ''
+            comentario: boleta.comentario || '',
+            direccionEmbarqueId: boleta.direccion_embarque_id || ''
         });
+
+        if (cliId) {
+            try {
+                const addrs = await getCustomerShipmentAddressesAction(cliId);
+                setEditShipmentAddresses(addrs);
+            } catch (e) {
+                setEditShipmentAddresses([]);
+            }
+        } else {
+            setEditShipmentAddresses([]);
+        }
+
         const currentItems = boleta.items && boleta.items.length > 0
             ? boleta.items.map((it: any) => ({ codigo: it.codigo, descripcion: it.descripcion, cantidad: it.cantidad }))
             : [{ codigo: '', descripcion: '', cantidad: 1 }];
@@ -233,6 +452,8 @@ export default function VouchersPage() {
         try {
             const res = await updateBoletaOperativaAction(editingBoleta.id, {
                 clienteNombre: editFormData.clienteNombre,
+                clienteId: editFormData.clienteId,
+                direccionEmbarqueId: editFormData.direccionEmbarqueId,
                 referenciaDoc: editFormData.referenciaDoc,
                 comentario: editFormData.comentario,
                 items: validItems
@@ -275,7 +496,6 @@ export default function VouchersPage() {
     };
 
     const handlePrintPreview = async (id: number) => {
-        setLoadingPrint(true);
         try {
             const res = await getBoletaPrintHtmlAction(id);
             if (res.success && res.html) {
@@ -286,8 +506,6 @@ export default function VouchersPage() {
             }
         } catch (e: any) {
             toast({ title: 'Error de impresión', description: e.message, variant: 'destructive' });
-        } finally {
-            setLoadingPrint(false);
         }
     };
 
@@ -454,6 +672,11 @@ export default function VouchersPage() {
                                             <TableCell>
                                                 <div className="font-bold text-xs text-foreground">{b.cliente_nombre}</div>
                                                 <div className="text-[10px] text-muted-foreground font-mono">ID: {b.cliente_id}</div>
+                                                {b.direccion_embarque_id && (
+                                                    <div className="text-[10px] text-blue-600 dark:text-blue-400 font-semibold flex items-center gap-0.5 mt-0.5">
+                                                        <MapPin className="w-3 h-3 text-blue-500" /> Dir. Embarque: #{b.direccion_embarque_id}
+                                                    </div>
+                                                )}
                                                 {b.comentario && (
                                                     <div className="text-[10px] text-amber-900 dark:text-amber-200 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5 mt-1 max-w-[220px] truncate" title={b.comentario}>
                                                         💬 {b.comentario}
@@ -534,7 +757,7 @@ export default function VouchersPage() {
 
             {/* Modal para Crear Nueva Boleta Operativa */}
             <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-                <DialogContent className="max-w-2xl rounded-2xl">
+                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto rounded-2xl">
                     <DialogHeader>
                         <DialogTitle className="text-xl font-bold flex items-center gap-2">
                             <FileSignature className="w-5 h-5 text-blue-600" /> Nueva Boleta de Salida de Bodega
@@ -545,6 +768,7 @@ export default function VouchersPage() {
                     </DialogHeader>
 
                     <form onSubmit={handleCreateBoleta} className="space-y-4 pt-2">
+                        {/* Motivo y Documento Referencia */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="space-y-1.5">
                                 <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Motivo de Salida</Label>
@@ -565,19 +789,66 @@ export default function VouchersPage() {
                                 </Select>
                             </div>
 
-                            <div className="space-y-1.5">
-                                <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Doc Referencia (Opcional)</Label>
+                            {/* Doc Referencia Autocomplete */}
+                            <div className="space-y-1.5 relative">
+                                <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center justify-between">
+                                    <span>Doc Referencia ERP (Opcional)</span>
+                                    {loadingRefDoc && <RefreshCw className="w-3 h-3 animate-spin text-blue-600" />}
+                                </Label>
                                 <Input
-                                    placeholder="Ej. Factura #001000... u Orden"
-                                    value={formData.referenciaDoc}
-                                    onChange={(e) => setFormData(prev => ({ ...prev, referenciaDoc: e.target.value }))}
-                                    className="rounded-xl text-xs font-medium h-9"
+                                    placeholder="Buscar N° Factura (Ej. 00100...)"
+                                    value={refDocSearch}
+                                    onChange={(e) => {
+                                        setRefDocSearch(e.target.value);
+                                        setFormData(prev => ({ ...prev, referenciaDoc: e.target.value }));
+                                    }}
+                                    className="rounded-xl text-xs font-medium h-9 font-mono"
                                 />
+
+                                {showRefDocDropdown && refDocResults.length > 0 && (
+                                    <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-background border border-muted rounded-xl shadow-xl max-h-48 overflow-y-auto">
+                                        {refDocResults.map((inv) => (
+                                            <div
+                                                key={inv.factura}
+                                                onClick={() => handleSelectRefDoc(inv)}
+                                                className="p-2 hover:bg-blue-50 dark:hover:bg-blue-950/40 cursor-pointer text-xs border-b border-muted/50 last:border-0 flex items-center justify-between"
+                                            >
+                                                <div>
+                                                    <span className="font-mono font-bold text-blue-600">{inv.factura}</span>
+                                                    <span className="text-[11px] text-muted-foreground ml-2">{inv.clienteNombre}</span>
+                                                </div>
+                                                <Badge variant="outline" className="text-[9px] font-mono">{inv.fecha?.substring(0, 10)}</Badge>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         </div>
 
+                        {/* Banner de Confirmación para Precargar Datos de la Factura */}
+                        {preloadPromptInvoice && (
+                            <div className="p-3 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-xl flex items-center justify-between gap-2">
+                                <div className="flex items-center gap-2 text-xs text-blue-900 dark:text-blue-200">
+                                    <Sparkles className="w-4 h-4 text-blue-600 shrink-0" />
+                                    <div>
+                                        <strong>Factura N° {preloadPromptInvoice.factura} encontrada.</strong>
+                                        <div className="text-[11px] text-muted-foreground">¿Desea precargar automáticamente el Cliente, Dirección y Líneas de Productos?</div>
+                                    </div>
+                                </div>
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    onClick={() => handlePreloadInvoiceData(preloadPromptInvoice.factura)}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs h-8 rounded-lg shrink-0"
+                                >
+                                    Precargar Datos
+                                </Button>
+                            </div>
+                        )}
+
+                        {/* Búsqueda de Cliente y Selección de Dirección */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div className="space-y-1.5">
+                            <div className="space-y-1.5 relative">
                                 <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">ID Cliente / Cédula</Label>
                                 <Input
                                     placeholder="CLI-00123"
@@ -586,41 +857,106 @@ export default function VouchersPage() {
                                     className="rounded-xl text-xs font-medium h-9 font-mono"
                                 />
                             </div>
-                            <div className="md:col-span-2 space-y-1.5">
-                                <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Cliente / Destinatario *</Label>
+
+                            <div className="md:col-span-2 space-y-1.5 relative">
+                                <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground flex items-center justify-between">
+                                    <span>Cliente / Destinatario *</span>
+                                    {loadingCustomer && <RefreshCw className="w-3 h-3 animate-spin text-blue-600" />}
+                                </Label>
                                 <Input
-                                    placeholder="Nombre de la Empresa o Cliente final"
-                                    value={formData.clienteNombre}
-                                    onChange={(e) => setFormData(prev => ({ ...prev, clienteNombre: e.target.value }))}
+                                    placeholder="Nombre del cliente o busque aquí..."
+                                    value={customerSearch || formData.clienteNombre}
+                                    onChange={(e) => {
+                                        setCustomerSearch(e.target.value);
+                                        setFormData(prev => ({ ...prev, clienteNombre: e.target.value }));
+                                    }}
                                     className="rounded-xl text-xs font-bold h-9"
                                     required
                                 />
+
+                                {showCustomerDropdown && customerResults.length > 0 && (
+                                    <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-background border border-muted rounded-xl shadow-xl max-h-48 overflow-y-auto">
+                                        {customerResults.map((cust) => (
+                                            <div
+                                                key={cust.id}
+                                                onClick={() => handleSelectCustomer(cust)}
+                                                className="p-2 hover:bg-blue-50 dark:hover:bg-blue-950/40 cursor-pointer text-xs border-b border-muted/50 last:border-0"
+                                            >
+                                                <div className="font-bold">{cust.nombre}</div>
+                                                <div className="text-[10px] text-muted-foreground font-mono">ID: {cust.id} {cust.cedula ? `| Céd: ${cust.cedula}` : ''}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         </div>
 
+                        {/* Selector de Dirección de Embarque (Múltiples Direcciones por Cliente) */}
+                        {(shipmentAddresses.length > 0 || formData.direccionEmbarqueId) && (
+                            <div className="space-y-1.5 p-3 bg-muted/20 border border-muted/80 rounded-xl">
+                                <Label className="text-xs font-bold uppercase tracking-wider text-blue-600 flex items-center gap-1.5">
+                                    <Building2 className="w-4 h-4 text-blue-500" /> Dirección de Embarque / Destino en Ruta
+                                    {loadingAddresses && <RefreshCw className="w-3 h-3 animate-spin ml-1" />}
+                                </Label>
+                                <Select
+                                    value={formData.direccionEmbarqueId}
+                                    onValueChange={(val) => setFormData(prev => ({ ...prev, direccionEmbarqueId: val }))}
+                                >
+                                    <SelectTrigger className="rounded-xl text-xs font-medium h-9">
+                                        <SelectValue placeholder="Seleccione dirección de envío..." />
+                                    </SelectTrigger>
+                                    <SelectContent className="rounded-xl">
+                                        {shipmentAddresses.map((addr) => (
+                                            <SelectItem key={addr.id} value={addr.id}>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-mono font-bold text-blue-600">#{addr.id}</span>
+                                                    <span>{addr.descripcion || addr.detalle || 'Dirección de Entrega'}</span>
+                                                    {addr.latitude && addr.longitude ? (
+                                                        <Badge variant="outline" className="text-[9px] bg-emerald-50 text-emerald-700 border-emerald-300">
+                                                            <MapPin className="w-2.5 h-2.5 mr-0.5" /> GPS
+                                                        </Badge>
+                                                    ) : null}
+                                                </div>
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
+
                         <Separator />
 
-                        {/* Lista de Productos */}
-                        <div className="space-y-3">
+                        {/* Lista de Productos con Búsqueda Integrada */}
+                        <div className="space-y-3 relative">
                             <div className="flex items-center justify-between">
                                 <Label className="text-xs font-extrabold uppercase tracking-wider text-blue-600">Productos a Despachar</Label>
-                                <Button type="button" variant="outline" size="sm" onClick={handleAddItem} className="h-7 text-xs font-bold rounded-lg">
+                                <Button type="button" variant="outline" size="sm" onClick={handleAddItem} className="h-7 text-xs font-bold rounded-lg border-dashed">
                                     + Agregar Producto
                                 </Button>
                             </div>
 
                             {items.map((item, idx) => (
-                                <div key={idx} className="flex gap-2 items-center">
+                                <div key={idx} className="flex gap-2 items-center relative">
                                     <Input
                                         placeholder="Código"
                                         value={item.codigo}
-                                        onChange={(e) => handleItemChange(idx, 'codigo', e.target.value)}
-                                        className="w-28 rounded-lg text-xs font-mono font-bold h-8"
+                                        onChange={(e) => {
+                                            handleItemChange(idx, 'codigo', e.target.value);
+                                            setActiveProductIndex(idx);
+                                            setProductSearchInputs(prev => ({ ...prev, [idx]: e.target.value }));
+                                        }}
+                                        onFocus={() => setActiveProductIndex(idx)}
+                                        className="w-32 rounded-lg text-xs font-mono font-bold h-8"
                                     />
                                     <Input
-                                        placeholder="Descripción del Producto"
+                                        placeholder="Descripción del Producto (o busque aquí...)"
                                         value={item.descripcion}
-                                        onChange={(e) => handleItemChange(idx, 'descripcion', e.target.value)}
+                                        onChange={(e) => {
+                                            handleItemChange(idx, 'descripcion', e.target.value);
+                                            setActiveProductIndex(idx);
+                                            setProductSearchInputs(prev => ({ ...prev, [idx]: e.target.value }));
+                                        }}
+                                        onFocus={() => setActiveProductIndex(idx)}
                                         className="flex-1 rounded-lg text-xs font-medium h-8"
                                     />
                                     <Input
@@ -631,12 +967,29 @@ export default function VouchersPage() {
                                         className="w-20 rounded-lg text-xs font-bold text-center h-8"
                                     />
                                     {items.length > 1 && (
-                                        <Button type="button" variant="ghost" size="icon" onClick={() => handleRemoveItem(idx)} className="h-8 w-8 text-rose-500">
+                                        <Button type="button" variant="ghost" size="icon" onClick={() => handleRemoveItem(idx)} className="h-8 w-8 text-rose-500 hover:bg-rose-50 rounded-lg">
                                             <Trash2 className="w-4 h-4" />
                                         </Button>
                                     )}
                                 </div>
                             ))}
+
+                            {showProductDropdown && activeProductIndex !== null && productSearchResults.length > 0 && (
+                                <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-background border border-muted rounded-xl shadow-xl max-h-48 overflow-y-auto">
+                                    {productSearchResults.map((prod) => (
+                                        <div
+                                            key={prod.codigo}
+                                            onClick={() => handleSelectProduct(prod)}
+                                            className="p-2 hover:bg-blue-50 dark:hover:bg-blue-950/40 cursor-pointer text-xs border-b border-muted/50 last:border-0 flex items-center justify-between"
+                                        >
+                                            <div>
+                                                <span className="font-mono font-bold text-blue-600">{prod.codigo}</span>
+                                                <span className="ml-2 font-medium">{prod.descripcion}</span>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
 
                         <div className="space-y-1.5 pt-2">
@@ -743,6 +1096,33 @@ export default function VouchersPage() {
                                 />
                             </div>
                         </div>
+
+                        {/* Dirección de Embarque en Edición */}
+                        {editShipmentAddresses.length > 0 && (
+                            <div className="space-y-1.5 p-3 bg-muted/20 border border-muted/80 rounded-xl">
+                                <Label className="text-xs font-bold uppercase tracking-wider text-blue-600 flex items-center gap-1.5">
+                                    <Building2 className="w-4 h-4 text-blue-500" /> Dirección de Embarque
+                                </Label>
+                                <Select
+                                    value={editFormData.direccionEmbarqueId}
+                                    onValueChange={(val) => setEditFormData(prev => ({ ...prev, direccionEmbarqueId: val }))}
+                                >
+                                    <SelectTrigger className="rounded-xl text-xs font-medium h-9">
+                                        <SelectValue placeholder="Seleccione dirección de envío..." />
+                                    </SelectTrigger>
+                                    <SelectContent className="rounded-xl">
+                                        {editShipmentAddresses.map((addr) => (
+                                            <SelectItem key={addr.id} value={addr.id}>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="font-mono font-bold text-blue-600">#{addr.id}</span>
+                                                    <span>{addr.descripcion || addr.detalle || 'Dirección de Entrega'}</span>
+                                                </div>
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
 
                         <div className="space-y-1.5">
                             <Label className="text-xs font-bold flex items-center gap-1">

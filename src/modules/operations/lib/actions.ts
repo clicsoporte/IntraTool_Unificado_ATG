@@ -3912,6 +3912,7 @@ export async function createBoletaOperativaAction(data: {
     motivoSalida: 'faltante' | 'devolucion' | 'muestra' | 'regalia' | 'otro';
     referenciaDoc?: string;
     comentario?: string;
+    direccionEmbarqueId?: string;
     items: Array<{ codigo: string; descripcion: string; cantidad: number }>;
 }): Promise<{ success: boolean; boletaNumero?: string; error?: string }> {
     const db = await getDb();
@@ -3930,6 +3931,7 @@ export async function createBoletaOperativaAction(data: {
             if (!cols.includes('requiere_autorizacion')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN requiere_autorizacion INTEGER DEFAULT 0;`);
             if (!cols.includes('autorizado_por')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN autorizado_por TEXT;`);
             if (!cols.includes('fecha_autorizacion')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN fecha_autorizacion TEXT;`);
+            if (!cols.includes('direccion_embarque_id')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN direccion_embarque_id TEXT;`);
         } catch (e) {}
 
         // Obtener prefijo y consecutivo según motivo o global
@@ -3969,8 +3971,8 @@ export async function createBoletaOperativaAction(data: {
                 documento_numero, tipo_documento, cliente_id, cliente_nombre,
                 creado_por, fecha_registro, entregado, estado, comentario,
                 boleta_numero, motivo_salida, referencia_doc, requiere_autorizacion,
-                autorizado_por, fecha_autorizacion
-            ) VALUES (?, 'boleta', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+                autorizado_por, fecha_autorizacion, direccion_embarque_id
+            ) VALUES (?, 'boleta', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
             boletaNum,
             data.clienteId || 'CLI-GENERIC',
@@ -3984,7 +3986,8 @@ export async function createBoletaOperativaAction(data: {
             data.referenciaDoc || null,
             requiresAuth,
             requiresAuth === 0 ? 'AUTO' : null,
-            requiresAuth === 0 ? todayStr : null
+            requiresAuth === 0 ? todayStr : null,
+            data.direccionEmbarqueId || null
         );
 
         const deliveryId = Number(result.lastInsertRowid);
@@ -4094,6 +4097,8 @@ export async function updateBoletaOperativaAction(
         comentario?: string;
         referenciaDoc?: string;
         clienteNombre?: string;
+        clienteId?: string;
+        direccionEmbarqueId?: string;
     }
 ): Promise<{ success: boolean; error?: string }> {
     const db = await getDb();
@@ -4125,6 +4130,14 @@ export async function updateBoletaOperativaAction(
             updateFields.push('cliente_nombre = ?');
             params.push(data.clienteNombre);
         }
+        if (data.clienteId !== undefined) {
+            updateFields.push('cliente_id = ?');
+            params.push(data.clienteId);
+        }
+        if (data.direccionEmbarqueId !== undefined) {
+            updateFields.push('direccion_embarque_id = ?');
+            params.push(data.direccionEmbarqueId || null);
+        }
 
         if (updateFields.length > 0) {
             params.push(boletaId);
@@ -4149,6 +4162,148 @@ export async function updateBoletaOperativaAction(
     } catch (e: any) {
         logError('Error updating boleta operativa:', e.message);
         return { success: false, error: e.message };
+    }
+}
+
+export async function searchErpInvoicesAction(query: string): Promise<Array<{
+    factura: string;
+    clienteId: string;
+    clienteNombre: string;
+    fecha: string;
+    direccionEmbarque?: string;
+}>> {
+    const db = await getDb();
+    try {
+        if (!query || query.trim().length < 2) return [];
+        const term = `%${query.trim()}%`;
+        const rows = db.prepare(`
+            SELECT FACTURA as factura, CLIENTE as clienteId, NOMBRE_CLIENTE as clienteNombre, FECHA as fecha, DIREC_EMBARQUE as direccionEmbarque
+            FROM core_erp_invoice_headers
+            WHERE FACTURA LIKE ? OR CLIENTE LIKE ? OR NOMBRE_CLIENTE LIKE ?
+            ORDER BY FECHA DESC LIMIT 20
+        `).all(term, term, term) as any[];
+        return rows;
+    } catch (e: any) {
+        logError('Error searching ERP invoices:', e.message);
+        return [];
+    }
+}
+
+export async function getErpInvoiceDetailAction(facturaNum: string): Promise<{
+    success: boolean;
+    header?: any;
+    lines?: any[];
+    shipmentAddresses?: any[];
+    error?: string;
+}> {
+    const db = await getDb();
+    try {
+        const header = db.prepare(`
+            SELECT FACTURA as factura, CLIENTE as clienteId, NOMBRE_CLIENTE as clienteNombre, FECHA as fecha, DIREC_EMBARQUE as direccionEmbarque
+            FROM core_erp_invoice_headers
+            WHERE FACTURA = ?
+        `).get(facturaNum) as any;
+
+        if (!header) {
+            return { success: false, error: 'Documento no encontrado' };
+        }
+
+        const lines = db.prepare(`
+            SELECT ARTICULO as codigo, (SELECT description FROM core_products WHERE id = ARTICULO) as descripcion_cat, DESCRIPCION as descripcion_erp, CANTIDAD as cantidad
+            FROM core_erp_invoice_lines
+            WHERE FACTURA = ?
+        `).all(facturaNum) as any[];
+
+        const formattedLines = lines.map((l: any) => ({
+            codigo: l.codigo,
+            descripcion: l.descripcion_cat || l.descripcion_erp || l.codigo,
+            cantidad: Number(l.cantidad) || 1
+        }));
+
+        let shipmentAddresses: any[] = [];
+        if (header.clienteId) {
+            shipmentAddresses = db.prepare(`
+                SELECT direccion_id as id, descripcion, detalle_direccion as detalle, latitude, longitude
+                FROM core_customer_shipment_addresses
+                WHERE cliente_id = ?
+            `).all(header.clienteId) as any[];
+        }
+
+        return {
+            success: true,
+            header,
+            lines: formattedLines,
+            shipmentAddresses
+        };
+    } catch (e: any) {
+        logError('Error fetching ERP invoice detail:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+export async function searchCustomersAction(query: string): Promise<Array<{
+    id: string;
+    nombre: string;
+    cedula?: string;
+    direccion?: string;
+}>> {
+    const db = await getDb();
+    try {
+        if (!query || query.trim().length < 2) return [];
+        const term = `%${query.trim()}%`;
+        const rows = db.prepare(`
+            SELECT id, nombre, cedula, direccion
+            FROM core_customers
+            WHERE id LIKE ? OR nombre LIKE ? OR cedula LIKE ?
+            ORDER BY nombre ASC LIMIT 20
+        `).all(term, term, term) as any[];
+        return rows;
+    } catch (e: any) {
+        logError('Error searching customers:', e.message);
+        return [];
+    }
+}
+
+export async function getCustomerShipmentAddressesAction(clienteId: string): Promise<Array<{
+    id: string;
+    descripcion: string;
+    detalle: string;
+    latitude?: number;
+    longitude?: number;
+}>> {
+    const db = await getDb();
+    try {
+        if (!clienteId) return [];
+        const rows = db.prepare(`
+            SELECT direccion_id as id, descripcion, detalle_direccion as detalle, latitude, longitude
+            FROM core_customer_shipment_addresses
+            WHERE cliente_id = ?
+        `).all(clienteId) as any[];
+        return rows;
+    } catch (e: any) {
+        logError('Error fetching customer shipment addresses:', e.message);
+        return [];
+    }
+}
+
+export async function searchProductsAction(query: string): Promise<Array<{
+    codigo: string;
+    descripcion: string;
+}>> {
+    const db = await getDb();
+    try {
+        if (!query || query.trim().length < 2) return [];
+        const term = `%${query.trim()}%`;
+        const rows = db.prepare(`
+            SELECT id as codigo, description as descripcion
+            FROM core_products
+            WHERE id LIKE ? OR description LIKE ?
+            ORDER BY description ASC LIMIT 20
+        `).all(term, term) as any[];
+        return rows;
+    } catch (e: any) {
+        logError('Error searching products:', e.message);
+        return [];
     }
 }
 
