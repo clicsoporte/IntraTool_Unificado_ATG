@@ -1,6 +1,6 @@
 @echo off
 :: ==============================================================================
-# LANZADOR AUTOMÁTICO CON UAC ELEVACIÓN PARA DESINSTALAR SERVICIO WINDOWS
+:: LANZADOR AUTOMÁTICO CON UAC ELEVACIÓN PARA DESINSTALAR SERVICIO WINDOWS
 :: ==============================================================================
 title Desinstalador de Servicio de Windows - IntraTool Unificado
 

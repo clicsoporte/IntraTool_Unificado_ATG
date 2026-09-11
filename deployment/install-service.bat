@@ -1,6 +1,6 @@
 @echo off
 :: ==============================================================================
-# LANZADOR AUTOMÁTICO CON UAC ELEVACIÓN PARA INSTALAR SERVICIO WINDOWS
+:: LANZADOR AUTOMÁTICO CON UAC ELEVACIÓN PARA INSTALAR SERVICIO WINDOWS
 :: ==============================================================================
 title Instalador de Servicio de Windows - IntraTool Unificado
 

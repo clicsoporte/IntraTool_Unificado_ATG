@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 # SCRIPT DE INSTALACIÓN AUTOMÁTICA DE SERVICIO DE WINDOWS CON NSSM
 # Sistema: IntraTool Unificado (Next.js / Node.js)
 # ==============================================================================
@@ -144,9 +144,12 @@ if ($svc.Status -eq "Running") {
     Write-Host " • Nombre del Servicio : $serviceName" -ForegroundColor White
     Write-Host " • Estado              : RUNNING (En Ejecución)" -ForegroundColor Green
     Write-Host " • Puerto Configurado  : http://localhost:$port" -ForegroundColor Cyan
-    Write-Host " • Archivos de Log     : $logsDir\service_stdout.log" -ForegroundColor Gray
+    $stdoutLog = "$logsDir\service_stdout.log"
+    $stderrLog = "$logsDir\service_stderr.log"
+    Write-Host " [LOGS] Archivos de Log     : $stdoutLog" -ForegroundColor Gray
     Write-Host ""
 } else {
-    Write-Host "⚠️ El servicio fue registrado pero el estado actual es: $($svc.Status)" -ForegroundColor Yellow
-    Write-Host "Revisa los logs en: $logsDir\service_stderr.log" -ForegroundColor Yellow
+    $statusName = $svc.Status
+    Write-Host "[ADVERTENCIA] El servicio fue registrado pero el estado actual es: $statusName" -ForegroundColor Yellow
+    Write-Host "Revisa los logs en: $stderrLog" -ForegroundColor Yellow
 }
