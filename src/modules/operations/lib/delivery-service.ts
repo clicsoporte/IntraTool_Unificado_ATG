@@ -209,14 +209,20 @@ export async function updateDeliveryStatusInternal(
             let assignedBoletaNumero = data.boletaNumero || currentDoc.boleta_numero || null;
             if (!assignedBoletaNumero) {
                 try {
-                    const prefixRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boleta_consecutive_prefix'").get() as { value: string } | undefined;
-                    const nextRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boleta_consecutive_next'").get() as { value: string } | undefined;
+                    const useSingleConsecRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boletas_use_single_consecutive'").get() as { value: string } | undefined;
+                    const isSingleConsecutive = useSingleConsecRow?.value === 'true';
+
+                    const prefixSettingKey = isSingleConsecutive ? 'boleta_consecutive_prefix' : 'boleta_prefix_faltante';
+                    const nextSettingKey = isSingleConsecutive ? 'boleta_consecutive_next' : 'boleta_next_faltante';
+
+                    const prefixRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = ? OR key = 'boleta_consecutive_prefix' ORDER BY CASE WHEN key = ? THEN 1 ELSE 2 END LIMIT 1").get(prefixSettingKey, prefixSettingKey) as { value: string } | undefined;
+                    const nextRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = ? OR key = 'boleta_consecutive_next' ORDER BY CASE WHEN key = ? THEN 1 ELSE 2 END LIMIT 1").get(nextSettingKey, nextSettingKey) as { value: string } | undefined;
 
                     const prefix = prefixRow?.value ?? 'BOL-';
                     const nextNum = parseInt(nextRow?.value || '1', 10);
                     assignedBoletaNumero = `${prefix}${String(nextNum).padStart(6, '0')}`;
 
-                    db.prepare("INSERT INTO ops_delivery_settings (key, value) VALUES ('boleta_consecutive_next', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(nextNum + 1));
+                    db.prepare("INSERT INTO ops_delivery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(nextSettingKey, String(nextNum + 1));
                 } catch (e) {
                     assignedBoletaNumero = `BOL-${Date.now().toString().slice(-6)}`;
                 }
@@ -331,14 +337,20 @@ export async function updateDeliveryStatusInternal(
                     // Generate official consecutive boleta number for this reinjection
                     let reinjectedBoletaNumero: string | null = null;
                     try {
-                        const prefixRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boleta_consecutive_prefix'").get() as { value: string } | undefined;
-                        const nextRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boleta_consecutive_next'").get() as { value: string } | undefined;
+                        const useSingleConsecRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boletas_use_single_consecutive'").get() as { value: string } | undefined;
+                        const isSingleConsecutive = useSingleConsecRow?.value === 'true';
+
+                        const prefixSettingKey = isSingleConsecutive ? 'boleta_consecutive_prefix' : 'boleta_prefix_faltante';
+                        const nextSettingKey = isSingleConsecutive ? 'boleta_consecutive_next' : 'boleta_next_faltante';
+
+                        const prefixRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = ? OR key = 'boleta_consecutive_prefix' ORDER BY CASE WHEN key = ? THEN 1 ELSE 2 END LIMIT 1").get(prefixSettingKey, prefixSettingKey) as { value: string } | undefined;
+                        const nextRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = ? OR key = 'boleta_consecutive_next' ORDER BY CASE WHEN key = ? THEN 1 ELSE 2 END LIMIT 1").get(nextSettingKey, nextSettingKey) as { value: string } | undefined;
 
                         const prefix = prefixRow?.value ?? 'BOL-';
                         const nextNum = parseInt(nextRow?.value || '1', 10);
                         reinjectedBoletaNumero = `${prefix}${String(nextNum).padStart(6, '0')}`;
 
-                        db.prepare("INSERT INTO ops_delivery_settings (key, value) VALUES ('boleta_consecutive_next', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(nextNum + 1));
+                        db.prepare("INSERT INTO ops_delivery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(nextSettingKey, String(nextNum + 1));
                     } catch (e) {
                         reinjectedBoletaNumero = `BOL-${Date.now().toString().slice(-6)}`;
                     }
