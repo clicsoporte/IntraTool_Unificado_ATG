@@ -275,6 +275,14 @@ export async function initializeOperationsSchema(db: Database) {
                 fecha_descarte DATETIME DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS ops_driver_consecutives (
+                user_id INTEGER PRIMARY KEY,
+                prefix TEXT NOT NULL,
+                next_number INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (user_id) REFERENCES core_users(id) ON DELETE CASCADE
+            );
+
             -- Índices de Rendimiento
             CREATE INDEX IF NOT EXISTS idx_ops_delivery_queue_doc ON ops_delivery_queue(documento_numero);
             CREATE INDEX IF NOT EXISTS idx_ops_delivery_queue_estado ON ops_delivery_queue(estado);

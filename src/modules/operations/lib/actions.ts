@@ -4455,4 +4455,83 @@ export async function getBoletaPrintHtmlAction(boletaId: number): Promise<{ succ
     }
 }
 
+export async function getDriverConsecutivesAction(): Promise<Array<{
+    userId: number;
+    name: string;
+    email: string;
+    role: string;
+    erpAlias?: string;
+    prefix: string;
+    nextNumber: number;
+}>> {
+    const db = await getDb();
+    try {
+        const users = db.prepare(`
+            SELECT u.id as userId, u.name, u.email, u.role, u.erpAlias,
+                   c.prefix, c.next_number as nextNumber
+            FROM core_users u
+            LEFT JOIN ops_driver_consecutives c ON u.id = c.user_id
+            WHERE u.is_active = 1 OR u.is_active IS NULL
+            ORDER BY u.name ASC
+        `).all() as any[];
+
+        return users.map((u: any) => {
+            let defaultPrefix = u.prefix;
+            if (!defaultPrefix) {
+                const cleanAlias = (u.erpAlias || u.name || 'DRV').replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 3);
+                defaultPrefix = `BOL-${cleanAlias}-`;
+            }
+            return {
+                userId: u.userId,
+                name: u.name || u.email,
+                email: u.email || '',
+                role: u.role || 'user',
+                erpAlias: u.erpAlias || '',
+                prefix: defaultPrefix,
+                nextNumber: u.nextNumber ? Number(u.nextNumber) : 1
+            };
+        });
+    } catch (e: any) {
+        logError('Error fetching driver consecutives:', e.message);
+        return [];
+    }
+}
+
+export async function updateDriverConsecutivesAction(items: Array<{
+    userId: number;
+    prefix: string;
+    nextNumber: number;
+}>): Promise<{ success: boolean; error?: string }> {
+    const db = await getDb();
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+        return { success: false, error: 'No autorizado' };
+    }
+
+    try {
+        const todayStr = new Date().toISOString();
+        const stmt = db.prepare(`
+            INSERT INTO ops_driver_consecutives (user_id, prefix, next_number, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                prefix = excluded.prefix,
+                next_number = excluded.next_number,
+                updated_at = excluded.updated_at
+        `);
+
+        for (const item of items) {
+            if (item.userId && item.prefix) {
+                stmt.run(item.userId, item.prefix.trim().toUpperCase(), Math.max(1, Number(item.nextNumber) || 1), todayStr);
+            }
+        }
+
+        revalidatePath('/dashboard/admin/operations/deliveries');
+        revalidatePath('/dashboard/admin/operations/vouchers');
+        return { success: true };
+    } catch (e: any) {
+        logError('Error updating driver consecutives:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
 

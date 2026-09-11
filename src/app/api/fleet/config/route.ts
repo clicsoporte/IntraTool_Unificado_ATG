@@ -1,9 +1,27 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/modules/core/lib/db';
+import { authenticateFleetRequest } from '@/modules/fleet/lib/fleet-auth-guard';
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     const db = await getDb();
+    
+    // Check authenticated user
+    let userId: number | null = null;
+    try {
+      const authResult = await authenticateFleetRequest(req);
+      if ('user' in authResult && authResult.user?.userId) {
+        userId = authResult.user.userId;
+      }
+    } catch (_) {}
+
+    if (!userId) {
+      try {
+        const { searchParams } = new URL(req.url);
+        const uParam = searchParams.get('userId') || searchParams.get('user_id');
+        if (uParam) userId = Number(uParam);
+      } catch (_) {}
+    }
     
     // Fetch Tenant / Customer Company Settings from /dashboard/admin/general
     const company = db.prepare('SELECT name, taxId, phone, email, address FROM core_company_settings WHERE id = 1').get() as any;
@@ -13,6 +31,24 @@ export async function GET() {
     const config: Record<string, string> = {};
     for (const r of rows) {
       config[r.key] = r.value;
+    }
+
+    // Override driver-specific boleta consecutive if authenticated
+    if (userId) {
+      try {
+        const driverConsec = db.prepare('SELECT prefix, next_number FROM ops_driver_consecutives WHERE user_id = ?').get(userId) as any;
+        if (driverConsec && driverConsec.prefix) {
+          config.boleta_consecutive_prefix = driverConsec.prefix;
+          config.boleta_consecutive_next = String(driverConsec.next_number || 1);
+        } else {
+          const user = db.prepare('SELECT name, erpAlias FROM core_users WHERE id = ?').get(userId) as any;
+          if (user) {
+            const cleanAlias = (user.erpAlias || user.name || 'DRV').replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 3);
+            config.boleta_consecutive_prefix = `BOL-${cleanAlias}-`;
+            config.boleta_consecutive_next = '1';
+          }
+        }
+      } catch (_) {}
     }
 
     // Fetch breakdown types catalog from /dashboard/admin/fleet

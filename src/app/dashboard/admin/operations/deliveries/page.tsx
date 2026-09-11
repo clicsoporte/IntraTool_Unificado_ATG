@@ -35,7 +35,9 @@ import {
     deleteDeliveryRoute,
     getCostaRicaGeography,
     saveCostaRicaGeographyAction,
-    restoreDefaultGeographyAction
+    restoreDefaultGeographyAction,
+    getDriverConsecutivesAction,
+    updateDriverConsecutivesAction
 } from '@/modules/operations/lib/actions';
 import {
     Select,
@@ -268,6 +270,10 @@ export default function AdminOperationsPage() {
     // Registered Devices state
     const [registeredDevices, setRegisteredDevices] = useState<any[]>([]);
 
+    // Driver Offline Consecutives State
+    const [driverConsecutives, setDriverConsecutives] = useState<any[]>([]);
+    const [savingDriverConsecutives, setSavingDriverConsecutives] = useState(false);
+
     useEffect(() => {
         setTitle('Configuración de Entregas');
     }, [setTitle]);
@@ -276,11 +282,12 @@ export default function AdminOperationsPage() {
         async function loadData() {
             setLoading(true);
             try {
-                const [fetchedSettings, fetchedRoutes, fetchedGeo, devicesRes] = await Promise.all([
+                const [fetchedSettings, fetchedRoutes, fetchedGeo, devicesRes, fetchedDriverConsecutives] = await Promise.all([
                     getDeliverySettings(),
                     getDeliveryRoutes(),
                     getCostaRicaGeography(),
-                    fetch('/api/fleet/device-config?list=true').then(r => r.json()).catch(() => ({ devices: [] }))
+                    fetch('/api/fleet/device-config?list=true').then(r => r.json()).catch(() => ({ devices: [] })),
+                    getDriverConsecutivesAction()
                 ]);
                 if (fetchedSettings && Object.keys(fetchedSettings).length > 0) {
                     setSettings((prev) => ({ ...prev, ...fetchedSettings }));
@@ -289,6 +296,9 @@ export default function AdminOperationsPage() {
                 setGeographyData(fetchedGeo);
                 if (devicesRes?.devices) {
                     setRegisteredDevices(devicesRes.devices);
+                }
+                if (Array.isArray(fetchedDriverConsecutives)) {
+                    setDriverConsecutives(fetchedDriverConsecutives);
                 }
                 if (fetchedGeo) {
                     setRawGeoJson(JSON.stringify(fetchedGeo, null, 4));
@@ -307,6 +317,47 @@ export default function AdminOperationsPage() {
             loadData();
         }
     }, [toast, authLoading, hasPermission]);
+
+    const handleDriverConsecutiveChange = (userId: number, field: 'prefix' | 'nextNumber', value: any) => {
+        setDriverConsecutives(prev => prev.map(item => {
+            if (item.userId === userId) {
+                return { ...item, [field]: value };
+            }
+            return item;
+        }));
+    };
+
+    async function handleSaveDriverConsecutives() {
+        setSavingDriverConsecutives(true);
+        try {
+            const payload = driverConsecutives.map(item => ({
+                userId: item.userId,
+                prefix: item.prefix || 'BOL-',
+                nextNumber: Number(item.nextNumber) || 1
+            }));
+            const res = await updateDriverConsecutivesAction(payload);
+            if (res.success) {
+                toast({
+                    title: 'Consecutivos actualizados',
+                    description: 'Los prefijos y números correlativos por chofer han sido guardados.',
+                });
+                const refreshed = await getDriverConsecutivesAction();
+                if (Array.isArray(refreshed)) {
+                    setDriverConsecutives(refreshed);
+                }
+            } else {
+                throw new Error(res.error);
+            }
+        } catch (e: any) {
+            toast({
+                title: 'Error al guardar consecutivos',
+                description: e.message || 'No se pudieron actualizar los consecutivos.',
+                variant: 'destructive'
+            });
+        } finally {
+            setSavingDriverConsecutives(false);
+        }
+    }
 
     async function handleSaveSettings() {
         setSavingSettings(true);
@@ -2096,6 +2147,94 @@ export default function AdminOperationsPage() {
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-6">
+                            {/* Prefijos Únicos de Boletas por Chofer (Modo Offline) */}
+                            <div className="space-y-4 p-5 bg-emerald-950/10 rounded-xl border border-emerald-500/20">
+                                <div className="flex items-center justify-between gap-3 flex-wrap">
+                                    <div className="flex items-center gap-2.5">
+                                        <span className="text-xl">📋</span>
+                                        <div>
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <Label className="text-sm font-extrabold text-emerald-900 dark:text-emerald-300">
+                                                    Prefijos de Boletas por Chofer (Modo Offline APK)
+                                                </Label>
+                                                <PlatformBadge type="apk" />
+                                            </div>
+                                            <span className="text-xs text-muted-foreground block font-medium">
+                                                Garantiza cero colisiones asignando un prefijo único y secuencial propio a cada chofer en ruta sin cobertura móvil.
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <Button
+                                        type="button"
+                                        onClick={handleSaveDriverConsecutives}
+                                        disabled={savingDriverConsecutives}
+                                        size="sm"
+                                        className="rounded-xl gap-2 font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+                                    >
+                                        <Save className="w-4 h-4" />
+                                        {savingDriverConsecutives ? 'Guardando...' : 'Guardar Prefijos por Chofer'}
+                                    </Button>
+                                </div>
+
+                                {driverConsecutives.length === 0 ? (
+                                    <div className="p-4 text-center text-xs text-muted-foreground bg-background rounded-lg border">
+                                        No hay choferes activos registrados en el sistema.
+                                    </div>
+                                ) : (
+                                    <div className="overflow-x-auto rounded-xl border border-emerald-500/20 bg-background">
+                                        <table className="w-full text-left text-xs">
+                                            <thead className="bg-emerald-500/10 text-emerald-900 dark:text-emerald-200 font-extrabold">
+                                                <tr>
+                                                    <th className="p-3">Chofer / Usuario</th>
+                                                    <th className="p-3">Correo / Alias</th>
+                                                    <th className="p-3">Prefijo Único (ej: B01-)</th>
+                                                    <th className="p-3">Siguiente Número</th>
+                                                    <th className="p-3">Vista Previa Próxima Boleta</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-emerald-500/10">
+                                                {driverConsecutives.map((driver) => {
+                                                    const preview = `${driver.prefix || 'BOL-'}${String(driver.nextNumber || 1).padStart(6, '0')}`;
+                                                    return (
+                                                        <tr key={driver.userId} className="hover:bg-emerald-500/5 transition-colors">
+                                                            <td className="p-3 font-bold text-foreground">
+                                                                {driver.name}
+                                                            </td>
+                                                            <td className="p-3 text-muted-foreground font-mono text-[11px]">
+                                                                {driver.email || driver.alias || `ID: ${driver.userId}`}
+                                                            </td>
+                                                            <td className="p-3">
+                                                                <Input
+                                                                    type="text"
+                                                                    value={driver.prefix || ''}
+                                                                    onChange={(e) => handleDriverConsecutiveChange(driver.userId, 'prefix', e.target.value.toUpperCase())}
+                                                                    className="h-8 font-mono font-bold text-xs uppercase w-32 border-emerald-500/30 focus-visible:ring-emerald-500"
+                                                                    placeholder="B01-"
+                                                                />
+                                                            </td>
+                                                            <td className="p-3">
+                                                                <Input
+                                                                    type="number"
+                                                                    min="1"
+                                                                    value={driver.nextNumber || 1}
+                                                                    onChange={(e) => handleDriverConsecutiveChange(driver.userId, 'nextNumber', Math.max(1, parseInt(e.target.value) || 1))}
+                                                                    className="h-8 font-mono font-bold text-xs w-28 border-emerald-500/30 focus-visible:ring-emerald-500"
+                                                                />
+                                                            </td>
+                                                            <td className="p-3">
+                                                                <Badge variant="outline" className="font-mono text-xs font-black bg-emerald-50 text-emerald-700 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300">
+                                                                    {preview}
+                                                                </Badge>
+                                                            </td>
+                                                        </tr>
+                                                    );
+                                                })}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                )}
+                            </div>
+
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                 {/* Signature Settings */}
                                 <div className="flex flex-row items-center justify-between p-4 bg-muted/20 rounded-xl border border-muted/40 gap-3">

@@ -139,6 +139,7 @@ export const MASTER_SCHEMA: Record<string, string[]> = {
         'id', 'version_name', 'version_code', 'apk_url', 'release_notes', 
         'global_ota_paused', 'force_update', 'server_url_primary', 'server_url_fallback', 'updated_at'
     ],
+    ops_driver_consecutives: ['user_id', 'prefix', 'next_number', 'updated_at'],
 
 
     // --- PLANNER MODULE ---
