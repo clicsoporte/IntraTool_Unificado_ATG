@@ -3934,9 +3934,13 @@ export async function createBoletaOperativaAction(data: {
             if (!cols.includes('direccion_embarque_id')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN direccion_embarque_id TEXT;`);
         } catch (e) {}
 
+        // Verificar si se usa un consecutivo único unificado para todas las boletas
+        const useSingleConsecRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boletas_use_single_consecutive'").get() as { value: string } | undefined;
+        const isSingleConsecutive = useSingleConsecRow?.value === 'true';
+
         // Obtener prefijo y consecutivo según motivo o global
-        const prefixSettingKey = `boleta_prefix_${data.motivoSalida}`;
-        const nextSettingKey = `boleta_next_${data.motivoSalida}`;
+        let prefixSettingKey = isSingleConsecutive ? 'boleta_consecutive_prefix' : `boleta_prefix_${data.motivoSalida}`;
+        let nextSettingKey = isSingleConsecutive ? 'boleta_consecutive_next' : `boleta_next_${data.motivoSalida}`;
 
         const prefixRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = ? OR key = 'boleta_consecutive_prefix' ORDER BY CASE WHEN key = ? THEN 1 ELSE 2 END LIMIT 1").get(prefixSettingKey, prefixSettingKey) as { value: string } | undefined;
         const nextRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = ? OR key = 'boleta_consecutive_next' ORDER BY CASE WHEN key = ? THEN 1 ELSE 2 END LIMIT 1").get(nextSettingKey, nextSettingKey) as { value: string } | undefined;
@@ -3949,7 +3953,7 @@ export async function createBoletaOperativaAction(data: {
             otro: 'BOL-'
         };
 
-        const prefix = prefixRow?.value || defaultPrefixes[data.motivoSalida] || 'BOL-';
+        const prefix = prefixRow?.value || (isSingleConsecutive ? 'BOL-' : defaultPrefixes[data.motivoSalida] || 'BOL-');
         const nextNum = parseInt(nextRow?.value || '1', 10);
         const boletaNum = `${prefix}${String(nextNum).padStart(6, '0')}`;
 
