@@ -4,6 +4,7 @@ import { getDb } from "./db";
 import { MASTER_SCHEMA } from "./master-schema";
 import { logInfo, logError } from "./logger";
 import { auditDatabaseInstance, repairDatabaseInstance, AuditResult } from "./db-integrity";
+import { authorizeAction } from "./auth-guard";
 
 export type { AuditResult };
 
@@ -12,6 +13,7 @@ export type { AuditResult };
  * against the MASTER_SCHEMA definition.
  */
 export async function runDatabaseAudit(): Promise<AuditResult[]> {
+    await authorizeAction('admin:maintenance:backup');
     try {
         const db = await getDb();
         const results = auditDatabaseInstance(db);
@@ -33,6 +35,7 @@ export async function runDatabaseAudit(): Promise<AuditResult[]> {
  * NOTE: This only adds columns, it doesn't delete or modify existing ones.
  */
 export async function repairDatabaseSchema(results: AuditResult[]): Promise<{ success: boolean, fixed: string[], errors: string[] }> {
+    await authorizeAction('admin:maintenance:restore');
     const db = await getDb();
     const { fixed, errors } = await repairDatabaseInstance(db, results);
 

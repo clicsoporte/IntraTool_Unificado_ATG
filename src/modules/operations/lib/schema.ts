@@ -688,14 +688,14 @@ export async function initializeOperationsSchema(db: Database) {
             db.prepare(`
                 INSERT INTO ops_app_version_settings 
                 (id, version_name, version_code, apk_url, release_notes, global_ota_paused, force_update, server_url_primary, server_url_fallback, updated_at)
-                VALUES (1, '1.2.37', 56, '/downloads/apk/ClicDriver.apk', 'Actualización Oficial v1.2.37: Protección PopScope contra salidas accidentales, política de retención local de fotos hasta la nueva ruta y diagnóstico silencioso de sensores para TI.', 0, 1, '192.168.1.14:9003', '192.168.1.14:9001', CURRENT_TIMESTAMP)
+                VALUES (1, '1.2.38', 57, '/downloads/apk/ClicDriver.apk', 'Actualización Oficial v1.2.38: Prefijos únicos y consecutivos offline por chofer, compatibilidad mejorada y optimizaciones de sincronización.', 0, 1, '192.168.1.14:9003', '192.168.1.14:9001', CURRENT_TIMESTAMP)
             `).run();
         } else {
             // Auto-actualizar registro por defecto si está en versión inferior
             db.prepare(`
                 UPDATE ops_app_version_settings
-                SET version_name = '1.2.37', version_code = 56, release_notes = 'Actualización Oficial v1.2.37: Protección PopScope contra salidas accidentales, política de retención local de fotos hasta la nueva ruta y diagnóstico silencioso de sensores para TI.'
-                WHERE id = 1 AND version_code < 56
+                SET version_name = '1.2.38', version_code = 57, release_notes = 'Actualización Oficial v1.2.38: Prefijos únicos y consecutivos offline por chofer, compatibilidad mejorada y optimizaciones de sincronización.'
+                WHERE id = 1 AND version_code < 57
             `).run();
         }
     } catch (e: any) {

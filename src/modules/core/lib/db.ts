@@ -139,9 +139,11 @@ export async function getGeographyData(key: string): Promise<string | null> {
             return row.value;
         }
 
-        // Seeding logic for Costa Rica if it's the requested key and not found in DB
         if (key === 'costa_rica') {
-            const filePath = path.join(process.cwd(), 'docs', 'provincias_cantones_distritos_costa_ric.txt');
+            let filePath = path.join(process.cwd(), 'docs', 'provincias_cantones_distritos_costa_rica.json');
+            if (!fs.existsSync(filePath)) {
+                filePath = path.join(process.cwd(), 'docs', 'provincias_cantones_distritos_costa_rica.txt');
+            }
             if (fs.existsSync(filePath)) {
                 const fileContent = fs.readFileSync(filePath, 'utf-8');
                 try {
@@ -1239,6 +1241,7 @@ export async function getCurrentVersion(): Promise<string | null> {
 const backupDir = path.join(dbDirectory, UPDATE_BACKUP_DIR);
 
 export async function backupAllForUpdate(): Promise<void> {
+    await authorizeAction('admin:maintenance:backup');
     // Run checkpoint BEFORE creating the backup.
     await runWalCheckpoint();
     
@@ -1277,7 +1280,7 @@ export async function listAllUpdateBackups(): Promise<UpdateBackupInfo[]> {
 }
 
 export async function restoreDatabase(moduleId: string, backupFile: File): Promise<void> {
-    await authorizeAction('admin:import:run');
+    await authorizeAction('admin:maintenance:restore');
     if (!moduleId || !backupFile) {
         throw new Error("Module ID and backup file are required.");
     }
@@ -1294,7 +1297,7 @@ export async function restoreDatabase(moduleId: string, backupFile: File): Promi
 }
 
 export async function restoreAllFromUpdateBackup(timestamp: string): Promise<void> {
-    await authorizeAction('admin:import:run');
+    await authorizeAction('admin:maintenance:restore');
     const backups = await listAllUpdateBackups();
     const backupsToRestore = backups.filter(b => b.date === timestamp);
 
@@ -1319,6 +1322,7 @@ export async function restoreAllFromUpdateBackup(timestamp: string): Promise<voi
 
 
 export async function deleteOldUpdateBackups(): Promise<number> {
+    await authorizeAction('admin:maintenance:backup');
     const backups = await listAllUpdateBackups();
     const uniqueTimestamps = [...new Set(backups.map(b => b.date))].sort((a,b) => b.localeCompare(a));
     if (uniqueTimestamps.length <= 1) return 0;
@@ -1336,6 +1340,7 @@ export async function deleteOldUpdateBackups(): Promise<number> {
 }
 
 export async function factoryReset(moduleId: string): Promise<void> {
+    await authorizeAction('admin:maintenance:reset');
     await addLog({ type: 'WARN', message: `FACTORY RESET triggered for module: ${moduleId}` });
     const db = await getDb();
 
@@ -1866,6 +1871,7 @@ export async function getActiveWizardSession(userId: number): Promise<WizardSess
  * This is a server action intended to be called from the UI.
  */
 export async function forceWalCheckpoint(): Promise<void> {
+    await authorizeAction('admin:maintenance:backup');
     await logInfo("Manual WAL checkpoint initiated by admin.");
     await runWalCheckpoint();
 }

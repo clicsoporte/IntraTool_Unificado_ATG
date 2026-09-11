@@ -123,7 +123,7 @@ class ApiService {
   Future<Map<String, dynamic>> fetchSystemConfig() async {
     final url = Uri.parse('$baseUrl/api/fleet/config');
     try {
-      final res = await http.get(url).timeout(const Duration(seconds: 8));
+      final res = await http.get(url, headers: defaultHeaders).timeout(const Duration(seconds: 8));
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
         if (data['success'] == true) {

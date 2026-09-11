@@ -16,6 +16,7 @@ import { authorizeAction } from './auth-guard';
  * @returns {Promise<{ results: { type: string; count: number; }[], totalTasks: number }>} A promise that resolves to an object containing import results and the total number of tasks.
  */
 export async function syncAllData(): Promise<{ results: { type: string; count: number; }[], totalTasks: number }> {
+    await authorizeAction('admin:import:run');
     return await importAllData();
 }
 
@@ -25,6 +26,7 @@ export async function syncAllData(): Promise<{ results: { type: string; count: n
  * It relies on a process manager (like PM2 or IIS) to automatically restart the application.
  */
 export async function shutdownServer(): Promise<void> {
+    await authorizeAction('admin:maintenance:restore');
     await logWarn("SERVER SHUTDOWN INITIATED VIA ACTION. This will terminate the process.");
     // A small delay to ensure any final logs can be written
     setTimeout(() => {
@@ -37,6 +39,7 @@ export async function shutdownServer(): Promise<void> {
  * @returns {Promise<number>} The number of files deleted.
  */
 export async function cleanupAllExportFiles(): Promise<number> {
+    await authorizeAction('admin:maintenance:restore');
     const exportDir = path.join(process.cwd(), 'temp_files', 'exports');
     if (!fs.existsSync(exportDir)) {
         return 0;

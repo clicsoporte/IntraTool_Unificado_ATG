@@ -136,11 +136,12 @@ export async function GET(req: NextRequest) {
       ...config,
     };
 
-    // [Security] Omitir claves privadas del sistema e información sensible en endpoint público
+    // [Security] Omitir credenciales y secretos internos del servidor
     delete (mergedConfig as any).system_jwt_secret;
     delete (mergedConfig as any).agent_secret_key;
-    delete (mergedConfig as any).telegram_bot_token;
-    delete (mergedConfig as any).apk_admin_settings_pin;
+    delete (mergedConfig as any).sms_gateway_token;
+    delete (mergedConfig as any).telefonos_departamento_ti;
+    delete (mergedConfig as any).supervisor_telegram_chat_ids;
 
     return NextResponse.json({
       success: true,

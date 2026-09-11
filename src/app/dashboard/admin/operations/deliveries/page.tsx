@@ -184,8 +184,6 @@ export default function AdminOperationsPage() {
         apk_tracking_interval_minutes: '5',
         notification_strategy: 'solamente_telegram',
         sms_gateway_url: '',
-        sms_gateway_token: '',
-        telefonos_departamento_ti: '',
         break_time_breakfast_min: '15',
         break_time_lunch_min: '45',
         break_time_snack_min: '15',
@@ -267,9 +265,6 @@ export default function AdminOperationsPage() {
     const [savingGeo, setSavingGeo] = useState(false);
     const [restoringGeo, setRestoringGeo] = useState(false);
 
-    // Registered Devices state
-    const [registeredDevices, setRegisteredDevices] = useState<any[]>([]);
-
     // Driver Offline Consecutives State
     const [driverConsecutives, setDriverConsecutives] = useState<any[]>([]);
     const [savingDriverConsecutives, setSavingDriverConsecutives] = useState(false);
@@ -282,11 +277,10 @@ export default function AdminOperationsPage() {
         async function loadData() {
             setLoading(true);
             try {
-                const [fetchedSettings, fetchedRoutes, fetchedGeo, devicesRes, fetchedDriverConsecutives] = await Promise.all([
+                const [fetchedSettings, fetchedRoutes, fetchedGeo, fetchedDriverConsecutives] = await Promise.all([
                     getDeliverySettings(),
                     getDeliveryRoutes(),
                     getCostaRicaGeography(),
-                    fetch('/api/fleet/device-config?list=true').then(r => r.json()).catch(() => ({ devices: [] })),
                     getDriverConsecutivesAction()
                 ]);
                 if (fetchedSettings && Object.keys(fetchedSettings).length > 0) {
@@ -294,9 +288,6 @@ export default function AdminOperationsPage() {
                 }
                 setRoutes(fetchedRoutes);
                 setGeographyData(fetchedGeo);
-                if (devicesRes?.devices) {
-                    setRegisteredDevices(devicesRes.devices);
-                }
                 if (Array.isArray(fetchedDriverConsecutives)) {
                     setDriverConsecutives(fetchedDriverConsecutives);
                 }

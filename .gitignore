@@ -14,7 +14,8 @@ next-env.d.ts
 # User & Runtime Uploads (Evidencias de Choferes, Firmas y Fotos)
 /fleet_uploads/
 /public/uploads/
-/docs/
+/docs/*
+!/docs/provincias_cantones_distritos_costa_rica.json
 *.apk
 
 # Databases & Backups

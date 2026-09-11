@@ -211,7 +211,10 @@ export async function saveCostaRicaGeographyAction(jsonString: string): Promise<
 export async function restoreDefaultGeographyAction(): Promise<{ success: boolean; error?: string }> {
     await authorizeAction('deliveries:admin');
     try {
-        const filePath = path.join(process.cwd(), 'docs', 'provincias_cantones_distritos_costa_ric.txt');
+        let filePath = path.join(process.cwd(), 'docs', 'provincias_cantones_distritos_costa_rica.json');
+        if (!fs.existsSync(filePath)) {
+            filePath = path.join(process.cwd(), 'docs', 'provincias_cantones_distritos_costa_rica.txt');
+        }
         if (!fs.existsSync(filePath)) {
             throw new Error("Archivo geográfico base no encontrado en el servidor.");
         }
@@ -735,6 +738,16 @@ export async function getRouteSheetEmailRecipientsAction(): Promise<{ success: b
     }
 }
 
+function escapeHtml(str: any): string {
+    if (str === null || str === undefined) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 async function generateRouteSheetHtml(
     consecutivo: string,
     assignment: any,
@@ -743,14 +756,20 @@ async function generateRouteSheetHtml(
 ): Promise<string> {
     const { getCompanySettings } = await import('@/modules/core/lib/db');
     const company = await getCompanySettings();
-    const companyName = company?.name || 'Industrias Garend S.A.';
-    const companyTaxId = company?.taxId || '3101133082';
-    const companyAddress = company?.address || 'Alajuela, Poás, Carrillos bajo, del EBAIS 700 oeste.';
-    const companyPhone = company?.phone || '+506 2458-4343';
-    const companyEmail = company?.email || 'ventas@industriasgarend.com';
+    const companyName = escapeHtml(company?.name || 'Industrias Garend S.A.');
+    const companyTaxId = escapeHtml(company?.taxId || '3101133082');
+    const companyAddress = escapeHtml(company?.address || 'Alajuela, Poás, Carrillos bajo, del EBAIS 700 oeste.');
+    const companyPhone = escapeHtml(company?.phone || '+506 2458-4343');
+    const companyEmail = escapeHtml(company?.email || 'ventas@industriasgarend.com');
 
     const isoSettingRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'route_sheet_iso_text'").get() as { value: string } | undefined;
-    const isoText = isoSettingRow?.value || 'DOC-LOG-04 | Ver. 02 | Sistema de Gestión de Calidad ISO 9001:2015';
+    const isoText = escapeHtml(isoSettingRow?.value || 'DOC-LOG-04 | Ver. 02 | Sistema de Gestión de Calidad ISO 9001:2015');
+
+    const safeConsecutivo = escapeHtml(consecutivo);
+    const safeRutaNombre = escapeHtml(assignment.ruta_nombre || '');
+    const safeChoferNombre = escapeHtml(assignment.chofer_nombre || '');
+    const safeVehiculo = escapeHtml(`${assignment.vehiculo_marca || ''} ${assignment.vehiculo_modelo || ''} (${assignment.vehiculo_placa || ''})`);
+    const safeEstado = escapeHtml(assignment.estado || 'FINALIZADA');
 
     const dateStr = new Date(assignment.fecha_completada || assignment.fecha || Date.now()).toLocaleDateString('es-CR', { timeZone: 'America/Costa_Rica' });
     const timeStr = new Date(assignment.fecha_completada || assignment.fecha || Date.now()).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit' });
@@ -798,7 +817,7 @@ async function generateRouteSheetHtml(
             } catch (e) {}
 
             const timeCellHtml = renderCompactRouteSheetTimeCell(d);
-            const receptorText = d.nombre_recibe ? `<strong>${d.nombre_recibe}</strong>` : '<span style="color: #94a3b8; font-style: italic;">Sin registrar</span>';
+            const receptorText = d.nombre_recibe ? `<strong>${escapeHtml(d.nombre_recibe)}</strong>` : '<span style="color: #94a3b8; font-style: italic;">Sin registrar</span>';
 
             // Cuadro para Firma (Física o Digital) en la entrega
             const firmaBoxHtml = `
@@ -814,7 +833,7 @@ async function generateRouteSheetHtml(
                 boletaBadgeHtml = `
                     <div style="margin-top: 3px;">
                         <span style="display: inline-block; font-size: 9.5px; font-family: monospace; font-weight: 800; color: #0284c7; background: #e0f2fe; border: 1px solid #bae6fd; padding: 1.5px 5px; border-radius: 4px; white-space: nowrap;">
-                            📄 Boleta: #${d.boleta_numero}
+                            📄 Boleta: #${escapeHtml(d.boleta_numero)}
                         </span>
                     </div>
                 `;
@@ -827,14 +846,14 @@ async function generateRouteSheetHtml(
                 <tr style="border-bottom: 1px solid #e2e8f0; page-break-inside: avoid;">
                     <td style="padding: 5px 4px; text-align: center; white-space: nowrap; vertical-align: middle;">${timeCellHtml}</td>
                     <td style="padding: 6px 5px; font-size: 11px; color: #1e293b;">
-                        <strong>${d.cliente_nombre}</strong><br/>
-                        <span style="font-size: 9.5px; color: #64748b; font-weight: 600;">ID: ${d.cliente_id}</span>
+                        <strong>${escapeHtml(d.cliente_nombre)}</strong><br/>
+                        <span style="font-size: 9.5px; color: #64748b; font-weight: 600;">ID: ${escapeHtml(d.cliente_id)}</span>
                     </td>
                     <td style="padding: 6px 5px; font-size: 11px; color: #0f172a; font-family: monospace; font-weight: bold; white-space: nowrap;">
-                        ${cleanDocNum}
+                        ${escapeHtml(cleanDocNum)}
                         ${boletaBadgeHtml}
                     </td>
-                    <td style="padding: 6px 5px; font-size: 10.5px; color: #475569; line-height: 1.25;">${addressText}</td>
+                    <td style="padding: 6px 5px; font-size: 10.5px; color: #475569; line-height: 1.25;">${escapeHtml(addressText)}</td>
                     <td style="padding: 6px 5px; font-size: 10.5px; color: #334155;">${receptorText}</td>
                     <td style="padding: 6px 5px; text-align: center;">
                         <span style="display: inline-block; padding: 2.5px 7px; border-radius: 9999px; font-size: 9.5px; font-weight: bold; color: ${statusColor}; background-color: ${statusBg}; white-space: nowrap;">
@@ -945,7 +964,7 @@ async function generateRouteSheetHtml(
                         <div style="display: inline-block; background-color: #eff6ff; border: 1.5px solid #93c5fd; border-radius: 8px; padding: 8px 14px; text-align: right; min-width: 250px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
                                 <span style="font-size: 10px; font-weight: 800; color: #1e40af; text-transform: uppercase; letter-spacing: 0.05em;">HOJA DE RUTA</span>
-                                <span style="font-size: 16px; font-weight: 900; color: #1d4ed8; font-family: monospace;">${consecutivo}</span>
+                                <span style="font-size: 16px; font-weight: 900; color: #1d4ed8; font-family: monospace;">${safeConsecutivo}</span>
                             </div>
                             <div style="font-size: 9.5px; font-weight: bold; color: #0284c7; background: #e0f2fe; padding: 2.5px 6px; border-radius: 4px; margin: 3px 0; text-align: center; border: 1px solid #bae6fd;">
                                 📋 ${isoText}
@@ -963,11 +982,11 @@ async function generateRouteSheetHtml(
             <table style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 14px;">
                 <tr>
                     <td style="padding: 6px 10px; font-size: 11px; color: #475569; width: 10%;"><strong>Ruta:</strong></td>
-                    <td style="padding: 6px 10px; font-size: 11px; color: #0f172a; font-weight: 700; width: 23%;">${assignment.ruta_nombre}</td>
+                    <td style="padding: 6px 10px; font-size: 11px; color: #0f172a; font-weight: 700; width: 23%;">${safeRutaNombre}</td>
                     <td style="padding: 6px 10px; font-size: 11px; color: #475569; width: 10%;"><strong>Chofer:</strong></td>
-                    <td style="padding: 6px 10px; font-size: 11px; color: #0f172a; font-weight: 700; width: 23%;">${assignment.chofer_nombre}</td>
+                    <td style="padding: 6px 10px; font-size: 11px; color: #0f172a; font-weight: 700; width: 23%;">${safeChoferNombre}</td>
                     <td style="padding: 6px 10px; font-size: 11px; color: #475569; width: 10%;"><strong>Vehículo:</strong></td>
-                    <td style="padding: 6px 10px; font-size: 11px; color: #0f172a; font-weight: 700; width: 24%;">${assignment.vehiculo_marca} ${assignment.vehiculo_modelo} (${assignment.vehiculo_placa})</td>
+                    <td style="padding: 6px 10px; font-size: 11px; color: #0f172a; font-weight: 700; width: 24%;">${safeVehiculo}</td>
                 </tr>
                 <tr style="border-top: 1px dashed #e2e8f0;">
                     <td style="padding: 6px 10px; font-size: 10.5px; color: #475569;" colspan="2">
@@ -985,7 +1004,7 @@ async function generateRouteSheetHtml(
                     <td style="padding: 6px 10px; font-size: 10.5px; color: #475569;" colspan="2">
                         ⏱️ <strong>Estado Ruta:</strong> 
                         <span style="font-weight: bold; color: #0f172a; text-transform: uppercase;">
-                            ${assignment.estado || 'FINALIZADA'}
+                            ${safeEstado}
                         </span>
                     </td>
                 </tr>
@@ -1034,7 +1053,7 @@ async function generateRouteSheetHtml(
                         <div style="display: inline-block; background-color: #eff6ff; border: 1.5px solid #93c5fd; border-radius: 8px; padding: 8px 14px; text-align: right; min-width: 250px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
                                 <span style="font-size: 10px; font-weight: 800; color: #1e40af; text-transform: uppercase; letter-spacing: 0.05em;">HOJA DE RUTA</span>
-                                <span style="font-size: 16px; font-weight: 900; color: #1d4ed8; font-family: monospace;">${consecutivo}</span>
+                                <span style="font-size: 16px; font-weight: 900; color: #1d4ed8; font-family: monospace;">${safeConsecutivo}</span>
                             </div>
                             <div style="font-size: 9.5px; font-weight: bold; color: #0284c7; background: #e0f2fe; padding: 2.5px 6px; border-radius: 4px; margin: 3px 0; text-align: center; border: 1px solid #bae6fd;">
                                 📋 ${isoText}
@@ -1052,11 +1071,11 @@ async function generateRouteSheetHtml(
             <table style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 20px;">
                 <tr>
                     <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 10%;"><strong>Ruta:</strong></td>
-                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 23%;">${assignment.ruta_nombre}</td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 23%;">${safeRutaNombre}</td>
                     <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 10%;"><strong>Chofer:</strong></td>
-                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 23%;">${assignment.chofer_nombre}</td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 23%;">${safeChoferNombre}</td>
                     <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 10%;"><strong>Vehículo:</strong></td>
-                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 24%;">${assignment.vehiculo_marca} ${assignment.vehiculo_modelo} (${assignment.vehiculo_placa})</td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 24%;">${safeVehiculo}</td>
                 </tr>
                 <tr style="border-top: 1px dashed #e2e8f0;">
                     <td style="padding: 7px 12px; font-size: 11px; color: #475569;" colspan="3">
@@ -1121,7 +1140,7 @@ async function generateRouteSheetHtml(
                         </tr>
                         <tr style="background-color: #f1f5f9;">
                             <td style="padding: 8px 14px; font-weight: 800; color: #0f172a;">
-                                Realizado por: <span style="font-weight: 700; color: #1e40af;">${assignment.chofer_nombre}</span>
+                                Realizado por: <span style="font-weight: 700; color: #1e40af;">${safeChoferNombre}</span>
                             </td>
                             <td style="padding: 8px 14px; text-align: center; font-size: 11px; font-weight: 700; color: #475569; border-left: 1px solid #cbd5e1;">
                                 CONFORME
@@ -2483,7 +2502,7 @@ export async function triggerCollectUpdateEmail(id: number, estado: string, come
             JOIN core_users u ON a.empleado_id = u.id
             JOIN fleet_vehicles v ON a.vehiculo_id = v.id
             JOIN ops_delivery_routes r ON a.ruta_id = r.id
-            WHERE a.id = ?`).get(id) as any;
+            WHERE a.id = ?`).get(doc.asignacion_id) as any;
         const cleanPhone = (details.proveedor_contacto_telefono || '').replace(/\D/g, '');
         const whatsappPhone = cleanPhone.length === 8 ? '506' + cleanPhone : cleanPhone;
         const whatsappLink = `https://wa.me/${whatsappPhone}`;
@@ -3938,74 +3957,81 @@ export async function createBoletaOperativaAction(data: {
         const useSingleConsecRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boletas_use_single_consecutive'").get() as { value: string } | undefined;
         const isSingleConsecutive = useSingleConsecRow?.value === 'true';
 
-        // Obtener prefijo y consecutivo según motivo o global
-        let prefixSettingKey = isSingleConsecutive ? 'boleta_consecutive_prefix' : `boleta_prefix_${data.motivoSalida}`;
-        let nextSettingKey = isSingleConsecutive ? 'boleta_consecutive_next' : `boleta_next_${data.motivoSalida}`;
+        // Transacción atómica para evitar colisiones concurrentes (Race Conditions)
+        const generateBoletaTx = db.transaction(() => {
+            // Obtener prefijo y consecutivo según motivo o global
+            let prefixSettingKey = isSingleConsecutive ? 'boleta_consecutive_prefix' : `boleta_prefix_${data.motivoSalida}`;
+            let nextSettingKey = isSingleConsecutive ? 'boleta_consecutive_next' : `boleta_next_${data.motivoSalida}`;
 
-        const prefixRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = ? OR key = 'boleta_consecutive_prefix' ORDER BY CASE WHEN key = ? THEN 1 ELSE 2 END LIMIT 1").get(prefixSettingKey, prefixSettingKey) as { value: string } | undefined;
-        const nextRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = ? OR key = 'boleta_consecutive_next' ORDER BY CASE WHEN key = ? THEN 1 ELSE 2 END LIMIT 1").get(nextSettingKey, nextSettingKey) as { value: string } | undefined;
+            const prefixRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = ? OR key = 'boleta_consecutive_prefix' ORDER BY CASE WHEN key = ? THEN 1 ELSE 2 END LIMIT 1").get(prefixSettingKey, prefixSettingKey) as { value: string } | undefined;
+            const nextRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = ? OR key = 'boleta_consecutive_next' ORDER BY CASE WHEN key = ? THEN 1 ELSE 2 END LIMIT 1").get(nextSettingKey, nextSettingKey) as { value: string } | undefined;
 
-        const defaultPrefixes: Record<string, string> = {
-            faltante: 'BOL-',
-            devolucion: 'DEV-',
-            muestra: 'MUE-',
-            regalia: 'REG-',
-            otro: 'BOL-'
-        };
+            const defaultPrefixes: Record<string, string> = {
+                faltante: 'BOL-',
+                devolucion: 'DEV-',
+                muestra: 'MUE-',
+                regalia: 'REG-',
+                otro: 'BOL-'
+            };
 
-        const prefix = prefixRow?.value || (isSingleConsecutive ? 'BOL-' : defaultPrefixes[data.motivoSalida] || 'BOL-');
-        const nextNum = parseInt(nextRow?.value || '1', 10);
-        const boletaNum = `${prefix}${String(nextNum).padStart(6, '0')}`;
+            const prefix = prefixRow?.value || (isSingleConsecutive ? 'BOL-' : defaultPrefixes[data.motivoSalida] || 'BOL-');
+            const nextNum = parseInt(nextRow?.value || '1', 10);
+            const boletaNum = `${prefix}${String(nextNum).padStart(6, '0')}`;
 
-        // Incrementar consecutivo
-        db.prepare("INSERT INTO ops_delivery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(nextSettingKey, String(nextNum + 1));
-        if (prefixSettingKey === 'boleta_prefix_faltante') {
-            db.prepare("INSERT INTO ops_delivery_settings (key, value) VALUES ('boleta_consecutive_next', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(nextNum + 1));
-        }
-
-        const todayStr = new Date().toISOString();
-
-        // Verificar si requiere aprobación según configuración
-        const requireAuthRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boletas_require_authorization'").get() as { value: string } | undefined;
-        const requiresAuth = requireAuthRow?.value === 'true' ? 1 : 0;
-        const initialEstado = requiresAuth === 1 ? 'pendiente_autorizacion' : 'pendiente';
-
-        const result = db.prepare(`
-            INSERT INTO ops_delivery_queue (
-                documento_numero, tipo_documento, cliente_id, cliente_nombre,
-                creado_por, fecha_registro, entregado, estado, comentario,
-                boleta_numero, motivo_salida, referencia_doc, requiere_autorizacion,
-                autorizado_por, fecha_autorizacion, direccion_embarque_id
-            ) VALUES (?, 'boleta', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-            boletaNum,
-            data.clienteId || 'CLI-GENERIC',
-            data.clienteNombre || 'Cliente General',
-            currentUser.name || currentUser.email || 'Sistema',
-            todayStr,
-            initialEstado,
-            data.comentario || null,
-            boletaNum,
-            data.motivoSalida,
-            data.referenciaDoc || null,
-            requiresAuth,
-            requiresAuth === 0 ? 'AUTO' : null,
-            requiresAuth === 0 ? todayStr : null,
-            data.direccionEmbarqueId || null
-        );
-
-        const deliveryId = Number(result.lastInsertRowid);
-
-        // Guardar ítems de la boleta
-        if (data.items && data.items.length > 0) {
-            const insertLineStmt = db.prepare(`
-                INSERT INTO ops_delivery_lines (delivery_order_id, producto_codigo, producto_descripcion, cantidad_pedida, cantidad_entregada, cantidad_faltante)
-                VALUES (?, ?, ?, ?, 0, ?)
-            `);
-            for (const item of data.items) {
-                insertLineStmt.run(deliveryId, item.codigo, item.descripcion, item.cantidad, item.cantidad);
+            // Incrementar consecutivo
+            db.prepare("INSERT INTO ops_delivery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(nextSettingKey, String(nextNum + 1));
+            if (prefixSettingKey === 'boleta_prefix_faltante') {
+                db.prepare("INSERT INTO ops_delivery_settings (key, value) VALUES ('boleta_consecutive_next', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(nextNum + 1));
             }
-        }
+
+            const todayStr = new Date().toISOString();
+
+            // Verificar si requiere aprobación según configuración
+            const requireAuthRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boletas_require_authorization'").get() as { value: string } | undefined;
+            const requiresAuth = requireAuthRow?.value === 'true' ? 1 : 0;
+            const initialEstado = requiresAuth === 1 ? 'pendiente_autorizacion' : 'pendiente';
+
+            const result = db.prepare(`
+                INSERT INTO ops_delivery_queue (
+                    documento_numero, tipo_documento, cliente_id, cliente_nombre,
+                    creado_por, fecha_registro, entregado, estado, comentario,
+                    boleta_numero, motivo_salida, referencia_doc, requiere_autorizacion,
+                    autorizado_por, fecha_autorizacion, direccion_embarque_id
+                ) VALUES (?, 'boleta', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                boletaNum,
+                data.clienteId || 'CLI-GENERIC',
+                data.clienteNombre || 'Cliente General',
+                currentUser.name || currentUser.email || 'Sistema',
+                todayStr,
+                initialEstado,
+                data.comentario || null,
+                boletaNum,
+                data.motivoSalida,
+                data.referenciaDoc || null,
+                requiresAuth,
+                requiresAuth === 0 ? 'AUTO' : null,
+                requiresAuth === 0 ? todayStr : null,
+                data.direccionEmbarqueId || null
+            );
+
+            const deliveryId = Number(result.lastInsertRowid);
+
+            // Guardar ítems de la boleta
+            if (data.items && data.items.length > 0) {
+                const insertLineStmt = db.prepare(`
+                    INSERT INTO ops_delivery_lines (delivery_order_id, producto_codigo, producto_descripcion, cantidad_pedida, cantidad_entregada, cantidad_faltante)
+                    VALUES (?, ?, ?, ?, 0, ?)
+                `);
+                for (const item of data.items) {
+                    insertLineStmt.run(deliveryId, item.codigo, item.descripcion, item.cantidad, item.cantidad);
+                }
+            }
+
+            return boletaNum;
+        });
+
+        const boletaNum = generateBoletaTx();
 
         revalidatePath('/dashboard/operations/vouchers');
         revalidatePath('/dashboard/operations/logistics/deliveries/operation');

@@ -259,17 +259,14 @@ export function ActiveDeliveriesTab({
                                                 </span>
                                                 <p className={`text-xs font-black truncate pt-1 ${textMutedClass} uppercase tracking-wider flex items-center gap-1.5`}>
                                                      <span>{ass.ruta_nombre}</span>
-                                                     <button 
-                                                         type="button" 
-                                                         onClick={(e) => {
-                                                             e.stopPropagation();
-                                                             alert(`🔮 ANALÍTICA PREDICTIVA DE RUTA:\n- Feactibilidad de Cumplimiento: 87%\n- Hora Estimada de Retorno al Patio: 03:45 PM\n- Clientes con Cita / Prioridad: ${allDocsForAss.filter(d => d.es_prioritario || d.requiere_cita || d.aplica_multa).length}`);
-                                                         }}
-                                                         className="text-sky-400 hover:text-sky-300 text-[11px] bg-sky-500/10 hover:bg-sky-500/20 px-1.5 py-0.5 rounded border border-sky-500/30 transition-all font-mono font-bold shrink-0"
-                                                         title="🔮 Ver Expediente Predictivo de Ruta"
-                                                     >
-                                                         ℹ️ 87%
-                                                     </button>
+                                                     {allDocsForAss.some(d => d.es_prioritario || d.requiere_cita || d.aplica_multa) && (
+                                                         <span 
+                                                             className="text-amber-400 text-[10px] bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/30 font-mono font-bold shrink-0"
+                                                             title="Clientes con Cita o Prioridad en esta ruta"
+                                                         >
+                                                             ⭐ {allDocsForAss.filter(d => d.es_prioritario || d.requiere_cita || d.aplica_multa).length} prioritarios
+                                                         </span>
+                                                     )}
                                                  </p>
                                                 {(ass.fecha_salida || ass.fecha_llegada_bodega) && (
                                                     <div className="flex items-center gap-2 text-[10px] font-mono font-bold pt-0.5 flex-wrap">
