@@ -74,6 +74,50 @@ export async function updateShipmentAddressCoordinatesAction(
     return await updateShipmentAddressCoordinates(clienteId, direccionId, latitude, longitude, emailNotificacion);
 }
 
+export async function updateCustomerSlaSettingsAction(
+    clienteId: string,
+    data: {
+        horaApertura?: string | null;
+        horaCierre?: string | null;
+        pausaInicio?: string | null;
+        pausaFin?: string | null;
+        esPrioritario?: boolean;
+        requiereCita?: boolean;
+        aplicaMulta?: boolean;
+        notasRecepcion?: string | null;
+    }
+): Promise<{ success: boolean; error?: string }> {
+    await authorizeAction('deliveries:customers');
+    const db = await getDb();
+    try {
+        db.prepare(`
+            UPDATE core_customers
+            SET hora_apertura = ?,
+                hora_cierre = ?,
+                pausa_inicio = ?,
+                pausa_fin = ?,
+                es_prioritario = ?,
+                requiere_cita = ?,
+                aplica_multa = ?,
+                notas_recepcion = ?
+            WHERE id = ?
+        `).run(
+            data.horaApertura || null,
+            data.horaCierre || null,
+            data.pausaInicio || null,
+            data.pausaFin || null,
+            data.esPrioritario ? 1 : 0,
+            data.requiereCita ? 1 : 0,
+            data.aplicaMulta ? 1 : 0,
+            data.notasRecepcion || null,
+            clienteId
+        );
+        return { success: true };
+    } catch (e: any) {
+        return { success: false, error: e.message };
+    }
+}
+
 export async function getPaginatedSuppliersAction(search?: string, page?: number, pageSize?: number, hasLocationOnly?: boolean): Promise<{ suppliers: any[]; totalCount: number; totalPages: number }> {
     await authorizeAction('deliveries:customers');
     return await getPaginatedSuppliers(search, page, pageSize, hasLocationOnly);

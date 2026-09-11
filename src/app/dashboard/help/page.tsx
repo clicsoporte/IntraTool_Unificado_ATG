@@ -310,11 +310,20 @@ export default function HelpPage() {
                             <CardTitle className="text-sm font-bold text-emerald-700 dark:text-emerald-300">📱 Pestaña 2: APK Nativa (Control Remoto)</CardTitle>
                         </CardHeader>
                         <CardContent className="text-xs space-y-2">
-                            <p><strong>Permisos Móviles:</strong> Activa o desactiva la firma obligatoria, fotos de evidencia, fotos de factura y el <strong>botón de revertir entrega (🔄)</strong>.</p>
+                            <p><strong>Permisos Móviles:</strong> Activa o desactiva la firma obligatoria, fotos de evidencia, fotos de factura, el <strong>motivo obligatorio en rechazo/parcial</strong> y el <strong>botón de revertir entrega (🔄)</strong>.</p>
                             <p><strong>Chofer en Espera (⏱️):</strong> Define si el vendedor o creador del pedido recibe un correo o Telegram cuando el chofer presiona el reloj indicando que está esperando en sitio.</p>
                             <p><strong>Impresión Térmica:</strong> Selecciona el método de impresión (Clic Print Connector, Intent o RawBT) y el diseño de la boleta.</p>
                         </CardContent>
                     </Card>
+                </div>
+
+                <div className="p-4 bg-purple-500/10 border border-purple-500/20 rounded-xl space-y-2 text-xs">
+                    <h5 className="font-bold text-purple-900 dark:text-purple-300 flex items-center gap-1.5">
+                        📦 Entregas Manuales / Sin Ruta (Despacho Directo Web)
+                    </h5>
+                    <p className="text-muted-foreground">
+                        Si un supervisor marca un documento como entregado directamente desde la cola general en <code>/operation</code> (por ejemplo, remisiones <code>REM-...</code> o entregas mostrador sin camión), la entrega se registra en el historial bajo la tarjeta especial <strong>📦 Entregas Manuales / Sin Ruta</strong>. Desde allí, cualquier usuario autorizado puede presionar 🔄 <strong>Revertir a Pendiente</strong> para devolver el documento de inmediato a la cola activa.
+                    </p>
                 </div>
 
                 <div className="p-4 bg-muted/20 border border-muted/40 rounded-xl space-y-2 text-xs">

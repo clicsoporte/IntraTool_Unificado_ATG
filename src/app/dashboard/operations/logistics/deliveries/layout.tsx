@@ -69,17 +69,17 @@ export default function DeliveriesLayout({ children }: { children: React.ReactNo
     }
 
     return (
-        <main className={`flex-1 ${isTvQuery ? 'p-2' : 'animate-in fade-in duration-150 p-3 md:p-6 lg:p-8'}`}>
-            <div className={`mx-auto space-y-6 ${isTvQuery ? 'max-w-none w-full px-2' : 'max-w-7xl'}`}>
+        <main className={`flex-1 ${isTvQuery ? 'p-2' : 'animate-in fade-in duration-150 px-2.5 py-3 sm:p-4 md:p-6 lg:p-8'}`}>
+            <div className={`mx-auto space-y-4 md:space-y-6 ${isTvQuery ? 'max-w-none w-full px-2' : 'max-w-7xl w-full'}`}>
                 {!isTvQuery && (
-                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 border-b border-muted">
-                        <div className="flex items-center gap-3 md:gap-4">
-                            <div className="p-2.5 md:p-3 bg-blue-600 rounded-2xl text-white shadow-lg shadow-blue-100 dark:shadow-none shrink-0">
-                                <Truck className="w-6 h-6 md:w-8 md:h-8" />
+                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3 pb-3 md:pb-4 border-b border-muted">
+                        <div className="flex items-center gap-2.5 md:gap-4">
+                            <div className="p-2 md:p-3 bg-blue-600 rounded-xl md:rounded-2xl text-white shadow-lg shadow-blue-100 dark:shadow-none shrink-0">
+                                <Truck className="w-5 h-5 md:w-8 md:h-8" />
                             </div>
                             <div>
-                                <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">Monitor de Entregas v2.1</h1>
-                                <p className="text-[11px] md:text-sm text-muted-foreground font-medium">Control omnicanal, concurrencia en tiempo real y asignación de rutas.</p>
+                                <h1 className="text-xl md:text-3xl font-extrabold tracking-tight">Monitor de Entregas v2.1</h1>
+                                <p className="text-[10px] md:text-sm text-muted-foreground font-medium line-clamp-1">Control omnicanal, concurrencia y asignación de rutas.</p>
                             </div>
                         </div>
 

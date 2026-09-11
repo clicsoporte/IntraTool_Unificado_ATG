@@ -320,7 +320,11 @@ export function DriverDeliveriesTab({
               <div className="flex items-center justify-between text-[11px] text-slate-300 pt-1 border-t border-slate-700">
                 <span>Pendientes: <strong>{pendingDocs.length}</strong></span>
                 <span>Completados: <strong>{completedDocs.length}</strong></span>
-                {assignment.fecha_salida && <span className="text-emerald-400 font-semibold">En Ruta 🚀</span>}
+                {assignment.fecha_salida && (
+                  <span className="text-emerald-400 font-semibold flex items-center gap-1">
+                    En Ruta 🚀 {assignment.origen_salida === 'auto_geofence' && <Badge variant="outline" className="text-[9px] bg-emerald-500/20 text-emerald-300 border-emerald-500/30 px-1 py-0 font-mono">⚡ (Auto Geocerca)</Badge>}
+                  </span>
+                )}
               </div>
             </div>
           ) : (

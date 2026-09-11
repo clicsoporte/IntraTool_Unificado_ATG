@@ -17,6 +17,7 @@ import {
     requestDeviceRebootAction,
     saveFleetServerUrlsAction
 } from '@/modules/it-tools/lib/actions';
+import { generateOtpFromChallenge } from '@/modules/it-tools/lib/otp-calculator';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -145,6 +146,10 @@ export default function MobileFleetPage() {
     const [mdmDisallowInstallApps, setMdmDisallowInstallApps] = useState(false);
     const [mdmDisallowPlayStoreInstall, setMdmDisallowPlayStoreInstall] = useState(false);
     const [mdmAlwaysOnVpn, setMdmAlwaysOnVpn] = useState(false);
+
+    // OTP Token Modal State
+    const [selectedOtpDevice, setSelectedOtpDevice] = useState<any | null>(null);
+    const [otpChallengeInput, setOtpChallengeInput] = useState('');
 
     // Sorted & Filtered Devices
     const processedDevices = useMemo(() => {
@@ -1331,6 +1336,19 @@ export default function MobileFleetPage() {
                                                         >
                                                             <ShieldAlert className="w-3 h-3" /> Blindaje
                                                         </Button>
+                                                        
+                                                        <Button 
+                                                            size="sm" 
+                                                            variant="outline" 
+                                                            onClick={() => {
+                                                                setSelectedOtpDevice(dev);
+                                                                setOtpChallengeInput('');
+                                                            }}
+                                                            className="h-7 text-[10px] font-bold text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100 gap-1 dark:bg-emerald-950/30 dark:text-emerald-300 dark:border-emerald-800"
+                                                            title="Generador de Token OTP / PIN de Emergencia (Sin Internet)"
+                                                        >
+                                                            <Lock className="w-3 h-3 text-emerald-600" /> Token OTP
+                                                        </Button>
 
                                                         {installedCount > 0 && (
                                                             <Button 
@@ -2320,6 +2338,66 @@ export default function MobileFleetPage() {
                     </AlertDialogFooter>
                 </AlertDialogContent>
             </AlertDialog>
+
+            {/* OTP Emergency Token Generator Modal */}
+            <Dialog open={!!selectedOtpDevice} onOpenChange={(open) => !open && setSelectedOtpDevice(null)}>
+                <DialogContent className="max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400">
+                            <Lock className="w-5 h-5" /> Generador de Token OTP / PIN de Emergencia
+                        </DialogTitle>
+                        <DialogDescription>
+                            Genera un PIN de 4 dígitos de un solo uso para acceder a los Ajustes del APK sin internet.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    {selectedOtpDevice && (
+                        <div className="space-y-4 py-2">
+                            <div className="bg-slate-100 dark:bg-slate-900 p-3 rounded-lg border text-xs space-y-1">
+                                <p className="font-semibold text-slate-800 dark:text-slate-200">
+                                    📱 Dispositivo: <span className="font-bold">{selectedOtpDevice.device_name || selectedOtpDevice.hardware_id}</span>
+                                </p>
+                                {selectedOtpDevice.last_driver_name && (
+                                    <p className="text-muted-foreground">
+                                        Chofer: {selectedOtpDevice.last_driver_name}
+                                    </p>
+                                )}
+                                <p className="font-mono text-[11px] text-slate-500">
+                                    HWID: {selectedOtpDevice.hardware_id}
+                                </p>
+                            </div>
+
+                            <div className="space-y-2">
+                                <Label className="text-xs font-bold">Código de Desafío (Challenge Code del Celular)</Label>
+                                <Input 
+                                    placeholder="Ej: 849-201 o 849201"
+                                    value={otpChallengeInput}
+                                    onChange={(e) => setOtpChallengeInput(e.target.value)}
+                                    className="h-10 text-center font-mono text-lg font-bold tracking-widest bg-white dark:bg-zinc-950"
+                                    maxLength={7}
+                                />
+                                <p className="text-[11px] text-muted-foreground">
+                                    Introduce el código de 6 dígitos que el chofer ve en la pantalla de su celular.
+                                </p>
+                            </div>
+
+                            {otpChallengeInput.trim().length >= 6 && (
+                                <div className="bg-emerald-50 dark:bg-emerald-950/40 border-2 border-emerald-500/50 p-4 rounded-xl text-center space-y-1 animate-in fade-in zoom-in-95 duration-150">
+                                    <span className="text-[11px] font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider block">
+                                        🔑 PIN Temporal de Emergencia (Un Solo Uso)
+                                    </span>
+                                    <div className="text-3xl font-black font-mono text-emerald-700 dark:text-emerald-400 tracking-widest">
+                                        {generateOtpFromChallenge(otpChallengeInput)}
+                                    </div>
+                                    <p className="text-[10px] text-emerald-600 dark:text-emerald-400/80 italic">
+                                        Dicta este número de 4 dígitos al chofer para desbloquear el acceso.
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
         </main>
     );
 }

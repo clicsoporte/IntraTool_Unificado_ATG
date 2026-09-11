@@ -20,8 +20,20 @@ import { authorizeAction } from './auth-guard';
  * @param details The original details object.
  * @returns The enriched details object.
  */
-async function enrichLogDetails(details?: Record<string, any>): Promise<Record<string, any>> {
-    const enrichedDetails = { ...details };
+async function enrichLogDetails(details?: any): Promise<Record<string, any>> {
+    let normalizedDetails: Record<string, any> = {};
+    if (details) {
+        if (typeof details === 'string') {
+            normalizedDetails = { errorMsg: details };
+        } else if (details instanceof Error) {
+            normalizedDetails = { errorMsg: details.message, stack: details.stack };
+        } else if (typeof details === 'object') {
+            normalizedDetails = { ...details };
+        } else {
+            normalizedDetails = { value: String(details) };
+        }
+    }
+    const enrichedDetails = normalizedDetails;
     
     try {
         const user = await getCurrentUser();

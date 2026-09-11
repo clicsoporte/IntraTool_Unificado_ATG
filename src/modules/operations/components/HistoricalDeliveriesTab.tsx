@@ -15,7 +15,8 @@ import {
     Truck, 
     Camera, 
     FileText, 
-    RotateCcw 
+    RotateCcw,
+    PackageCheck
 } from 'lucide-react';
 import { formatFechaEntrega, parsePhotoUrls } from '@/modules/operations/lib/utils';
 import { SelectedPhoto } from '@/modules/operations/components/EvidencePhotoViewer';
@@ -102,14 +103,92 @@ export function HistoricalDeliveriesTab({
                         <p className="text-muted-foreground font-medium">Consultando registros históricos en base de datos...</p>
                     </div>
                 </div>
-            ) : historicalAssignments.length === 0 ? (
-                <div className={`text-center p-12 border rounded-2xl text-xs font-semibold shadow-sm ${
-                    tvMode ? 'bg-slate-900 border-slate-800 text-slate-400' : 'bg-card text-muted-foreground'
-                }`}>
-                    No se encontraron rutas ni despachos asignados para la fecha seleccionada: <span className="font-extrabold text-blue-500">{historyDate}</span>.
-                </div>
-            ) : (
-                <div className={`grid grid-cols-1 ${tvMode ? 'md:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3' : 'md:grid-cols-2 lg:grid-cols-3'} gap-6`}>
+            ) : (() => {
+                const unassignedDocs = historicalDeliveries.filter(d => !d.asignacion_id && d.entregado === 1);
+                const filteredUnassignedDocs = unassignedDocs.filter(d => {
+                    if (!invoiceFilter.trim()) return true;
+                    const q = invoiceFilter.trim().toLowerCase();
+                    const docNum = (d.documento_numero || '').toLowerCase();
+                    const clientName = (d.cliente_nombre || '').toLowerCase();
+                    const clientId = (d.cliente_id || '').toLowerCase();
+                    return docNum.includes(q) || clientName.includes(q) || clientId.includes(q);
+                });
+
+                if (historicalAssignments.length === 0 && filteredUnassignedDocs.length === 0) {
+                    return (
+                        <div className={`text-center p-12 border rounded-2xl text-xs font-semibold shadow-sm ${
+                            tvMode ? 'bg-slate-900 border-slate-800 text-slate-400' : 'bg-card text-muted-foreground'
+                        }`}>
+                            No se encontraron rutas ni despachos asignados para la fecha seleccionada: <span className="font-extrabold text-blue-500">{historyDate}</span>.
+                        </div>
+                    );
+                }
+
+                return (
+                    <div className={`grid grid-cols-1 ${tvMode ? 'md:grid-cols-1 lg:grid-cols-2 xl:grid-cols-3' : 'md:grid-cols-2 lg:grid-cols-3'} gap-6`}>
+                        {/* Card Especial: Entregas Manuales / Sin Ruta (Despacho Web) */}
+                        {filteredUnassignedDocs.length > 0 && (
+                            <Card className="border-none shadow-md overflow-hidden relative flex flex-col border-l-4 border-l-purple-500 bg-purple-50/30 dark:bg-purple-950/10 border border-purple-100 dark:border-purple-950/20">
+                                <div className="p-4 border-b flex items-start justify-between bg-purple-500/5 border-purple-100 dark:border-purple-950/30">
+                                    <div className="space-y-1">
+                                        <span className="text-sm font-black flex items-center gap-1.5 text-purple-600 dark:text-purple-400">
+                                            <PackageCheck className="w-4 h-4 text-purple-500" />
+                                            📦 Entregas Manuales / Sin Ruta (Despacho Web)
+                                            <Badge className="bg-purple-500 text-white font-extrabold text-[9px] px-1.5 py-0 border-none shrink-0">
+                                                {filteredUnassignedDocs.length} DOCS
+                                            </Badge>
+                                        </span>
+                                        <p className="text-[10px] text-muted-foreground font-medium">
+                                            Documentos entregados directamente desde la cola o sin asignación a camión.
+                                        </p>
+                                    </div>
+                                </div>
+                                <CardContent className="p-4 space-y-3 flex-1">
+                                    <div className="space-y-2">
+                                        {filteredUnassignedDocs.map((doc) => (
+                                            <div key={doc.id} className="p-2.5 rounded-xl border border-muted/60 bg-background/60 dark:bg-slate-900/40 space-y-2">
+                                                <div className="flex items-start justify-between gap-2">
+                                                    <div>
+                                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                                            <span className="text-xs font-black font-mono tracking-tight leading-none block text-foreground dark:text-slate-200">
+                                                                {doc.boleta_numero ? `📄 ${doc.boleta_numero}` : doc.documento_numero}
+                                                            </span>
+                                                            {doc.boleta_numero && doc.boleta_numero !== doc.documento_numero && (
+                                                                <span className="text-[9px] font-mono text-muted-foreground bg-muted/50 px-1 py-0.2 rounded border">
+                                                                    ERP: #{doc.documento_numero}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <p className="text-[10px] font-bold truncate pt-0.5 text-foreground/70 dark:text-slate-300">
+                                                            {doc.cliente_nombre}
+                                                        </p>
+                                                    </div>
+                                                    <Badge className="text-[8px] font-extrabold uppercase px-1.5 py-0 border-none bg-purple-500/10 text-purple-500">
+                                                        {doc.estado} {doc.fecha_entrega ? ` | ${formatFechaEntrega(doc.fecha_entrega)}` : ''}
+                                                    </Badge>
+                                                </div>
+                                                <div className="flex items-center justify-between pt-1 border-t border-muted/40 text-[10px]">
+                                                    <span className="text-muted-foreground font-semibold">
+                                                        Gestor: <strong className="text-foreground">{doc.gestionado_por || 'Coordinador Web'}</strong>
+                                                    </span>
+                                                    {hasPermission('deliveries:revert') && (
+                                                        <Button
+                                                            variant="outline"
+                                                            size="sm"
+                                                            onClick={() => handleRevertDelivery(doc)}
+                                                            className="rounded-lg h-6 text-[9px] font-extrabold gap-1 border-red-500/30 text-red-600 dark:text-red-400 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/20"
+                                                        >
+                                                            <RotateCcw className="w-3 h-3" />
+                                                            Revertir a Pendiente
+                                                        </Button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        )}
                     {historicalAssignments.map((ass) => {
                         const allDocsForAss = historicalDeliveries.filter(d => d.asignacion_id === ass.id || d.devolucion_asignacion_id === ass.id);
                         
@@ -316,7 +395,8 @@ export function HistoricalDeliveriesTab({
                         );
                     })}
                 </div>
-            )}
+            );
+        })()}
         </div>
     );
 }

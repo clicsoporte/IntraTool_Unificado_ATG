@@ -59,13 +59,13 @@ export default function OperationsAdminIndexPage() {
         {
             id: 'boletas',
             title: 'Boletas Operativas',
-            description: 'Gestión de plantillas de boletas, resoluciones de impresión móvil, firmas digitales de recepción física y flujos de boletas del Bot.',
-            href: '#',
+            description: 'Configuración de consecutivos por motivo (muestras, faltantes, regalías), reglas de autorización y plantillas de impresión.',
+            href: '/dashboard/admin/operations/vouchers',
             icon: FileText,
-            badge: 'Próximamente',
-            badgeVariant: 'outline' as const,
-            statusColor: 'text-muted-foreground bg-muted/10 border-muted',
-            active: false
+            badge: 'Activo',
+            badgeVariant: 'default' as const,
+            statusColor: 'text-blue-500 bg-blue-500/10 border-blue-500/20',
+            active: true
         },
         {
             id: 'contingencia',

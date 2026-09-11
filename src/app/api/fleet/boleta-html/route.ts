@@ -10,11 +10,7 @@ export async function GET(req: NextRequest) {
     if (!webUser) {
       const fleetAuth = await authenticateFleetRequest(req);
       if ('response' in fleetAuth) {
-        // En modo permisivo si no hay sesión ni token
-        const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
-        if (authHeader) {
-          return fleetAuth.response;
-        }
+        return fleetAuth.response;
       }
     }
 

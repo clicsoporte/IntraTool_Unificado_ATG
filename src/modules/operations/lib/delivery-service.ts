@@ -167,8 +167,12 @@ export async function updateDeliveryStatusInternal(
             const currentDoc = db.prepare('SELECT * FROM ops_delivery_queue WHERE id = ?').get(id) as any;
             if (!currentDoc) throw new Error('Documento no encontrado en la cola.');
 
-            // Prevenir doble confirmación concurrente
+            // Prevenir doble confirmación concurrente (Respuesta idempotente en reintentos de red)
             if (['completo', 'incompleto', 'rechazado'].includes(currentDoc.estado)) {
+                if (currentDoc.estado === data.estado || currentDoc.entregado === 1) {
+                    logInfo(`[Doble Confirmación Idempotente] Documento #${currentDoc.documento_numero} ya en estado '${currentDoc.estado}'. Retornando éxito.`);
+                    return { success: true };
+                }
                 throw new Error(`El documento #${currentDoc.documento_numero} ya fue procesado previamente con estado '${currentDoc.estado}'.`);
             }
 
@@ -315,26 +319,48 @@ export async function updateDeliveryStatusInternal(
                 }
             }
 
-            // 5. Reinyección: If incomplete or rejected, automatically clone and re-inject back to general queue (delivered = 0, state = 'pendiente', assignment = null, devolucion_asignacion_id = currentDoc.asignacion_id)
+            // 5. Reinyección: If incomplete or rejected, automatically clone as a voucher requiring authorization
             if (currentDoc.tipo_documento !== 'recoger' && (data.estado === 'incompleto' || data.estado === 'rechazado')) {
                 const newDocNumber = currentDoc.documento_numero + (data.estado === 'incompleto' ? '-PARTIAL' : '-RETRY');
+                const baseOriginalDoc = (currentDoc.referencia_doc || currentDoc.documento_numero || '').replace('-PARTIAL', '').replace('-RETRY', '');
                 
                 // Prevent duplicate reinjections if already re-injected
-                const existingReinjection = db.prepare('SELECT id FROM ops_delivery_queue WHERE documento_numero = ? AND estado = \'pendiente\' AND entregado = 0').get(newDocNumber);
+                const existingReinjection = db.prepare("SELECT id FROM ops_delivery_queue WHERE documento_numero = ? AND estado IN ('pendiente', 'pendiente_autorizacion') AND entregado = 0").get(newDocNumber);
                 
                 if (!existingReinjection) {
+                    // Generate official consecutive boleta number for this reinjection
+                    let reinjectedBoletaNumero: string | null = null;
+                    try {
+                        const prefixRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boleta_consecutive_prefix'").get() as { value: string } | undefined;
+                        const nextRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boleta_consecutive_next'").get() as { value: string } | undefined;
+
+                        const prefix = prefixRow?.value ?? 'BOL-';
+                        const nextNum = parseInt(nextRow?.value || '1', 10);
+                        reinjectedBoletaNumero = `${prefix}${String(nextNum).padStart(6, '0')}`;
+
+                        db.prepare("INSERT INTO ops_delivery_settings (key, value) VALUES ('boleta_consecutive_next', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(nextNum + 1));
+                    } catch (e) {
+                        reinjectedBoletaNumero = `BOL-${Date.now().toString().slice(-6)}`;
+                    }
+
                     const reinjectedResult = db.prepare(`
-                        INSERT INTO ops_delivery_queue (documento_numero, tipo_documento, cliente_id, cliente_nombre, creado_por, fecha_registro, entregado, estado, devolucion_asignacion_id, comentario, boleta_numero)
-                        VALUES (?, ?, ?, ?, ?, ?, 0, 'pendiente', ?, ?, NULL)
+                        INSERT INTO ops_delivery_queue (
+                            documento_numero, tipo_documento, cliente_id, cliente_nombre, creado_por,
+                            fecha_registro, entregado, estado, devolucion_asignacion_id, comentario,
+                            boleta_numero, referencia_doc, motivo_salida, requiere_autorizacion
+                        )
+                        VALUES (?, 'boleta', ?, ?, ?, ?, 0, 'pendiente_autorizacion', ?, ?, ?, ?, ?, 1)
                     `).run(
                         newDocNumber,
-                        currentDoc.tipo_documento,
                         currentDoc.cliente_id,
                         currentDoc.cliente_nombre,
-                        currentDoc.creado_por,
+                        data.gestionadoPor || currentDoc.creado_por || 'Chofer en Ruta',
                         localTodayStr,
                         currentDoc.asignacion_id || null,
-                        data.comentario || null
+                        data.comentario || null,
+                        reinjectedBoletaNumero,
+                        baseOriginalDoc,
+                        data.estado === 'incompleto' ? 'faltante' : 'devolucion'
                     );
 
                     const newDocId = Number(reinjectedResult.lastInsertRowid);
@@ -356,6 +382,8 @@ export async function updateDeliveryStatusInternal(
 
         transaction();
         revalidatePath('/dashboard/operations/logistics/deliveries');
+        revalidatePath('/dashboard/operations/vouchers');
+        revalidatePath('/dashboard/admin/operations/vouchers');
 
         // --- Dual Notifications Engine (Parallel Dispatch) ---
         try {
@@ -725,6 +753,38 @@ export async function updateDeliveryStatusInternal(
                             const creatorTelegramId = await getTelegramChatIdForUser({ userId: creatorUserId });
                             if (creatorTelegramId) telegramRecipients.add(creatorTelegramId);
                         }
+                    }
+
+                    // Resolver Telegram Chat IDs de Supervisión (Múltiples chats / grupos)
+                    try {
+                        const supChatRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'supervisor_telegram_chat_ids'").get() as { value: string } | undefined;
+                        const supFilterRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'supervisor_telegram_filter'").get() as { value: string } | undefined;
+                        
+                        const supChatIdsStr = supChatRow?.value || '';
+                        const supFilter = supFilterRow?.value || 'all';
+
+                        let shouldNotifySupervisor = false;
+                        if (supFilter === 'all') {
+                            shouldNotifySupervisor = true;
+                        } else if (supFilter === 'incidents_only') {
+                            shouldNotifySupervisor = data.estado === 'incompleto' || data.estado === 'rechazado';
+                        } else if (supFilter === 'rejected_only') {
+                            shouldNotifySupervisor = data.estado === 'rechazado';
+                        }
+
+                        if (shouldNotifySupervisor && supChatIdsStr.trim()) {
+                            // Soportar múltiples IDs separados por coma, punto y coma o salto de línea
+                            const supChatList = supChatIdsStr
+                                .split(/[\n,;]+/)
+                                .map(c => c.trim())
+                                .filter(Boolean);
+
+                            for (const supChat of supChatList) {
+                                telegramRecipients.add(supChat);
+                            }
+                        }
+                    } catch (supErr: any) {
+                        logError('Error resolving supervisor telegram chat IDs:', supErr.message);
                     }
 
                     if (telegramRecipients.size > 0) {

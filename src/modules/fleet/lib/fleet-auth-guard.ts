@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyFleetToken, FleetTokenPayload } from '@/modules/core/lib/jwt-service';
+import { verifyFleetToken, renewFleetTokenIfNeeded, FleetTokenPayload } from '@/modules/core/lib/jwt-service';
 import { getDb } from '@/modules/core/lib/db';
 
 export interface AuthenticatedFleetRequest {
     user: FleetTokenPayload;
+    renewedToken?: string | null;
 }
 
 /**
@@ -12,10 +13,11 @@ export interface AuthenticatedFleetRequest {
  * - Si viene Header Authorization: Bearer <token>, lo valida estrictamente.
  * - Si no viene token pero el Switch de Seguridad en BD está en 'permissive', valida con fallback a hardwareId/userId.
  * - Si está en 'strict', rechaza con 401 si no hay token válido.
+ * - Incluye auto-renovación silenciosa (Sliding Expiration de 30 días renovado cada 15 días).
  */
 export async function authenticateFleetRequest(
     req: NextRequest
-): Promise<{ user: FleetTokenPayload } | { response: NextResponse }> {
+): Promise<{ user: FleetTokenPayload; renewedToken?: string | null } | { response: NextResponse }> {
     const authHeader = req.headers.get('authorization') || req.headers.get('Authorization');
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -23,11 +25,16 @@ export async function authenticateFleetRequest(
         const payload = verifyFleetToken(token);
 
         if (payload) {
-            return { user: payload };
+            const renewedToken = renewFleetTokenIfNeeded(payload);
+            return { user: payload, renewedToken };
         } else {
             return {
                 response: NextResponse.json(
-                    { success: false, error: 'Token de sesión inválido o expirado. Inicie sesión nuevamente.' },
+                    { 
+                        success: false, 
+                        error: '🔒 Tu sesión ha vencido por seguridad. Por favor, ingresa nuevamente con tu usuario y contraseña en la aplicación.',
+                        code: 'TOKEN_EXPIRED'
+                    },
                     { status: 401 }
                 )
             };
@@ -43,7 +50,11 @@ export async function authenticateFleetRequest(
         if (securityMode === 'strict') {
             return {
                 response: NextResponse.json(
-                    { success: false, error: 'Autenticación requerida. Cabecera Authorization no provista.' },
+                    { 
+                        success: false, 
+                        error: '🔒 Sesión no encontrada. Debe iniciar sesión en la aplicación con su usuario y contraseña.',
+                        code: 'UNAUTHORIZED'
+                    },
                     { status: 401 }
                 )
             };

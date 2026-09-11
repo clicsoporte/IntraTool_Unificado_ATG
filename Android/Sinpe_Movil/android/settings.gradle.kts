@@ -24,3 +24,5 @@ plugins {
 }
 
 include(":app")
+rootProject.name = "sinpe_movil_android"
+

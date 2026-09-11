@@ -211,4 +211,17 @@ class DeviceSecurityService {
       return false;
     }
   }
+
+  /// Fuerza el encendido automático de Datos Móviles y Wi-Fi (Guardián de Conectividad Always-ON).
+  static Future<bool> ensureConnectivityAlwaysOn() async {
+    try {
+      const channel = MethodChannel('com.clicsoporte.clic_driver/kiosk');
+      final result = await channel.invokeMethod<bool>('ensureConnectivityAlwaysOn');
+      return result ?? false;
+    } on MissingPluginException {
+      return false;
+    } catch (_) {
+      return false;
+    }
+  }
 }

@@ -77,6 +77,13 @@ class DeliveryDoc {
   dynamic creadoPorSmsPrefs;
   String? itEmergencyPhones;
 
+  bool esPrioritario;
+  bool requiereCita;
+  bool aplicaMulta;
+  String? horaApertura;
+  String? horaCierre;
+  String? notasRecepcion;
+
   Map<String, dynamic>? collectDetails;
 
   DeliveryDoc({
@@ -108,6 +115,12 @@ class DeliveryDoc {
     this.creadoPorNombre,
     this.creadoPorSmsPrefs,
     this.itEmergencyPhones,
+    this.esPrioritario = false,
+    this.requiereCita = false,
+    this.aplicaMulta = false,
+    this.horaApertura,
+    this.horaCierre,
+    this.notasRecepcion,
     this.collectDetails,
     List<DeliveryLine>? lines,
   }) : lines = lines ?? [];
@@ -206,6 +219,12 @@ class DeliveryDoc {
       creadoPorNombre: j['creado_por_nombre']?.toString(),
       creadoPorSmsPrefs: parseJsonOrNull(j['creado_por_sms_prefs']),
       itEmergencyPhones: j['it_emergency_phones']?.toString(),
+      esPrioritario: (j['es_prioritario'] == 1 || j['es_prioritario'] == true),
+      requiereCita: (j['requiere_cita'] == 1 || j['requiere_cita'] == true),
+      aplicaMulta: (j['aplica_multa'] == 1 || j['aplica_multa'] == true),
+      horaApertura: j['hora_apertura']?.toString(),
+      horaCierre: j['hora_cierre']?.toString(),
+      notasRecepcion: j['notas_recepcion']?.toString(),
       collectDetails: parsedCollect,
       lines: parsedLines,
     );
@@ -240,6 +259,12 @@ class DeliveryDoc {
         'creado_por_nombre': creadoPorNombre,
         'creado_por_sms_prefs': creadoPorSmsPrefs,
         'it_emergency_phones': itEmergencyPhones,
+        'es_prioritario': esPrioritario ? 1 : 0,
+        'requiere_cita': requiereCita ? 1 : 0,
+        'aplica_multa': aplicaMulta ? 1 : 0,
+        'hora_apertura': horaApertura,
+        'hora_cierre': horaCierre,
+        'notas_recepcion': notasRecepcion,
       };
 
   Map<String, dynamic> toSqlite() => {
@@ -269,6 +294,13 @@ class DeliveryDoc {
         'vendedor_sms_prefs': vendedorSmsPrefs is Map ? jsonEncode(vendedorSmsPrefs) : vendedorSmsPrefs,
         'creado_por_phone': creadoPorPhone,
         'creado_por_nombre': creadoPorNombre,
+        'creado_por_sms_prefs': creadoPorSmsPrefs is Map ? jsonEncode(creadoPorSmsPrefs) : creadoPorSmsPrefs,
         'it_emergency_phones': itEmergencyPhones,
+        'es_prioritario': esPrioritario ? 1 : 0,
+        'requiere_cita': requiereCita ? 1 : 0,
+        'aplica_multa': aplicaMulta ? 1 : 0,
+        'hora_apertura': horaApertura,
+        'hora_cierre': horaCierre,
+        'notas_recepcion': notasRecepcion,
       };
 }

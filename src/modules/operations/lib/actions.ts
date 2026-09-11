@@ -14,6 +14,7 @@ import { sendEmail } from '@/modules/core/lib/email-service';
 import fs from 'fs';
 import path from 'path';
 import { updateDeliveryStatusInternal, getDocumentLinesInternal } from './delivery-service';
+import { renderCompactRouteSheetTimeCell } from './logistics-metrics';
 
 // --- Settings ---
 
@@ -62,7 +63,9 @@ export async function getDeliverySettings(): Promise<Record<string, string>> {
             gps_tour_zoom_level: '17',
             gps_auto_ajuste_interval_sec: '15',
             gps_geocoding_threshold_m: '200',
-            gps_ui_refresh_sec: '5'
+            gps_ui_refresh_sec: '5',
+            supervisor_telegram_chat_ids: '',
+            supervisor_telegram_filter: 'all'
         };
         const settings: Record<string, string> = { ...defaults };
         for (const row of rows) {
@@ -251,6 +254,8 @@ export async function getActiveAssignmentsToday(includeCompleted = false): Promi
                 a.longitud_retorno,
                 a.latitud_llegada,
                 a.longitud_llegada,
+                a.origen_salida,
+                a.origen_llegada,
                 r.name as ruta_nombre,
                 u.name as chofer_nombre,
                 v.plate as vehiculo_placa,
@@ -292,6 +297,8 @@ export async function getHistoricalAssignments(dateString: string): Promise<{ as
                 a.longitud_retorno,
                 a.latitud_llegada,
                 a.longitud_llegada,
+                a.origen_salida,
+                a.origen_llegada,
                 r.name as ruta_nombre,
                 u.name as chofer_nombre,
                 v.plate as vehiculo_placa,
@@ -304,23 +311,23 @@ export async function getHistoricalAssignments(dateString: string): Promise<{ as
             WHERE a.fecha = ?
         `).all(dateString);
 
-        // Query assigned deliveries for specific date (including returned ones)
+        // Query assigned deliveries for specific date (including returned ones and direct unassigned deliveries)
         const deliveries = db.prepare(`
             SELECT 
                 q.*,
                 c.phone as cliente_telefono,
-                r.name as ruta_nombre,
-                u.name as chofer_nombre,
-                v.plate as vehiculo_placa
+                COALESCE(r.name, 'Entregas Directas (Sin Ruta)') as ruta_nombre,
+                COALESCE(u.name, q.gestionado_por, 'Coordinador Web') as chofer_nombre,
+                COALESCE(v.plate, 'Despacho Directo') as vehiculo_placa
             FROM ops_delivery_queue q
             LEFT JOIN core_customers c ON q.cliente_id = c.id
-            JOIN ops_delivery_assignments a ON (q.asignacion_id = a.id OR q.devolucion_asignacion_id = a.id)
-            JOIN ops_delivery_routes r ON a.ruta_id = r.id
-            JOIN core_users u ON a.empleado_id = u.id
-            JOIN fleet_vehicles v ON a.vehiculo_id = v.id
-            WHERE a.fecha = ?
+            LEFT JOIN ops_delivery_assignments a ON (q.asignacion_id = a.id OR q.devolucion_asignacion_id = a.id)
+            LEFT JOIN ops_delivery_routes r ON a.ruta_id = r.id
+            LEFT JOIN core_users u ON a.empleado_id = u.id
+            LEFT JOIN fleet_vehicles v ON a.vehiculo_id = v.id
+            WHERE (a.fecha = ? OR (q.asignacion_id IS NULL AND q.entregado = 1 AND DATE(q.fecha_entrega) = ?))
             ORDER BY q.fecha_registro DESC
-        `).all(dateString);
+        `).all(dateString, dateString);
 
         return JSON.parse(JSON.stringify({ assignments, deliveries }));
     } catch (e: any) {
@@ -779,8 +786,9 @@ async function generateRouteSheetHtml(
 
             // Resolve delivery address
             let addressText = 'DIRECCIÓN GENERAL';
+            const cleanDocNumForErp = (d.documento_numero || '').replace('-PARTIAL', '').replace('-RETRY', '');
             try {
-                const header = db.prepare('SELECT DIREC_EMBARQUE FROM core_erp_invoice_headers WHERE FACTURA = ?').get(d.documento_numero) as { DIREC_EMBARQUE: string | null } | undefined;
+                const header = db.prepare('SELECT DIREC_EMBARQUE FROM core_erp_invoice_headers WHERE FACTURA = ?').get(cleanDocNumForErp) as { DIREC_EMBARQUE: string | null } | undefined;
                 const code = (header?.DIREC_EMBARQUE || 'ND').trim();
                 if (code !== 'ND') {
                     const addrRow = db.prepare('SELECT descripcion, detalle_direccion FROM core_customer_shipment_addresses WHERE cliente_id = ? AND direccion_id = ? LIMIT 1').get(d.cliente_id, code) as { descripcion: string | null, detalle_direccion: string | null } | undefined;
@@ -789,45 +797,20 @@ async function generateRouteSheetHtml(
                 }
             } catch (e) {}
 
-            const deliveryTime = d.fecha_entrega ? new Date(d.fecha_entrega).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit' }) : 'N/D';
+            const timeCellHtml = renderCompactRouteSheetTimeCell(d);
             const receptorText = d.nombre_recibe ? `<strong>${d.nombre_recibe}</strong>` : '<span style="color: #94a3b8; font-style: italic;">Sin registrar</span>';
 
-            // Resolve Firma Digital (Convert file name to inline Base64 data URI so it never breaks in web/PDF/email)
-            let firmaDataUri: string | null = null;
-            if (d.firma_cliente) {
-                if (d.firma_cliente.startsWith('data:image/')) {
-                    firmaDataUri = d.firma_cliente;
-                } else if (d.firma_cliente.startsWith('http://') || d.firma_cliente.startsWith('https://')) {
-                    firmaDataUri = d.firma_cliente;
-                } else {
-                    try {
-                        const fs = require('fs');
-                        const path = require('path');
-                        const filePath = path.join(process.cwd(), 'fleet_uploads', path.basename(d.firma_cliente));
-                        if (fs.existsSync(filePath)) {
-                            const ext = path.extname(filePath).toLowerCase().replace('.', '') || 'png';
-                            const fileBuffer = fs.readFileSync(filePath);
-                            firmaDataUri = `data:image/${ext === 'jpg' ? 'jpeg' : ext};base64,${fileBuffer.toString('base64')}`;
-                        } else {
-                            firmaDataUri = `/api/fleet/files/${d.firma_cliente}`;
-                        }
-                    } catch (e) {
-                        firmaDataUri = `/api/fleet/files/${d.firma_cliente}`;
-                    }
-                }
-            }
-
-            // Firma Digital Container (Uniform Rectangular Size for ISO 9001 compliance)
-        const firmaHtml = firmaDataUri
-                ? `<div style="width: 95px; height: 38px; border: 1px solid #cbd5e1; border-radius: 4px; background: #ffffff; display: inline-flex; align-items: center; justify-content: center; overflow: hidden; padding: 1px; box-sizing: border-box;">
-                     <img src="${firmaDataUri}" alt="Firma Recibido" style="max-width: 100%; max-height: 100%; object-fit: contain;" />
-                   </div>`
-                : `<div style="width: 95px; height: 38px; border: 1px dashed #cbd5e1; border-radius: 4px; background: #f8fafc; display: inline-flex; align-items: center; justify-content: center; font-size: 9px; color: #94a3b8; font-style: italic; box-sizing: border-box;">
-                     Sin firma digital
-                   </div>`;
+            // Cuadro para Firma (Física o Digital) en la entrega
+            const firmaBoxHtml = `
+                <div style="width: 82px; height: 32px; border: 1px dashed #cbd5e1; border-radius: 4px; background: #ffffff; display: inline-flex; align-items: center; justify-content: center; font-size: 8.5px; color: #94a3b8; font-style: italic; box-sizing: border-box;">
+                    Firma
+                </div>
+            `;
 
             let boletaBadgeHtml = '';
-            if (d.boleta_numero && d.boleta_numero !== d.documento_numero) {
+            // Solo mostrar el badge de Boleta si d.boleta_numero existe y el documento es una entrega parcial / re-despacho o posee un boleta_numero propio diferenciado
+            const isPartialOrRetry = (d.documento_numero || '').includes('-PARTIAL') || (d.documento_numero || '').includes('-RETRY') || !!d.devolucion_asignacion_id;
+            if (d.boleta_numero && (isPartialOrRetry || (d.boleta_numero !== d.documento_numero && d.tipo_documento === 'boleta'))) {
                 boletaBadgeHtml = `
                     <div style="margin-top: 3px;">
                         <span style="display: inline-block; font-size: 9.5px; font-family: monospace; font-weight: 800; color: #0284c7; background: #e0f2fe; border: 1px solid #bae6fd; padding: 1.5px 5px; border-radius: 4px; white-space: nowrap;">
@@ -837,26 +820,29 @@ async function generateRouteSheetHtml(
                 `;
             }
 
+            const rawDocNum = d.referencia_doc || d.documento_numero || '';
+            const cleanDocNum = rawDocNum.replace('-PARTIAL', '').replace('-RETRY', '');
+
             rowsHtml += `
                 <tr style="border-bottom: 1px solid #e2e8f0; page-break-inside: avoid;">
-                    <td style="padding: 8px 6px; font-size: 12px; color: #1e293b; text-align: center; white-space: nowrap;">${deliveryTime}</td>
-                    <td style="padding: 8px 6px; font-size: 12px; color: #1e293b;">
+                    <td style="padding: 5px 4px; text-align: center; white-space: nowrap; vertical-align: middle;">${timeCellHtml}</td>
+                    <td style="padding: 6px 5px; font-size: 11px; color: #1e293b;">
                         <strong>${d.cliente_nombre}</strong><br/>
-                        <span style="font-size: 10px; color: #64748b; font-weight: 600;">ID: ${d.cliente_id}</span>
+                        <span style="font-size: 9.5px; color: #64748b; font-weight: 600;">ID: ${d.cliente_id}</span>
                     </td>
-                    <td style="padding: 8px 6px; font-size: 12px; color: #0f172a; font-family: monospace; font-weight: bold; white-space: nowrap;">
-                        ${d.documento_numero}
+                    <td style="padding: 6px 5px; font-size: 11px; color: #0f172a; font-family: monospace; font-weight: bold; white-space: nowrap;">
+                        ${cleanDocNum}
                         ${boletaBadgeHtml}
                     </td>
-                    <td style="padding: 8px 6px; font-size: 11px; color: #475569; line-height: 1.3;">${addressText}</td>
-                    <td style="padding: 8px 6px; font-size: 11px; color: #334155;">${receptorText}</td>
-                    <td style="padding: 8px 6px; text-align: center;">
-                        <span style="display: inline-block; padding: 3px 8px; border-radius: 9999px; font-size: 10px; font-weight: bold; color: ${statusColor}; background-color: ${statusBg}; white-space: nowrap;">
+                    <td style="padding: 6px 5px; font-size: 10.5px; color: #475569; line-height: 1.25;">${addressText}</td>
+                    <td style="padding: 6px 5px; font-size: 10.5px; color: #334155;">${receptorText}</td>
+                    <td style="padding: 6px 5px; text-align: center;">
+                        <span style="display: inline-block; padding: 2.5px 7px; border-radius: 9999px; font-size: 9.5px; font-weight: bold; color: ${statusColor}; background-color: ${statusBg}; white-space: nowrap;">
                             ${statusLabel}
                         </span>
                     </td>
-                    <td style="padding: 6px 4px; text-align: center; vertical-align: middle;">
-                        ${firmaHtml}
+                    <td style="padding: 5px 4px; text-align: center; vertical-align: middle;">
+                        ${firmaBoxHtml}
                     </td>
                 </tr>
             `;
@@ -872,13 +858,13 @@ async function generateRouteSheetHtml(
         <style>
             @page {
                 size: letter landscape;
-                margin: 10mm 12mm 10mm 12mm;
+                margin: 7mm 7mm 7mm 7mm;
             }
             @media print {
                 body {
                     background-color: #ffffff !important;
                     padding: 0 !important;
-                    font-size: 11px;
+                    font-size: 10.5px;
                 }
                 .no-print {
                     display: none !important;
@@ -907,18 +893,18 @@ async function generateRouteSheetHtml(
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
                 background-color: #f1f5f9;
                 margin: 0;
-                padding: 24px;
+                padding: 16px;
                 color: #0f172a;
                 -webkit-print-color-adjust: exact;
                 print-color-adjust: exact;
             }
             .route-sheet-page {
-                max-width: 1100px;
-                margin: 0 auto 30px auto;
+                max-width: 1140px;
+                margin: 0 auto 24px auto;
                 background-color: #ffffff;
                 border: 1px solid #cbd5e1;
                 border-radius: 8px;
-                padding: 24px;
+                padding: 20px;
                 box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
             }
             table {
@@ -943,13 +929,13 @@ async function generateRouteSheetHtml(
         <div class="route-sheet-page">
             
             <!-- Encabezado Institucional Página 1 -->
-            <table style="margin-bottom: 16px; border-bottom: 2px solid #e2e8f0; padding-bottom: 12px;">
+            <table style="margin-bottom: 14px; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px;">
                 <tr>
                     <td style="width: 56%; vertical-align: top;">
-                        <h1 style="margin: 0 0 4px 0; font-size: 19px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 0.05em;">
+                        <h1 style="margin: 0 0 4px 0; font-size: 18px; font-weight: 800; color: #0f172a; text-transform: uppercase; letter-spacing: 0.05em;">
                             ${companyName}
                         </h1>
-                        <div style="font-size: 11px; color: #475569; line-height: 1.4;">
+                        <div style="font-size: 10.5px; color: #475569; line-height: 1.4;">
                             <strong>Cédula Jurídica:</strong> ${companyTaxId}<br/>
                             ${companyAddress}<br/>
                             <strong>Teléfono:</strong> ${companyPhone} | <strong>Email:</strong> ${companyEmail}
@@ -974,48 +960,53 @@ async function generateRouteSheetHtml(
             </table>
 
             <!-- Datos Generales de la Ruta -->
-            <table style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 16px;">
+            <table style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 14px;">
                 <tr>
-                    <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 10%;"><strong>Ruta:</strong></td>
-                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 25%;">${assignment.ruta_nombre}</td>
-                    <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 10%;"><strong>Chofer:</strong></td>
-                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 25%;">${assignment.chofer_nombre}</td>
-                    <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 12%;"><strong>Vehículo:</strong></td>
-                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 18%;">${assignment.vehiculo_marca} ${assignment.vehiculo_modelo} (${assignment.vehiculo_placa})</td>
+                    <td style="padding: 6px 10px; font-size: 11px; color: #475569; width: 10%;"><strong>Ruta:</strong></td>
+                    <td style="padding: 6px 10px; font-size: 11px; color: #0f172a; font-weight: 700; width: 23%;">${assignment.ruta_nombre}</td>
+                    <td style="padding: 6px 10px; font-size: 11px; color: #475569; width: 10%;"><strong>Chofer:</strong></td>
+                    <td style="padding: 6px 10px; font-size: 11px; color: #0f172a; font-weight: 700; width: 23%;">${assignment.chofer_nombre}</td>
+                    <td style="padding: 6px 10px; font-size: 11px; color: #475569; width: 10%;"><strong>Vehículo:</strong></td>
+                    <td style="padding: 6px 10px; font-size: 11px; color: #0f172a; font-weight: 700; width: 24%;">${assignment.vehiculo_marca} ${assignment.vehiculo_modelo} (${assignment.vehiculo_placa})</td>
+                </tr>
+                <tr style="border-top: 1px dashed #e2e8f0;">
+                    <td style="padding: 6px 10px; font-size: 10.5px; color: #475569;" colspan="2">
+                        🚀 <strong>Salida Parqueo / Ruta:</strong> 
+                        <span style="color: #1e40af; font-weight: bold;">
+                            ${assignment.fecha_salida ? new Date(assignment.fecha_salida).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit' }) : (assignment.fecha_inicio ? new Date(assignment.fecha_inicio).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit' }) : '--:--')}
+                        </span>
+                    </td>
+                    <td style="padding: 6px 10px; font-size: 10.5px; color: #475569;" colspan="2">
+                        🏁 <strong>Llegada Parqueo / Cierre:</strong> 
+                        <span style="color: #059669; font-weight: bold;">
+                            ${assignment.fecha_inicio_retorno ? new Date(assignment.fecha_inicio_retorno).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit' }) : (assignment.fecha_completada ? new Date(assignment.fecha_completada).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit' }) : '--:--')}
+                        </span>
+                    </td>
+                    <td style="padding: 6px 10px; font-size: 10.5px; color: #475569;" colspan="2">
+                        ⏱️ <strong>Estado Ruta:</strong> 
+                        <span style="font-weight: bold; color: #0f172a; text-transform: uppercase;">
+                            ${assignment.estado || 'FINALIZADA'}
+                        </span>
+                    </td>
                 </tr>
             </table>
 
-            <!-- Listado de Entregas con Firma Digital -->
-            <table id="route-sheet-deliveries-table" style="margin-bottom: 20px; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden;">
+            <!-- Listado de Entregas -->
+            <table id="route-sheet-deliveries-table" style="margin-bottom: 16px; border: 1px solid #e2e8f0; border-radius: 6px; overflow: hidden;">
                 <thead>
                     <tr style="background-color: #f1f5f9; border-bottom: 2px solid #cbd5e1;">
-                        <th style="padding: 8px 6px; text-align: center; font-size: 11px; font-weight: bold; color: #334155; width: 65px;">Hora</th>
-                        <th style="padding: 8px 6px; text-align: left; font-size: 11px; font-weight: bold; color: #334155; width: 210px;">Cliente</th>
-                        <th style="padding: 8px 6px; text-align: left; font-size: 11px; font-weight: bold; color: #334155; width: 110px;">N° Factura</th>
-                        <th style="padding: 8px 6px; text-align: left; font-size: 11px; font-weight: bold; color: #334155;">Dirección (EMB)</th>
-                        <th style="padding: 8px 6px; text-align: left; font-size: 11px; font-weight: bold; color: #334155; width: 140px;">Recibido Por</th>
-                        <th style="padding: 8px 6px; text-align: center; font-size: 11px; font-weight: bold; color: #334155; width: 85px;">Estado</th>
-                        <th style="padding: 8px 6px; text-align: center; font-size: 11px; font-weight: bold; color: #334155; width: 110px;">Firma Digital</th>
+                        <th style="padding: 7px 5px; text-align: center; font-size: 10.5px; font-weight: bold; color: #334155; width: 105px;">Hora (Ing / Ent / Sal)</th>
+                        <th style="padding: 7px 5px; text-align: left; font-size: 10.5px; font-weight: bold; color: #334155; width: 230px;">Cliente</th>
+                        <th style="padding: 7px 5px; text-align: left; font-size: 10.5px; font-weight: bold; color: #334155; width: 135px;">N° Factura / Boleta</th>
+                        <th style="padding: 7px 5px; text-align: left; font-size: 10.5px; font-weight: bold; color: #334155;">Dirección (EMB)</th>
+                        <th style="padding: 7px 5px; text-align: left; font-size: 10.5px; font-weight: bold; color: #334155; width: 110px;">Recibido Por</th>
+                        <th style="padding: 7px 5px; text-align: center; font-size: 10.5px; font-weight: bold; color: #334155; width: 85px;">Estado</th>
+                        <th style="padding: 7px 5px; text-align: center; font-size: 10.5px; font-weight: bold; color: #334155; width: 92px;">Firma</th>
                     </tr>
                 </thead>
                 <tbody>
                     ${rowsHtml}
                 </tbody>
-            </table>
-
-            <!-- Espacio de Firmas de Cierre Hoja 1 -->
-            <table style="margin-top: 25px; page-break-inside: avoid;">
-                <tr>
-                    <td style="width: 42%; text-align: center; padding-top: 25px; border-top: 1.5px solid #94a3b8; font-size: 11px; color: #334155;">
-                        <strong style="font-size: 12px; text-transform: uppercase;">FIRMA CHOFER / TRANSPORTISTA</strong><br/>
-                        <span style="font-size: 11px; color: #64748b;">${assignment.chofer_nombre}</span>
-                    </td>
-                    <td style="width: 16%;"></td>
-                    <td style="width: 42%; text-align: center; padding-top: 25px; border-top: 1.5px solid #94a3b8; font-size: 11px; color: #334155;">
-                        <strong style="font-size: 12px; text-transform: uppercase;">RECIBIDO / VERIFICADO LOGÍSTICA</strong><br/>
-                        <span style="font-size: 11px; color: #64748b;">Firma de Conforme</span>
-                    </td>
-                </tr>
             </table>
 
             <div style="margin-top: 14px; text-align: right; font-size: 10px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 8px;">
@@ -1061,11 +1052,25 @@ async function generateRouteSheetHtml(
             <table style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; margin-bottom: 20px;">
                 <tr>
                     <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 10%;"><strong>Ruta:</strong></td>
-                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 25%;">${assignment.ruta_nombre}</td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 23%;">${assignment.ruta_nombre}</td>
                     <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 10%;"><strong>Chofer:</strong></td>
-                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 25%;">${assignment.chofer_nombre}</td>
-                    <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 12%;"><strong>Vehículo:</strong></td>
-                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 18%;">${assignment.vehiculo_marca} ${assignment.vehiculo_modelo} (${assignment.vehiculo_placa})</td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 23%;">${assignment.chofer_nombre}</td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #475569; width: 10%;"><strong>Vehículo:</strong></td>
+                    <td style="padding: 7px 12px; font-size: 11.5px; color: #0f172a; font-weight: 700; width: 24%;">${assignment.vehiculo_marca} ${assignment.vehiculo_modelo} (${assignment.vehiculo_placa})</td>
+                </tr>
+                <tr style="border-top: 1px dashed #e2e8f0;">
+                    <td style="padding: 7px 12px; font-size: 11px; color: #475569;" colspan="3">
+                        🚀 <strong>Salida Parqueo:</strong> 
+                        <span style="color: #1e40af; font-weight: bold;">
+                            ${assignment.fecha_salida ? new Date(assignment.fecha_salida).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit' }) : (assignment.fecha_inicio ? new Date(assignment.fecha_inicio).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit' }) : '--:--')}
+                        </span>
+                    </td>
+                    <td style="padding: 7px 12px; font-size: 11px; color: #475569;" colspan="3">
+                        🏁 <strong>Llegada Parqueo:</strong> 
+                        <span style="color: #059669; font-weight: bold;">
+                            ${assignment.fecha_inicio_retorno ? new Date(assignment.fecha_inicio_retorno).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit' }) : (assignment.fecha_completada ? new Date(assignment.fecha_completada).toLocaleTimeString('es-CR', { timeZone: 'America/Costa_Rica', hour: '2-digit', minute: '2-digit' }) : '--:--')}
+                        </span>
+                    </td>
                 </tr>
             </table>
 
@@ -1125,21 +1130,6 @@ async function generateRouteSheetHtml(
                     </tbody>
                 </table>
             </div>
-
-            <!-- Espacio de Firmas de Cierre -->
-            <table style="margin-top: 35px; page-break-inside: avoid;">
-                <tr>
-                    <td style="width: 42%; text-align: center; padding-top: 30px; border-top: 1.5px solid #94a3b8; font-size: 11px; color: #334155;">
-                        <strong style="font-size: 12px; text-transform: uppercase;">FIRMA CHOFER / TRANSPORTISTA</strong><br/>
-                        <span style="font-size: 11px; color: #64748b;">${assignment.chofer_nombre}</span>
-                    </td>
-                    <td style="width: 16%;"></td>
-                    <td style="width: 42%; text-align: center; padding-top: 30px; border-top: 1.5px solid #94a3b8; font-size: 11px; color: #334155;">
-                        <strong style="font-size: 12px; text-transform: uppercase;">RECIBIDO / VERIFICADO LOGÍSTICA</strong><br/>
-                        <span style="font-size: 11px; color: #64748b;">Firma de Conforme</span>
-                    </td>
-                </tr>
-            </table>
 
             <div style="margin-top: 35px; text-align: center; font-size: 10px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 8px;">
                 Documento de control logístico emitido bajo las directrices del Sistema de Gestión de Calidad ISO 9001:2015.
@@ -3694,11 +3684,11 @@ export async function getLogisticsAnalyticsDataAction(filters: LogisticsAnalytic
     }
 
     if (filters.startDate) {
-        queueQuery += ` AND DATE(q.fecha_registro) >= ?`;
+        queueQuery += ` AND DATE(COALESCE(q.fecha_entrega, a.fecha, q.fecha_registro)) >= ?`;
         params.push(filters.startDate);
     }
     if (filters.endDate) {
-        queueQuery += ` AND DATE(q.fecha_registro) <= ?`;
+        queueQuery += ` AND DATE(COALESCE(q.fecha_entrega, a.fecha, q.fecha_registro)) <= ?`;
         params.push(filters.endDate);
     }
     if (filters.choferName && filters.choferName !== 'all') {
@@ -3911,4 +3901,399 @@ export async function getDeliveryLinesByDocIdAction(docId: number): Promise<{
         return { success: false, lines: [], error: e.message };
     }
 }
+
+// ==========================================
+// --- SERVER ACTIONS FOR BOLETAS OPERATIVAS ---
+// ==========================================
+
+export async function createBoletaOperativaAction(data: {
+    clienteId: string;
+    clienteNombre: string;
+    motivoSalida: 'faltante' | 'devolucion' | 'muestra' | 'regalia' | 'otro';
+    referenciaDoc?: string;
+    comentario?: string;
+    items: Array<{ codigo: string; descripcion: string; cantidad: number }>;
+}): Promise<{ success: boolean; boletaNumero?: string; error?: string }> {
+    const db = await getDb();
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+        return { success: false, error: 'No autorizado' };
+    }
+
+    try {
+        // Asegurar columnas de boletas operativas
+        try {
+            const tableInfo = db.prepare("PRAGMA table_info('ops_delivery_queue')").all();
+            const cols = tableInfo.map((c: any) => c.name);
+            if (!cols.includes('motivo_salida')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN motivo_salida TEXT;`);
+            if (!cols.includes('referencia_doc')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN referencia_doc TEXT;`);
+            if (!cols.includes('requiere_autorizacion')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN requiere_autorizacion INTEGER DEFAULT 0;`);
+            if (!cols.includes('autorizado_por')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN autorizado_por TEXT;`);
+            if (!cols.includes('fecha_autorizacion')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN fecha_autorizacion TEXT;`);
+        } catch (e) {}
+
+        // Obtener prefijo y consecutivo según motivo o global
+        const prefixSettingKey = `boleta_prefix_${data.motivoSalida}`;
+        const nextSettingKey = `boleta_next_${data.motivoSalida}`;
+
+        const prefixRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = ? OR key = 'boleta_consecutive_prefix' ORDER BY CASE WHEN key = ? THEN 1 ELSE 2 END LIMIT 1").get(prefixSettingKey, prefixSettingKey) as { value: string } | undefined;
+        const nextRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = ? OR key = 'boleta_consecutive_next' ORDER BY CASE WHEN key = ? THEN 1 ELSE 2 END LIMIT 1").get(nextSettingKey, nextSettingKey) as { value: string } | undefined;
+
+        const defaultPrefixes: Record<string, string> = {
+            faltante: 'BOL-',
+            devolucion: 'DEV-',
+            muestra: 'MUE-',
+            regalia: 'REG-',
+            otro: 'BOL-'
+        };
+
+        const prefix = prefixRow?.value || defaultPrefixes[data.motivoSalida] || 'BOL-';
+        const nextNum = parseInt(nextRow?.value || '1', 10);
+        const boletaNum = `${prefix}${String(nextNum).padStart(6, '0')}`;
+
+        // Incrementar consecutivo
+        db.prepare("INSERT INTO ops_delivery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(nextSettingKey, String(nextNum + 1));
+        if (prefixSettingKey === 'boleta_prefix_faltante') {
+            db.prepare("INSERT INTO ops_delivery_settings (key, value) VALUES ('boleta_consecutive_next', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(String(nextNum + 1));
+        }
+
+        const todayStr = new Date().toISOString();
+
+        // Verificar si requiere aprobación según configuración
+        const requireAuthRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boletas_require_authorization'").get() as { value: string } | undefined;
+        const requiresAuth = requireAuthRow?.value === 'true' ? 1 : 0;
+        const initialEstado = requiresAuth === 1 ? 'pendiente_autorizacion' : 'pendiente';
+
+        const result = db.prepare(`
+            INSERT INTO ops_delivery_queue (
+                documento_numero, tipo_documento, cliente_id, cliente_nombre,
+                creado_por, fecha_registro, entregado, estado, comentario,
+                boleta_numero, motivo_salida, referencia_doc, requiere_autorizacion,
+                autorizado_por, fecha_autorizacion
+            ) VALUES (?, 'boleta', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            boletaNum,
+            data.clienteId || 'CLI-GENERIC',
+            data.clienteNombre || 'Cliente General',
+            currentUser.name || currentUser.email || 'Sistema',
+            todayStr,
+            initialEstado,
+            data.comentario || null,
+            boletaNum,
+            data.motivoSalida,
+            data.referenciaDoc || null,
+            requiresAuth,
+            requiresAuth === 0 ? 'AUTO' : null,
+            requiresAuth === 0 ? todayStr : null
+        );
+
+        const deliveryId = Number(result.lastInsertRowid);
+
+        // Guardar ítems de la boleta
+        if (data.items && data.items.length > 0) {
+            const insertLineStmt = db.prepare(`
+                INSERT INTO ops_delivery_lines (delivery_order_id, producto_codigo, producto_descripcion, cantidad_pedida, cantidad_entregada, cantidad_faltante)
+                VALUES (?, ?, ?, ?, 0, ?)
+            `);
+            for (const item of data.items) {
+                insertLineStmt.run(deliveryId, item.codigo, item.descripcion, item.cantidad, item.cantidad);
+            }
+        }
+
+        revalidatePath('/dashboard/operations/vouchers');
+        revalidatePath('/dashboard/operations/logistics/deliveries/operation');
+
+        return { success: true, boletaNumero: boletaNum };
+    } catch (e: any) {
+        logError('Error creating boleta operativa:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+export async function getBoletasOperativasAction(filters?: {
+    motivo?: string;
+    estado?: string;
+    search?: string;
+}): Promise<any[]> {
+    const db = await getDb();
+    try {
+        let sql = `
+            SELECT q.*, 
+                (SELECT COUNT(*) FROM ops_delivery_lines WHERE delivery_order_id = q.id) as total_items
+            FROM ops_delivery_queue q
+            WHERE q.tipo_documento = 'boleta' OR q.motivo_salida IS NOT NULL
+        `;
+
+        const params: any[] = [];
+        if (filters?.motivo && filters.motivo !== 'all') {
+            sql += ` AND q.motivo_salida = ?`;
+            params.push(filters.motivo);
+        }
+        if (filters?.estado && filters.estado !== 'all') {
+            sql += ` AND q.estado = ?`;
+            params.push(filters.estado);
+        }
+        if (filters?.search) {
+            sql += ` AND (q.documento_numero LIKE ? OR q.boleta_numero LIKE ? OR q.cliente_nombre LIKE ? OR q.referencia_doc LIKE ?)`;
+            const term = `%${filters.search}%`;
+            params.push(term, term, term, term);
+        }
+
+        sql += ` ORDER BY q.id DESC LIMIT 100`;
+
+        const rows = db.prepare(sql).all(...params) as any[];
+
+        for (const row of rows) {
+            const lines = db.prepare(`
+                SELECT producto_codigo as codigo, producto_descripcion as descripcion, cantidad_pedida as cantidad
+                FROM ops_delivery_lines WHERE delivery_order_id = ?
+            `).all(row.id);
+            row.items = lines;
+        }
+
+        return rows;
+    } catch (e: any) {
+        logError('Error fetching boletas operativas:', e.message);
+        return [];
+    }
+}
+
+export async function approveBoletaOperativaAction(
+    boletaId: number, 
+    sendToQueue: boolean = true
+): Promise<{ success: boolean; error?: string }> {
+    const db = await getDb();
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+        return { success: false, error: 'No autorizado' };
+    }
+
+    try {
+        const todayStr = new Date().toISOString();
+        const nextState = sendToQueue ? 'pendiente' : 'aprobado_fuera_de_ruta';
+
+        db.prepare(`
+            UPDATE ops_delivery_queue
+            SET estado = ?, autorizado_por = ?, fecha_autorizacion = ?
+            WHERE id = ?
+        `).run(nextState, currentUser.name || currentUser.email, todayStr, boletaId);
+
+        revalidatePath('/dashboard/operations/vouchers');
+        revalidatePath('/dashboard/operations/logistics/deliveries/operation');
+        return { success: true };
+    } catch (e: any) {
+        logError('Error approving boleta operativa:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+export async function updateBoletaOperativaAction(
+    boletaId: number,
+    data: {
+        items?: Array<{ codigo: string; descripcion: string; cantidad: number }>;
+        comentario?: string;
+        referenciaDoc?: string;
+        clienteNombre?: string;
+    }
+): Promise<{ success: boolean; error?: string }> {
+    const db = await getDb();
+    const currentUser = await getCurrentUser();
+    if (!currentUser) {
+        return { success: false, error: 'No autorizado' };
+    }
+
+    try {
+        const doc = db.prepare('SELECT id, estado FROM ops_delivery_queue WHERE id = ?').get(boletaId) as any;
+        if (!doc) return { success: false, error: 'Boleta no encontrada' };
+
+        if (doc.estado !== 'pendiente_autorizacion' && doc.estado !== 'pendiente') {
+            return { success: false, error: 'Solo se pueden editar boletas pendientes de aprobación o pendientes de ruta.' };
+        }
+
+        const updateFields: string[] = [];
+        const params: any[] = [];
+
+        if (data.comentario !== undefined) {
+            updateFields.push('comentario = ?');
+            params.push(data.comentario || null);
+        }
+        if (data.referenciaDoc !== undefined) {
+            updateFields.push('referencia_doc = ?');
+            params.push(data.referenciaDoc || null);
+        }
+        if (data.clienteNombre !== undefined) {
+            updateFields.push('cliente_nombre = ?');
+            params.push(data.clienteNombre);
+        }
+
+        if (updateFields.length > 0) {
+            params.push(boletaId);
+            db.prepare(`UPDATE ops_delivery_queue SET ${updateFields.join(', ')} WHERE id = ?`).run(...params);
+        }
+
+        if (data.items) {
+            db.prepare('DELETE FROM ops_delivery_lines WHERE delivery_order_id = ?').run(boletaId);
+            const insertLine = db.prepare(`
+                INSERT INTO ops_delivery_lines (delivery_order_id, producto_codigo, producto_descripcion, cantidad_pedida, cantidad_entregada, cantidad_faltante)
+                VALUES (?, ?, ?, ?, 0, ?)
+            `);
+            for (const item of data.items) {
+                insertLine.run(boletaId, item.codigo, item.descripcion, item.cantidad, item.cantidad);
+            }
+        }
+
+        revalidatePath('/dashboard/operations/vouchers');
+        revalidatePath('/dashboard/admin/operations/vouchers');
+        revalidatePath('/dashboard/operations/logistics/deliveries/operation');
+        return { success: true };
+    } catch (e: any) {
+        logError('Error updating boleta operativa:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+export async function getBoletaPrintHtmlAction(boletaId: number): Promise<{ success: boolean; html?: string; error?: string }> {
+    const db = await getDb();
+    try {
+        const doc = db.prepare('SELECT * FROM ops_delivery_queue WHERE id = ?').get(boletaId) as any;
+        if (!doc) return { success: false, error: 'Boleta no encontrada' };
+
+        const lines = db.prepare('SELECT * FROM ops_delivery_lines WHERE delivery_order_id = ?').all(boletaId) as any[];
+
+        const { getCompanySettings } = await import('@/modules/core/lib/db');
+        const company = await getCompanySettings();
+
+        const motivoLabels: Record<string, string> = {
+            faltante: 'ENTREGA INCOMPLETA / LÍNEA FALTANTE',
+            devolucion: 'DEVOLUCIÓN Y REPOSICIÓN DE PRODUCTO',
+            muestra: 'MUESTRA PROMOCIONAL / DEMOSTRACIÓN',
+            regalia: 'REGALÍA / PATROCINIO ESPECIAL',
+            otro: 'SALIDA OPERATIVA DE BODEGA'
+        };
+
+        const motivoTitle = motivoLabels[doc.motivo_salida || 'otro'] || 'BOLETA DE SALIDA DE BODEGA';
+        const originalDocRef = doc.referencia_doc || (doc.documento_numero && doc.documento_numero.includes('-PARTIAL') ? doc.documento_numero.replace('-PARTIAL', '').replace('-RETRY', '') : null);
+
+        const linesHtml = lines.map(l => `
+            <tr>
+                <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-family: monospace; font-weight: bold;">${l.producto_codigo}</td>
+                <td style="padding: 8px; border-bottom: 1px solid #e2e8f0;">${l.producto_descripcion || 'N/D'}</td>
+                <td style="padding: 8px; border-bottom: 1px solid #e2e8f0; text-align: center; font-weight: bold;">${l.cantidad_pedida}</td>
+            </tr>
+        `).join('');
+
+        const html = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8"/>
+                <title>Boleta de Salida #${doc.boleta_numero || doc.documento_numero}</title>
+                <style>
+                    @page { size: letter portrait; margin: 12mm; }
+                    body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; margin: 0; padding: 15px; color: #0f172a; background: #ffffff; }
+                    .header-container { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 3px solid #0284c7; padding-bottom: 12px; margin-bottom: 16px; }
+                    .company-title { font-size: 20px; font-weight: 900; color: #0369a1; text-transform: uppercase; tracking: -0.5px; }
+                    .company-sub { font-size: 11px; color: #475569; margin-top: 3px; line-height: 1.3; }
+                    .doc-badge { background: #e0f2fe; color: #0284c7; border: 1px solid #bae6fd; font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 6px; display: inline-block; text-transform: uppercase; letter-spacing: 0.5px; }
+                    .doc-number { font-size: 22px; font-weight: 900; color: #0f172a; margin: 4px 0 0 0; font-family: monospace; }
+                    .doc-date { font-size: 10px; color: #64748b; font-weight: 600; margin-top: 2px; }
+                    .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
+                    .info-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; font-size: 11.5px; line-height: 1.5; }
+                    .info-card-title { font-size: 10px; font-weight: 800; text-transform: uppercase; color: #64748b; letter-spacing: 0.5px; margin-bottom: 4px; }
+                    .notes-box { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; padding: 10px 14px; border-radius: 8px; font-size: 11px; margin-bottom: 16px; }
+                    table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+                    th { background: #f1f5f9; color: #334155; font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; padding: 8px 10px; border-bottom: 2px solid #cbd5e1; text-align: left; }
+                    td { padding: 9px 10px; border-bottom: 1px solid #e2e8f0; font-size: 11.5px; color: #1e293b; }
+                    .sig-section { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-top: 50px; page-break-inside: avoid; }
+                    .sig-box { text-align: center; font-size: 10.5px; }
+                    .sig-line { border-top: 1.5px dashed #94a3b8; margin-top: 45px; padding-top: 6px; font-weight: 700; color: #334155; }
+                </style>
+            </head>
+            <body>
+                <div class="header-container">
+                    <div>
+                        <div class="company-title">${company?.name || 'INDUSTRIAS GAREND S.A.'}</div>
+                        <div class="company-sub">
+                            Cédula Jurídica: ${company?.taxId || '3-101-133082'}<br/>
+                            ${company?.address || 'Alajuela, Costa Rica'}<br/>
+                            Tel: ${company?.phone || '+506 2458-4343'} | Email: ${company?.email || 'ventas@industriasgarend.com'}
+                        </div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div class="doc-badge">${motivoTitle}</div>
+                        <div class="doc-number">#${doc.boleta_numero || doc.documento_numero}</div>
+                        <div class="doc-date">Fecha Registro: ${new Date(doc.fecha_registro).toLocaleDateString('es-CR')} ${new Date(doc.fecha_registro).toLocaleTimeString('es-CR', { hour: '2-digit', minute: '2-digit' })}</div>
+                    </div>
+                </div>
+
+                <div class="info-grid">
+                    <div class="info-card">
+                        <div class="info-card-title">Datos del Destinatario / Cliente</div>
+                        <strong style="font-size: 13px; color: #0f172a;">${doc.cliente_nombre}</strong><br/>
+                        <span style="color: #64748b; font-weight: 600;">ID Cliente: ${doc.cliente_id}</span><br/>
+                        ${originalDocRef ? `
+                            <div style="margin-top: 6px; padding-top: 4px; border-top: 1px dashed #cbd5e1;">
+                                <span style="font-size: 10px; text-transform: uppercase; color: #64748b; font-weight: 700;">Documento Base / ERP:</span><br/>
+                                <span style="display: inline-block; font-family: monospace; font-size: 13px; font-weight: 900; color: #0284c7; background: #e0f2fe; padding: 2px 6px; border-radius: 4px; margin-top: 2px;">
+                                    📄 #${originalDocRef}
+                                </span>
+                            </div>
+                        ` : ''}
+                    </div>
+                    <div class="info-card">
+                        <div class="info-card-title">Control y Trazabilidad Operativa</div>
+                        <strong>Solicitado Por:</strong> ${doc.creado_por}<br/>
+                        <strong>Autorizado Por:</strong> ${doc.autorizado_por || 'Pendiente de Autorización'}<br/>
+                        <strong>Estado Actual:</strong> <span style="font-weight: 800; color: #0284c7;">${doc.estado.toUpperCase()}</span>
+                    </div>
+                </div>
+
+                ${doc.comentario ? `
+                    <div class="notes-box">
+                        <strong>📌 Comentarios / Observaciones de Alistamiento:</strong><br/>
+                        ${doc.comentario}
+                    </div>
+                ` : ''}
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 120px;">Código</th>
+                            <th>Descripción del Producto</th>
+                            <th style="text-align: center; width: 130px;">Cant. Unidades</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${linesHtml.length > 0 ? linesHtml : '<tr><td colspan="3" style="text-align:center; padding: 16px; color: #94a3b8;">Sin productos registrados en el detalle.</td></tr>'}
+                    </tbody>
+                </table>
+
+                <div class="sig-section">
+                    <div class="sig-box">
+                        <div style="font-size: 11px; font-weight: 800; color: #0f172a; margin-bottom: 2px;">${doc.creado_por || 'Usuario Solicitante'}</div>
+                        <div class="sig-line">Solicitado Por</div>
+                        <div style="color: #64748b; font-size: 9px; margin-top: 3px;">Generó la Boleta</div>
+                    </div>
+                    <div class="sig-box">
+                        <div style="font-size: 11px; font-weight: 800; color: #0f172a; margin-bottom: 2px;">${doc.autorizado_por || 'Pendiente de Aprobación'}</div>
+                        <div class="sig-line">Aprobado Por (Jefatura / Supervisión)</div>
+                        <div style="color: #64748b; font-size: 9px; margin-top: 3px;">${doc.fecha_autorizacion ? `Autorizado el ${new Date(doc.fecha_autorizacion).toLocaleDateString('es-CR')} ${new Date(doc.fecha_autorizacion).toLocaleTimeString('es-CR', { hour: '2-digit', minute: '2-digit' })}` : 'Firma & Autorización'}</div>
+                    </div>
+                    <div class="sig-box">
+                        <div style="font-size: 11px; font-weight: 800; color: #0f172a; margin-bottom: 2px;">Bodega / Despacho</div>
+                        <div class="sig-line">Alistado & Recibido Bodega</div>
+                        <div style="color: #64748b; font-size: 9px; margin-top: 3px;">Firma & Fecha Entregado</div>
+                    </div>
+                </div>
+            </body>
+            </html>
+        `;
+
+        return { success: true, html };
+    } catch (e: any) {
+        logError('Error generating boleta print html:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
 

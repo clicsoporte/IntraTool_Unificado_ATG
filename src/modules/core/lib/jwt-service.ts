@@ -87,7 +87,7 @@ export function generateFleetToken(payload: {
     };
 
     const now = Math.floor(Date.now() / 1000);
-    const expDays = payload.expiresInDays || 7;
+    const expDays = payload.expiresInDays || 30;
     const exp = now + (expDays * 24 * 60 * 60);
 
     const fullPayload: FleetTokenPayload = {
@@ -150,4 +150,30 @@ export function verifyFleetToken(token: string): FleetTokenPayload | null {
     } catch (_) {
         return null;
     }
+}
+
+/**
+ * Determina si un token debe auto-renovarse (ha transcurrido al menos la mitad de su vida útil / >= 15 días).
+ */
+export function shouldRenewFleetToken(payload: FleetTokenPayload): boolean {
+    if (!payload || !payload.iat) return false;
+    const now = Math.floor(Date.now() / 1000);
+    const elapsedSeconds = now - payload.iat;
+    const fifteenDaysSeconds = 15 * 24 * 60 * 60;
+    return elapsedSeconds >= fifteenDaysSeconds;
+}
+
+/**
+ * Auto-renueva silenciosamente el token por 30 días adicionales si han transcurrido 15 días o más desde su emisión.
+ */
+export function renewFleetTokenIfNeeded(payload: FleetTokenPayload): string | null {
+    if (!shouldRenewFleetToken(payload)) return null;
+    return generateFleetToken({
+        userId: payload.userId,
+        userName: payload.userName,
+        role: payload.role,
+        employeeId: payload.employeeId,
+        hardwareId: payload.hardwareId,
+        expiresInDays: 30
+    });
 }

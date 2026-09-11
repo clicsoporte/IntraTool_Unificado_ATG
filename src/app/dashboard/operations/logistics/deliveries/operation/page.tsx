@@ -26,6 +26,14 @@ import {
     DialogTrigger,
 } from '@/components/ui/dialog';
 import {
+    Sheet,
+    SheetContent,
+    SheetDescription,
+    SheetHeader,
+    SheetTitle,
+    SheetTrigger,
+} from '@/components/ui/sheet';
+import {
     AlertDialog,
     AlertDialogAction,
     AlertDialogCancel,
@@ -51,7 +59,11 @@ import {
     CheckSquare,
     Trash2,
     AlertTriangle,
-    Calendar
+    Calendar,
+    SlidersHorizontal,
+    Settings2,
+    ExternalLink,
+    Filter
 } from 'lucide-react';
 import {
     getGeneralQueue,
@@ -147,6 +159,11 @@ export default function OperationDispatchPage() {
     const [discardReason, setDiscardReason] = useState<string>('');
     const [sendingBoletaEmail, setSendingBoletaEmail] = useState<boolean>(false);
     const [discardingDoc, setDiscardingDoc] = useState<boolean>(false);
+
+    // Responsive mobile view and sheet/dialog states
+    const [mobileTab, setMobileTab] = useState<'queue' | 'routes'>('queue');
+    const [mobileRouteModalOpen, setMobileRouteModalOpen] = useState<boolean>(false);
+    const [mobileToolsSheetOpen, setMobileToolsSheetOpen] = useState<boolean>(false);
 
     // Dynamic confirmation dialog state (v4.1)
     const [confirmConfig, setConfirmConfig] = useState<{
@@ -1009,8 +1026,8 @@ export default function OperationDispatchPage() {
 
     return (
         <div className="space-y-6">
-            {/* Sync & Automations Panel */}
-            <div className="p-5 bg-blue-600/5 dark:bg-blue-500/5 rounded-2xl border border-blue-500/10 space-y-4 shadow-sm">
+            {/* DESKTOP ONLY: Sync & Automations Panel (100% INTACTO para computadoras) */}
+            <div className="hidden lg:block p-5 bg-blue-600/5 dark:bg-blue-500/5 rounded-2xl border border-blue-500/10 space-y-4 shadow-sm">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div>
                         <h3 className="text-sm font-extrabold flex items-center gap-2 text-foreground">
@@ -1229,97 +1246,407 @@ export default function OperationDispatchPage() {
                 </div>
             </div>
 
+            {/* MOBILE ONLY: Compact Bar + Sheet HUB de Herramientas & Opciones */}
+            <div className="block lg:hidden space-y-3">
+                <div className="p-3 bg-card border rounded-2xl flex items-center justify-between shadow-sm gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-8 h-8 rounded-xl bg-blue-600/10 text-blue-600 flex items-center justify-center shrink-0">
+                            <Truck className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                            <h2 className="text-xs font-black truncate text-foreground">Despacho Operativo</h2>
+                            <p className="text-[10px] text-muted-foreground font-semibold flex items-center gap-1.5">
+                                <span>{queue.length} en cola</span>
+                                <span>•</span>
+                                <span>{assignments.length} rutas</span>
+                                {refreshIntervalSec > 0 && (
+                                    <span className="text-emerald-600 dark:text-emerald-400 font-extrabold flex items-center gap-0.5">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                        {refreshIntervalSec}s
+                                    </span>
+                                )}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={syncingERP}
+                            onClick={handleSyncERP}
+                            className="h-8 px-2.5 rounded-xl font-bold text-[11px] gap-1 border-muted/80 shadow-sm"
+                            title="Sincronizar Cola ERP"
+                        >
+                            <RefreshCw className={`w-3.5 h-3.5 ${syncingERP ? 'animate-spin text-blue-600' : ''}`} />
+                            <span className="hidden sm:inline">Sync</span>
+                        </Button>
+
+                        {/* Sheet Trigger Button */}
+                        <Sheet open={mobileToolsSheetOpen} onOpenChange={setMobileToolsSheetOpen}>
+                            <SheetTrigger asChild>
+                                <Button
+                                    variant="default"
+                                    size="sm"
+                                    className="h-8 px-2.5 rounded-xl font-bold text-[11px] gap-1.5 bg-blue-600 hover:bg-blue-700 shadow-sm text-white"
+                                >
+                                    <Settings2 className="w-3.5 h-3.5" />
+                                    <span>Herramientas</span>
+                                </Button>
+                            </SheetTrigger>
+                            <SheetContent side="right" className="w-[88vw] sm:max-w-md p-0 flex flex-col justify-between overflow-y-auto">
+                                <div className="p-5 space-y-6">
+                                    <SheetHeader className="text-left border-b pb-4">
+                                        <SheetTitle className="text-base font-black flex items-center gap-2">
+                                            <SlidersHorizontal className="w-5 h-5 text-blue-600" />
+                                            Herramientas y Opciones
+                                        </SheetTitle>
+                                        <SheetDescription className="text-xs">
+                                            Controles de sincronización ERP, monitoreo y acciones automáticas de cola.
+                                        </SheetDescription>
+                                    </SheetHeader>
+
+                                    {/* 1. Sincronización ERP */}
+                                    <div className="space-y-3 bg-muted/30 p-3.5 rounded-2xl border border-muted/60">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs font-black uppercase text-foreground/80 tracking-wider">
+                                                Sincronización ERP
+                                            </span>
+                                            <Badge variant="outline" className="text-[10px] font-bold">
+                                                {syncFilterType === 'days' ? `${syncLookbackDays}d lookback` : syncFilterType}
+                                            </Badge>
+                                        </div>
+
+                                        <div className="space-y-1.5">
+                                            <Label className="text-[11px] font-bold text-muted-foreground">Filtro de búsqueda ERP</Label>
+                                            <Select 
+                                                value={syncFilterType} 
+                                                onValueChange={(val: any) => setSyncFilterType(val)}
+                                            >
+                                                <SelectTrigger className="h-8 rounded-lg font-bold text-xs bg-background">
+                                                    <SelectValue placeholder="Tipo de Filtro" />
+                                                </SelectTrigger>
+                                                <SelectContent>
+                                                    <SelectItem value="none">Sin filtro (Importar Todo)</SelectItem>
+                                                    <SelectItem value="days">Por días relativos</SelectItem>
+                                                    <SelectItem value="range">Por rango de fechas</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+
+                                        {syncFilterType === 'days' && (
+                                            <div className="space-y-1.5 pt-1">
+                                                <Label className="text-[10px] font-bold text-muted-foreground">Días anteriores a consultar</Label>
+                                                <div className="grid grid-cols-3 gap-1.5">
+                                                    {[
+                                                        { label: 'Solo Hoy', val: 0 },
+                                                        { label: '1 Día', val: 1 },
+                                                        { label: '2 Días', val: 2 },
+                                                        { label: '3 Días', val: 3 },
+                                                        { label: '4 Días', val: 4 },
+                                                        { label: '5 Días', val: 5 }
+                                                    ].map((opt) => (
+                                                        <Button
+                                                            key={opt.val}
+                                                            type="button"
+                                                            variant={syncLookbackDays === opt.val ? 'default' : 'outline'}
+                                                            onClick={() => setSyncLookbackDays(opt.val)}
+                                                            className={`h-7 text-[10px] font-bold rounded-lg ${
+                                                                syncLookbackDays === opt.val 
+                                                                    ? 'bg-blue-600 text-white' 
+                                                                    : 'bg-background'
+                                                            }`}
+                                                        >
+                                                            {opt.label}
+                                                        </Button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {syncFilterType === 'range' && (
+                                            <div className="space-y-2 pt-1">
+                                                <div className="space-y-1">
+                                                    <Label className="text-[10px] font-bold text-muted-foreground">Fecha Inicio</Label>
+                                                    <Input
+                                                        type="date"
+                                                        value={syncStartDate}
+                                                        onChange={(e) => setSyncStartDate(e.target.value)}
+                                                        className="h-8 rounded-lg font-bold text-xs bg-background"
+                                                    />
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <Label className="text-[10px] font-bold text-muted-foreground">Fecha Fin</Label>
+                                                    <Input
+                                                        type="date"
+                                                        value={syncEndDate}
+                                                        onChange={(e) => setSyncEndDate(e.target.value)}
+                                                        className="h-8 rounded-lg font-bold text-xs bg-background"
+                                                    />
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <Button
+                                            disabled={syncingERP}
+                                            onClick={async () => {
+                                                await handleSyncERP();
+                                            }}
+                                            className="w-full h-9 rounded-xl font-bold text-xs gap-2 bg-blue-600 hover:bg-blue-700 text-white shadow-sm mt-1"
+                                        >
+                                            <RefreshCw className={`w-3.5 h-3.5 ${syncingERP ? 'animate-spin' : ''}`} />
+                                            {syncingERP ? 'Sincronizando...' : 'Ejecutar Sincronización ERP'}
+                                        </Button>
+                                    </div>
+
+                                    {/* 2. Auto-Refresco en Vivo */}
+                                    <div className="space-y-2 bg-muted/30 p-3.5 rounded-2xl border border-muted/60">
+                                        <div className="flex items-center justify-between">
+                                            <span className="text-xs font-black uppercase text-foreground/80 tracking-wider flex items-center gap-1.5">
+                                                <RefreshCw className="w-3.5 h-3.5 text-blue-600" />
+                                                Monitoreo en Vivo
+                                            </span>
+                                            {refreshIntervalSec > 0 ? (
+                                                <Badge className="bg-emerald-500/10 text-emerald-600 border-none text-[10px] font-bold">
+                                                    Activo ({refreshIntervalSec}s)
+                                                </Badge>
+                                            ) : (
+                                                <Badge variant="outline" className="text-[10px] font-bold text-muted-foreground">
+                                                    Apagado
+                                                </Badge>
+                                            )}
+                                        </div>
+                                        <p className="text-[11px] text-muted-foreground">
+                                            Actualiza automáticamente los estados de choferes y pedidos sin recargar la página.
+                                        </p>
+                                        <Select 
+                                            value={String(refreshIntervalSec)} 
+                                            onValueChange={(val) => setRefreshIntervalSec(Number(val))}
+                                        >
+                                            <SelectTrigger className="h-8 rounded-lg font-bold text-xs bg-background">
+                                                <SelectValue placeholder="Seleccionar intervalo" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                <SelectItem value="0">Apagado (Manual)</SelectItem>
+                                                <SelectItem value="10">Cada 10 segundos</SelectItem>
+                                                <SelectItem value="30">Cada 30 segundos</SelectItem>
+                                                <SelectItem value="60">Cada 1 minuto</SelectItem>
+                                                <SelectItem value="300">Cada 5 minutos</SelectItem>
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+
+                                    {/* 3. Acciones de Despacho Masivo */}
+                                    <div className="space-y-2 bg-muted/30 p-3.5 rounded-2xl border border-muted/60">
+                                        <span className="text-xs font-black uppercase text-foreground/80 tracking-wider flex items-center gap-1.5">
+                                            <Send className="w-3.5 h-3.5 text-blue-600" />
+                                            Automatizaciones
+                                        </span>
+                                        <Button
+                                            variant="outline"
+                                            disabled={autoRouting || assignments.length === 0}
+                                            onClick={() => {
+                                                setMobileToolsSheetOpen(false);
+                                                handleAutoRoute();
+                                            }}
+                                            className="w-full h-9 rounded-xl font-bold text-xs gap-2 justify-start bg-background border-muted/80 shadow-sm"
+                                        >
+                                            <Send className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                                            <span>{autoRouting ? 'Ruteando...' : 'Auto-Ruteo Inteligente'}</span>
+                                        </Button>
+
+                                        <Button
+                                            variant="outline"
+                                            onClick={() => {
+                                                setMobileToolsSheetOpen(false);
+                                                setPurgingDialogOpen(true);
+                                            }}
+                                            className="w-full h-9 rounded-xl font-bold text-xs gap-2 justify-start bg-red-500/5 text-red-600 border-red-200 hover:bg-red-500/10 dark:border-red-950/40 shadow-sm"
+                                        >
+                                            <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                                            <span>Depurar Cola Histórica</span>
+                                        </Button>
+                                    </div>
+
+                                    {/* 4. Enlaces a Módulos Relacionados */}
+                                    <div className="space-y-2 pt-2">
+                                        <span className="text-[10px] font-black uppercase text-muted-foreground tracking-wider">
+                                            Módulos Relacionados
+                                        </span>
+                                        <div className="grid grid-cols-1 gap-1.5">
+                                            <a 
+                                                href="/dashboard/operations/logistics/deliveries/route-sheets"
+                                                className="flex items-center justify-between p-2.5 bg-muted/20 hover:bg-muted/40 rounded-xl text-xs font-bold transition-all border border-transparent hover:border-muted/50"
+                                            >
+                                                <span className="flex items-center gap-2">📄 Hojas de Ruta</span>
+                                                <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" />
+                                            </a>
+                                            <a 
+                                                href="/dashboard/operations/logistics/deliveries/fleet"
+                                                className="flex items-center justify-between p-2.5 bg-muted/20 hover:bg-muted/40 rounded-xl text-xs font-bold transition-all border border-transparent hover:border-muted/50"
+                                            >
+                                                <span className="flex items-center gap-2">🚛 Flota & Choferes</span>
+                                                <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" />
+                                            </a>
+                                            <a 
+                                                href="/dashboard/operations/logistics/deliveries/routes"
+                                                className="flex items-center justify-between p-2.5 bg-muted/20 hover:bg-muted/40 rounded-xl text-xs font-bold transition-all border border-transparent hover:border-muted/50"
+                                            >
+                                                <span className="flex items-center gap-2">🗺️ Rutas Maestras</span>
+                                                <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" />
+                                            </a>
+                                        </div>
+                                    </div>
+                                </div>
+                            </SheetContent>
+                        </Sheet>
+                    </div>
+                </div>
+
+                {/* Segmentador táctil para móvil: Cola vs Rutas + Botón Nueva Ruta (abre modal) */}
+                <div className="grid grid-cols-12 gap-2">
+                    <div className="col-span-8 grid grid-cols-2 p-1 bg-muted/40 rounded-xl border border-muted/60">
+                        <Button
+                            type="button"
+                            variant={mobileTab === 'queue' ? 'default' : 'ghost'}
+                            size="sm"
+                            onClick={() => setMobileTab('queue')}
+                            className={`h-8 rounded-lg text-xs font-black transition-all ${
+                                mobileTab === 'queue' 
+                                    ? 'bg-blue-600 text-white shadow-sm' 
+                                    : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                        >
+                            📦 Cola ({filteredQueue.length})
+                        </Button>
+                        <Button
+                            type="button"
+                            variant={mobileTab === 'routes' ? 'default' : 'ghost'}
+                            size="sm"
+                            onClick={() => setMobileTab('routes')}
+                            className={`h-8 rounded-lg text-xs font-black transition-all ${
+                                mobileTab === 'routes' 
+                                    ? 'bg-indigo-600 text-white shadow-sm' 
+                                    : 'text-muted-foreground hover:text-foreground'
+                            }`}
+                        >
+                            🚚 Rutas ({assignments.length})
+                        </Button>
+                    </div>
+
+                    <div className="col-span-4">
+                        <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => setMobileRouteModalOpen(true)}
+                            className="w-full h-10 rounded-xl font-black text-xs gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+                        >
+                            <Plus className="w-3.5 h-3.5 shrink-0" />
+                            <span>Ruta</span>
+                        </Button>
+                    </div>
+                </div>
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* General Queue Left Column */}
-                <div className="lg:col-span-1 space-y-6">
-                    <Card className="border-none shadow-md bg-card flex flex-col h-[750px]">
-                        <CardHeader className="pb-4">
-                            <CardTitle className="text-lg flex items-center justify-between">
+                {/* General Queue Left Column (En móvil visible si mobileTab === 'queue', en Desktop siempre visible) */}
+                <div className={`lg:col-span-1 space-y-6 ${mobileTab === 'queue' ? 'block' : 'hidden lg:block'}`}>
+                    <Card className="border-none shadow-md bg-card flex flex-col h-[calc(100dvh-220px)] lg:h-[750px]">
+                        <CardHeader className="p-3 sm:p-4 pb-2 space-y-2.5">
+                            <CardTitle className="text-base sm:text-lg flex items-center justify-between">
                                 <span>Cola General de Pendientes</span>
                                 <Badge className="bg-muted text-muted-foreground border-none font-bold">
                                     {filteredQueue.length}
                                 </Badge>
                             </CardTitle>
-                            <CardDescription>
-                                Pedidos y facturas importadas del ERP que están a la espera de camión y chofer.
+                            <CardDescription className="text-[11px] sm:text-xs line-clamp-1">
+                                Pedidos y facturas importadas del ERP a la espera de camión.
                             </CardDescription>
 
                             {pendingCollectCount > 0 && !showOnlyCollect && (
                                 <div 
                                     onClick={() => setShowOnlyCollect(true)}
-                                    className="p-3 bg-purple-500/10 dark:bg-purple-950/20 border border-purple-500/20 rounded-xl flex items-center justify-between cursor-pointer hover:bg-purple-500/15 transition-all animate-pulse mt-2"
+                                    className="p-2.5 bg-purple-500/10 dark:bg-purple-950/20 border border-purple-500/20 rounded-xl flex items-center justify-between cursor-pointer hover:bg-purple-500/15 transition-all animate-pulse"
                                 >
                                     <div className="flex items-center gap-2">
                                         <div className="w-2.5 h-2.5 bg-purple-600 dark:bg-purple-400 rounded-full shrink-0" />
                                         <span className="text-[11px] font-black text-purple-700 dark:text-purple-300">
-                                            ¡Hay {pendingCollectCount} recolectas de proveedor pendientes!
+                                            ¡Hay {pendingCollectCount} recolectas pendientes!
                                         </span>
                                     </div>
                                     <ChevronRight className="w-4 h-4 text-purple-700 dark:text-purple-300 shrink-0" />
                                 </div>
                             )}
 
-                            <div className="relative pt-2">
-                                <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-5" />
+                            <div className="relative">
+                                <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-2.5" />
                                 <Input
                                     placeholder="Buscar documento o cliente..."
                                     value={searchQuery}
                                     onChange={(e) => setSearchQuery(e.target.value)}
-                                    className="pl-9 rounded-lg font-bold text-xs"
+                                    className="pl-9 h-9 rounded-xl font-bold text-xs"
                                 />
                             </div>
 
-                            <div className="flex items-center gap-2 pt-2 px-1">
-                                <Checkbox
-                                    id="omit-credit-notes"
-                                    checked={omitCreditNotes}
-                                    onCheckedChange={(checked) => setOmitCreditNotes(!!checked)}
-                                />
-                                <Label 
-                                    htmlFor="omit-credit-notes" 
-                                    className="text-[11px] font-extrabold text-muted-foreground cursor-pointer select-none leading-none"
+                            {/* Píldoras / Chips horizontales de filtros en móvil y escritorio */}
+                            <div className="flex items-center gap-1.5 overflow-x-auto pb-1 max-w-full [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant={omitCreditNotes ? "default" : "outline"}
+                                    onClick={() => setOmitCreditNotes(prev => !prev)}
+                                    className={`h-7 px-2.5 rounded-lg text-[10px] font-bold shrink-0 transition-all ${
+                                        omitCreditNotes 
+                                            ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                                            : 'bg-muted/30 text-muted-foreground hover:text-foreground'
+                                    }`}
                                 >
-                                    Omitir Notas de Crédito / Devoluciones (D)
-                                </Label>
-                            </div>
+                                    {omitCreditNotes ? '✓ Sin Devoluciones (D)' : 'Devoluciones: Sí'}
+                                </Button>
 
-                            <div className="flex items-center gap-2 pt-1.5 px-1">
-                                <Checkbox
-                                    id="show-only-collect"
-                                    checked={showOnlyCollect}
-                                    onCheckedChange={(checked) => {
-                                        setShowOnlyCollect(!!checked);
-                                        if (checked) setShowOnlyIncompleteWithBoleta(false);
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant={showOnlyCollect ? "default" : "outline"}
+                                    onClick={() => {
+                                        setShowOnlyCollect(prev => {
+                                            const next = !prev;
+                                            if (next) setShowOnlyIncompleteWithBoleta(false);
+                                            return next;
+                                        });
                                     }}
-                                    className="data-[state=checked]:bg-purple-600 data-[state=checked]:border-purple-600"
-                                />
-                                <Label 
-                                    htmlFor="show-only-collect" 
-                                    className="text-[11px] font-extrabold text-purple-700 dark:text-purple-400 cursor-pointer select-none leading-none"
+                                    className={`h-7 px-2.5 rounded-lg text-[10px] font-bold shrink-0 transition-all ${
+                                        showOnlyCollect 
+                                            ? 'bg-purple-600 hover:bg-purple-700 text-white' 
+                                            : 'bg-purple-500/5 text-purple-700 dark:text-purple-400 border-purple-200/50 hover:bg-purple-500/10'
+                                    }`}
                                 >
-                                    Mostrar Solo Recolectas de Proveedor
-                                </Label>
-                            </div>
+                                    📦 Solo Recolectas
+                                </Button>
 
-                            <div className="flex items-center gap-2 pt-1.5 px-1">
-                                <Checkbox
-                                    id="show-only-incomplete-boleta"
-                                    checked={showOnlyIncompleteWithBoleta}
-                                    onCheckedChange={(checked) => {
-                                        setShowOnlyIncompleteWithBoleta(!!checked);
-                                        if (checked) setShowOnlyCollect(false);
+                                <Button
+                                    type="button"
+                                    size="sm"
+                                    variant={showOnlyIncompleteWithBoleta ? "default" : "outline"}
+                                    onClick={() => {
+                                        setShowOnlyIncompleteWithBoleta(prev => {
+                                            const next = !prev;
+                                            if (next) setShowOnlyCollect(false);
+                                            return next;
+                                        });
                                     }}
-                                    className="data-[state=checked]:bg-amber-600 data-[state=checked]:border-amber-600"
-                                />
-                                <Label 
-                                    htmlFor="show-only-incomplete-boleta" 
-                                    className="text-[11px] font-extrabold text-amber-700 dark:text-amber-400 cursor-pointer select-none leading-none"
+                                    className={`h-7 px-2.5 rounded-lg text-[10px] font-bold shrink-0 transition-all ${
+                                        showOnlyIncompleteWithBoleta 
+                                            ? 'bg-amber-600 hover:bg-amber-700 text-white' 
+                                            : 'bg-amber-500/5 text-amber-700 dark:text-amber-400 border-amber-200/50 hover:bg-amber-500/10'
+                                    }`}
                                 >
-                                    Mostrar solo incompletos con boleta (Reentregas)
-                                </Label>
+                                    ↩️ Reentregas
+                                </Button>
                             </div>
 
-                            <div className="flex items-center justify-between pt-3 px-1 border-t border-muted/50 mt-1">
+                            {/* Fila Seleccionar Todos + Contador */}
+                            <div className="flex items-center justify-between pt-1.5 px-0.5 border-t border-muted/50">
                                 <div className="flex items-center gap-2">
                                     <Checkbox
                                         id="select-all-queue"
@@ -1349,11 +1676,11 @@ export default function OperationDispatchPage() {
                                         htmlFor="select-all-queue" 
                                         className="text-[11px] font-black text-foreground cursor-pointer select-none leading-none flex items-center gap-1"
                                     >
-                                        Seleccionar Todos Visibles ({displayedQueue.filter(d => d.tipo_documento_erp !== 'D').length})
+                                        Seleccionar Todos ({displayedQueue.filter(d => d.tipo_documento_erp !== 'D').length})
                                     </Label>
                                 </div>
                                 {selectedDocIds.length > 0 && (
-                                    <span className="text-[10px] font-black text-blue-600 bg-blue-500/5 px-2 py-0.5 rounded-full border border-blue-500/10">
+                                    <span className="text-[10px] font-black text-blue-600 bg-blue-500/10 px-2 py-0.5 rounded-full">
                                         {selectedDocIds.length} selec.
                                     </span>
                                 )}
@@ -1361,8 +1688,8 @@ export default function OperationDispatchPage() {
 
                         </CardHeader>
 
-                        {/* Queue Documents list */}
-                        <CardContent className="flex-1 overflow-y-auto space-y-2.5 pb-4">
+                        {/* Queue Documents list (con padding inferior responsivo para no ser tapado por la barra flotante) */}
+                        <CardContent className="flex-1 overflow-y-auto space-y-2 p-3 sm:p-4 pb-28 lg:pb-4">
                             {filteredQueue.length > visibleCount && (
                                 <div className="p-3 bg-amber-500/10 text-amber-600 rounded-xl text-center text-[10px] font-black border border-amber-500/20 leading-snug mb-1">
                                     ⚠️ Mostrando primeros {visibleCount} de {filteredQueue.length} documentos. Utilice la barra de búsqueda o el botón &quot;Mostrar más&quot; al final.
@@ -1588,10 +1915,10 @@ export default function OperationDispatchPage() {
                     </Card>
                 </div>
 
-                {/* Assignments & Dispatch Right Column */}
-                <div className="lg:col-span-2 space-y-6">
-                    {/* Create Assignment Form */}
-                    <Card className="border-none shadow-md bg-card">
+                {/* Assignments & Dispatch Right Column (En móvil visible si mobileTab === 'routes', en Desktop siempre visible) */}
+                <div className={`lg:col-span-2 space-y-6 ${mobileTab === 'routes' ? 'block' : 'hidden lg:block'}`}>
+                    {/* Create Assignment Form (Visible intacto en Desktop, en móvil se abre por modal emergente) */}
+                    <Card className="hidden lg:block border-none shadow-md bg-card">
                         <CardHeader className="pb-3">
                             <CardTitle className="text-lg flex items-center gap-2">
                                 <Plus className="w-5 h-5 text-blue-600" />
@@ -2051,6 +2378,162 @@ export default function OperationDispatchPage() {
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
+
+            {/* MOBILE ONLY: Modal Emergente (Dialog) de Nueva Asignación Diaria */}
+            <Dialog open={mobileRouteModalOpen} onOpenChange={setMobileRouteModalOpen}>
+                <DialogContent className="sm:max-w-md rounded-2xl border bg-background">
+                    <DialogHeader>
+                        <DialogTitle className="text-base font-black flex items-center gap-2">
+                            <Plus className="w-5 h-5 text-emerald-600" />
+                            Nueva Asignación Diaria
+                        </DialogTitle>
+                        <DialogDescription className="text-xs">
+                            Asocie una ruta a un chofer de Telegram y vehículo para operar hoy.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <form 
+                        onSubmit={async (e) => {
+                            await handleCreateAssignment(e);
+                            setMobileRouteModalOpen(false);
+                            setMobileTab('routes');
+                        }} 
+                        className="space-y-4 py-2"
+                    >
+                        <div className="space-y-1.5">
+                            <Label className="text-xs font-bold text-muted-foreground">Ruta Logística</Label>
+                            <Select value={selectedRoute} onValueChange={setSelectedRoute}>
+                                <SelectTrigger className="rounded-xl font-bold text-xs h-10">
+                                    <SelectValue placeholder="Seleccione ruta" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {routes.map(r => (
+                                        <SelectItem key={r.id} value={String(r.id)}>{r.name}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <Label className="text-xs font-bold text-muted-foreground">Chofer (Telegram)</Label>
+                            <Select value={selectedDriver} onValueChange={setSelectedDriver}>
+                                <SelectTrigger className="rounded-xl font-bold text-xs h-10">
+                                    <SelectValue placeholder="Seleccione chofer" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {drivers.map(d => (
+                                        <SelectItem key={d.id} value={String(d.id)}>{d.name}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <Label className="text-xs font-bold text-muted-foreground">Vehículo (Placa)</Label>
+                            <Select value={selectedVehicle} onValueChange={setSelectedVehicle}>
+                                <SelectTrigger className="rounded-xl font-bold text-xs h-10">
+                                    <SelectValue placeholder="Seleccione vehículo" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {vehicles.map(v => (
+                                        <SelectItem key={v.id} value={String(v.id)}>
+                                            {v.plate} ({v.brand} {v.model})
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+
+                        <DialogFooter className="flex gap-2 pt-2">
+                            <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => setMobileRouteModalOpen(false)}
+                                className="rounded-xl font-bold text-xs flex-1"
+                            >
+                                Cancelar
+                            </Button>
+                            <Button 
+                                type="submit" 
+                                disabled={creatingAssignment}
+                                className="rounded-xl font-black text-xs gap-1.5 flex-1 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+                            >
+                                <Plus className="w-4 h-4" />
+                                {creatingAssignment ? 'Creando...' : 'Crear Asignación'}
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                </DialogContent>
+            </Dialog>
+
+            {/* MOBILE ONLY: Sticky Floating Action Bar al seleccionar pedidos en la cola */}
+            {selectedDocIds.length > 0 && mobileTab === 'queue' && (
+                <div className="fixed bottom-0 inset-x-0 p-3 pb-5 bg-background/95 dark:bg-background/95 backdrop-blur-md border-t border-border z-40 lg:hidden shadow-2xl animate-in slide-in-from-bottom-5 duration-200">
+                    <div className="max-w-md mx-auto space-y-2">
+                        <div className="flex items-center justify-between">
+                            <span className="text-xs font-black text-blue-600 dark:text-blue-400">
+                                ⚡ {selectedDocIds.length} pedidos seleccionados
+                            </span>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setSelectedDocIds([])}
+                                className="h-6 px-2 text-[10px] font-bold text-muted-foreground hover:text-foreground"
+                            >
+                                Desmarcar todos
+                            </Button>
+                        </div>
+
+                        <div className="flex gap-2">
+                            <Select 
+                                value={destinationAssignment} 
+                                onValueChange={setDestinationAssignment}
+                            >
+                                <SelectTrigger className="rounded-xl font-bold text-xs h-9 flex-1 bg-card">
+                                    <SelectValue placeholder="Asignar a ruta..." />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {assignments.length === 0 ? (
+                                        <SelectItem disabled value="none">Sin rutas activas hoy</SelectItem>
+                                    ) : (
+                                        assignments.map((ass) => (
+                                            <SelectItem key={ass.id} value={String(ass.id)}>
+                                                {ass.ruta_nombre} - {ass.vehiculo_placa}
+                                            </SelectItem>
+                                        ))
+                                    )}
+                                </SelectContent>
+                            </Select>
+
+                            <Button
+                                onClick={handleAssignSelected}
+                                disabled={!destinationAssignment}
+                                className="h-9 rounded-xl font-black text-xs px-3.5 bg-blue-600 hover:bg-blue-700 text-white shadow shrink-0"
+                            >
+                                Asignar
+                            </Button>
+
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                disabled={processingBatchDeliver}
+                                onClick={handleBatchMarkAsDelivered}
+                                title="Marcar como Entregados (Historial)"
+                                className="h-9 px-2.5 rounded-xl font-extrabold text-[10px] gap-1 border-green-200 bg-green-500/10 hover:bg-green-500/20 text-green-700 dark:text-green-400 shrink-0"
+                            >
+                                {processingBatchDeliver ? (
+                                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                    <>
+                                        <CheckSquare className="w-3.5 h-3.5" />
+                                        <span>Entregados</span>
+                                    </>
+                                )}
+                            </Button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

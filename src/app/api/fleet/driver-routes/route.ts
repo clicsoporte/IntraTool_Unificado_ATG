@@ -117,12 +117,19 @@ export async function GET(req: NextRequest) {
         q.firma_cliente,
         q.latitud,
         q.longitud,
-        q.creado_por
+        q.creado_por,
+        COALESCE(c.es_prioritario, 0) as es_prioritario,
+        COALESCE(c.requiere_cita, 0) as requiere_cita,
+        COALESCE(c.aplica_multa, 0) as aplica_multa,
+        c.hora_apertura,
+        c.hora_cierre,
+        c.notas_recepcion
       FROM ops_delivery_queue q
       JOIN ops_delivery_assignments a ON q.asignacion_id = a.id
       LEFT JOIN core_users u ON a.empleado_id = u.id
       LEFT JOIN fleet_vehicles v ON a.vehiculo_id = v.id
       LEFT JOIN ops_delivery_routes r ON a.ruta_id = r.id
+      LEFT JOIN core_customers c ON q.cliente_id = c.id
       WHERE q.asignacion_id = ?
       ORDER BY q.id ASC
     `).all(assignment.id);
@@ -272,15 +279,22 @@ export async function GET(req: NextRequest) {
       doc.it_emergency_phones = itPhonesSetting;
     }
 
-    return NextResponse.json({
+    const responseObj = NextResponse.json({
       success: true,
       hasActiveAssignment: true,
       assignment,
       date: today,
       count: docs.length,
       totalLinesCount,
-      deliveries: docs
+      deliveries: docs,
+      renewedToken: authResult.renewedToken || null
     });
+
+    if (authResult.renewedToken) {
+      responseObj.headers.set('X-Renewed-Token', authResult.renewedToken);
+    }
+
+    return responseObj;
   } catch (error: any) {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }

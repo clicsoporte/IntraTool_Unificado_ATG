@@ -5,6 +5,7 @@ import '../config.dart';
 import 'api_service.dart';
 import 'offline_db_service.dart';
 import 'app_logger.dart';
+import 'background_sync_service.dart';
 import 'device_hardware_service.dart';
 import 'device_security_service.dart';
 import 'emergency_alert_service.dart';
@@ -78,6 +79,10 @@ class SyncEngine {
       );
     }
     _isSyncing = true;
+    
+    // 🌐 [Guardián de Conectividad] Garantizar encendido automático de Datos Móviles y Wi-Fi
+    DeviceSecurityService.ensureConnectivityAlwaysOn().catchError((_) => false);
+
     final db = OfflineDbService();
     
     // Obtener URLs de alta disponibilidad guardadas en SQLite
@@ -237,7 +242,7 @@ class SyncEngine {
         }
       } catch (_) {}
 
-      // 3. Configuración remota del sistema (recibe) -> alimenta el intervalo
+      // 3. Configuración remota del sistema (recibe) -> alimenta el intervalo y parámetros globales
       try {
         final sys = await api.fetchSystemConfig();
         final config = sys['config'];
@@ -245,7 +250,17 @@ class SyncEngine {
           final cfgMap = config.map((k, v) => MapEntry(k.toString(), v.toString()));
           await db.saveSystemConfig(cfgMap);
           final server = int.tryParse(cfgMap['apk_background_sync_minutes'] ?? '');
-          if (server != null && server >= minIntervalMinutes) intervalMinutes = server;
+          if (server != null && server >= minIntervalMinutes) {
+            intervalMinutes = server;
+            updateBackgroundSyncInterval(server).catchError((_) {});
+          }
+          if (cfgMap['server_url_primary']?.isNotEmpty == true) {
+            await db.saveServerUrlsConfig(
+              primary: cfgMap['server_url_primary']!,
+              fallback: cfgMap['server_url_fallback'] ?? '',
+              active: effectiveServerUrl,
+            );
+          }
         }
       } catch (_) {}
 

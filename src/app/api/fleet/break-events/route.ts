@@ -2,6 +2,35 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/modules/core/lib/db';
 import { authenticateFleetRequest } from '@/modules/fleet/lib/fleet-auth-guard';
 
+let hasEnsuredBreakEventsTable = false;
+
+function ensureBreakEventsTable(db: any) {
+  if (hasEnsuredBreakEventsTable) return;
+  db.prepare(`
+    CREATE TABLE IF NOT EXISTS ops_driver_break_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      driver_name TEXT NOT NULL,
+      driver_user_id INTEGER,
+      hardware_id TEXT,
+      break_type TEXT NOT NULL,
+      start_time TEXT NOT NULL,
+      end_time TEXT,
+      duration_minutes INTEGER DEFAULT 0,
+      allowed_minutes INTEGER DEFAULT 45,
+      overdue_minutes INTEGER DEFAULT 0,
+      lat_start REAL,
+      lng_start REAL,
+      lat_end REAL,
+      lng_end REAL,
+      status TEXT NOT NULL DEFAULT 'completed',
+      fraud_flag INTEGER DEFAULT 0,
+      notes TEXT,
+      created_at TEXT NOT NULL
+    )
+  `).run();
+  hasEnsuredBreakEventsTable = true;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const authResult = await authenticateFleetRequest(req);
@@ -10,32 +39,10 @@ export async function GET(req: NextRequest) {
     }
 
     const db = await getDb();
+    ensureBreakEventsTable(db);
     const { searchParams } = new URL(req.url);
     const date = searchParams.get('date');
     const driverName = searchParams.get('driverName');
-
-    db.prepare(`
-      CREATE TABLE IF NOT EXISTS ops_driver_break_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        driver_name TEXT NOT NULL,
-        driver_user_id INTEGER,
-        hardware_id TEXT,
-        break_type TEXT NOT NULL,
-        start_time TEXT NOT NULL,
-        end_time TEXT,
-        duration_minutes INTEGER DEFAULT 0,
-        allowed_minutes INTEGER DEFAULT 45,
-        overdue_minutes INTEGER DEFAULT 0,
-        lat_start REAL,
-        lng_start REAL,
-        lat_end REAL,
-        lng_end REAL,
-        status TEXT NOT NULL DEFAULT 'completed',
-        fraud_flag INTEGER DEFAULT 0,
-        notes TEXT,
-        created_at TEXT NOT NULL
-      )
-    `).run();
 
     let query = `SELECT * FROM ops_driver_break_events WHERE 1=1`;
     const params: any[] = [];
@@ -68,6 +75,7 @@ export async function POST(req: NextRequest) {
     }
 
     const db = await getDb();
+    ensureBreakEventsTable(db);
     const body = await req.json();
     const {
       action,
@@ -81,29 +89,6 @@ export async function POST(req: NextRequest) {
       lng,
       notes
     } = body;
-
-    db.prepare(`
-      CREATE TABLE IF NOT EXISTS ops_driver_break_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        driver_name TEXT NOT NULL,
-        driver_user_id INTEGER,
-        hardware_id TEXT,
-        break_type TEXT NOT NULL,
-        start_time TEXT NOT NULL,
-        end_time TEXT,
-        duration_minutes INTEGER DEFAULT 0,
-        allowed_minutes INTEGER DEFAULT 45,
-        overdue_minutes INTEGER DEFAULT 0,
-        lat_start REAL,
-        lng_start REAL,
-        lat_end REAL,
-        lng_end REAL,
-        status TEXT NOT NULL DEFAULT 'completed',
-        fraud_flag INTEGER DEFAULT 0,
-        notes TEXT,
-        created_at TEXT NOT NULL
-      )
-    `).run();
 
     const now = new Date().toISOString();
 
@@ -147,8 +132,9 @@ export async function POST(req: NextRequest) {
 
         try {
           const deliveriesMade = db.prepare(`
-            SELECT COUNT(*) as count FROM ops_deliveries
-            WHERE chofer_nombre = ? AND updated_at BETWEEN ? AND ?
+            SELECT COUNT(*) as count FROM ops_delivery_queue
+            WHERE gestionado_por = ? AND fecha_entrega BETWEEN ? AND ?
+              AND estado IN ('completo', 'incompleto', 'rechazado')
           `).get(existing.driver_name, existing.start_time, now) as any;
 
           if (deliveriesMade && deliveriesMade.count > 0) {

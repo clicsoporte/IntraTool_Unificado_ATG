@@ -115,7 +115,7 @@ class MainActivity : FlutterFragmentActivity() {
                             val scale = intent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
                             val status = intent?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ?: -1
                             isCharging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING || status == android.os.BatteryManager.BATTERY_STATUS_FULL
-                            batteryPct = if (level != -1 && scale > 0) (level * 100 / scale.toFloat()).toInt() else 100
+                            batteryPct = if (level != -1 && scale > 0) (level * 100 / scale.toFloat()).toInt() else -1
                         }
                         val tempRaw = intent?.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, -1) ?: -1
                         if (tempRaw > 0) {
@@ -546,32 +546,7 @@ class MainActivity : FlutterFragmentActivity() {
                         result.success(null)
                     }
                 }
-                "startLockTask" -> {
-                    try {
-                        val packagesArg = call.argument<List<String>>("packages")
-                        if (dpm.isDeviceOwnerApp(packageName)) {
-                            val packageList = mutableListOf(packageName)
-                            if (packagesArg != null) {
-                                packageList.addAll(packagesArg)
-                            }
-                            dpm.setLockTaskPackages(adminComponent, packageList.toTypedArray())
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                                dpm.setLockTaskFeatures(
-                                    adminComponent,
-                                    DevicePolicyManager.LOCK_TASK_FEATURE_SYSTEM_INFO or
-                                    DevicePolicyManager.LOCK_TASK_FEATURE_NOTIFICATIONS or
-                                    DevicePolicyManager.LOCK_TASK_FEATURE_HOME
-                                )
-                            }
-                            startLockTask()
-                            result.success(true)
-                        } else {
-                            result.error("NOT_DEVICE_OWNER", "Se requieren privilegios de Device Owner", null)
-                        }
-                    } catch (e: Exception) {
-                        result.error("LOCK_TASK_ERROR", e.message, null)
-                    }
-                }
+
                 "stopLockTask" -> {
                     try {
                         stopLockTask()
@@ -622,6 +597,10 @@ class MainActivity : FlutterFragmentActivity() {
                                 dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS)
                                 dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_DATA_ROAMING)
                             }
+
+                            // Forzar encendido nativo de Datos Móviles y Wi-Fi (Always ON)
+                            try { dpm.setGlobalSetting(adminComponent, "mobile_data", "1") } catch (_: Exception) {}
+                            try { dpm.setGlobalSetting(adminComponent, "wifi_on", "1") } catch (_: Exception) {}
 
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                 dpm.setUninstallBlocked(adminComponent, packageName, blockUninstall)
@@ -882,6 +861,24 @@ class MainActivity : FlutterFragmentActivity() {
                             }
                         } catch (_: Exception) {}
 
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
+                }
+                "ensureConnectivityAlwaysOn" -> {
+                    try {
+                        if (dpm.isDeviceOwnerApp(packageName)) {
+                            try { dpm.setGlobalSetting(adminComponent, "mobile_data", "1") } catch (_: Exception) {}
+                            try { dpm.setGlobalSetting(adminComponent, "wifi_on", "1") } catch (_: Exception) {}
+                        }
+                        try {
+                            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+                            if (wifiManager != null && !wifiManager.isWifiEnabled) {
+                                @Suppress("DEPRECATION")
+                                wifiManager.isWifiEnabled = true
+                            }
+                        } catch (_: Exception) {}
                         result.success(true)
                     } catch (e: Exception) {
                         result.success(false)

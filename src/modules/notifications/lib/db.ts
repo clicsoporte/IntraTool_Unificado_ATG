@@ -1133,6 +1133,14 @@ export async function initializeNotificationDefaults(db: any) {
             VALUES ('Resumen de Alertas de Flota', '0 8 * * 1', 'fleet-alerts-summary', 1)
         `).run();
     }
+
+    const existsQueue = db.prepare(`SELECT 1 FROM ${CORE_TABLE_NAMES.notificationScheduledTasks} WHERE taskId = ?`).get('deliveries-auto-queue');
+    if (!existsQueue) {
+        db.prepare(`
+            INSERT INTO ${CORE_TABLE_NAMES.notificationScheduledTasks} (name, schedule, taskId, enabled)
+            VALUES ('Auto-Carga Cola General de Entregas', '*/15 * * * *', 'deliveries-auto-queue', 1)
+        `).run();
+    }
 }
 
 

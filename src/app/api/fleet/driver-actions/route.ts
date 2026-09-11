@@ -143,13 +143,31 @@ export async function POST(req: NextRequest) {
           WHERE (
             UPPER(q.documento_numero) = ? 
             OR (q.boleta_numero IS NOT NULL AND UPPER(q.boleta_numero) = ?)
-            OR (1 = ? AND (UPPER(q.documento_numero) LIKE ? OR (q.boleta_numero IS NOT NULL AND UPPER(q.boleta_numero) LIKE ?)))
+            OR (q.referencia_doc IS NOT NULL AND UPPER(q.referencia_doc) = ?)
+            OR (1 = ? AND (UPPER(q.documento_numero) LIKE ? OR (q.boleta_numero IS NOT NULL AND UPPER(q.boleta_numero) LIKE ?) OR (q.referencia_doc IS NOT NULL AND UPPER(q.referencia_doc) LIKE ?)))
           ) AND (q.entregado = 1 OR q.estado = 'completo')
           ORDER BY q.id DESC LIMIT 1
-        `).get(token, token, usePartialLike ? 1 : 0, likePattern, likePattern) as any;
+        `).get(token, token, token, usePartialLike ? 1 : 0, likePattern, likePattern, likePattern) as any;
 
         if (alreadyDelivered) {
           skippedDelivered.push(alreadyDelivered.boleta_numero || alreadyDelivered.documento_numero);
+          continue;
+        }
+
+        // 0.1 Pre-verificación: Si está pendiente de autorización por jefatura
+        const pendingAuthDoc = db.prepare(`
+          SELECT q.documento_numero, q.boleta_numero
+          FROM ops_delivery_queue q
+          WHERE (
+            UPPER(q.documento_numero) = ?
+            OR (q.boleta_numero IS NOT NULL AND UPPER(q.boleta_numero) = ?)
+            OR (q.referencia_doc IS NOT NULL AND UPPER(q.referencia_doc) = ?)
+          ) AND q.estado = 'pendiente_autorizacion'
+          LIMIT 1
+        `).get(token, token, token) as any;
+
+        if (pendingAuthDoc) {
+          skippedOtherRoute.push(`${pendingAuthDoc.boleta_numero || pendingAuthDoc.documento_numero} (Pendiente de Aprobación por Jefatura)`);
           continue;
         }
 
@@ -161,15 +179,17 @@ export async function POST(req: NextRequest) {
           WHERE (
             UPPER(q.documento_numero) = ? 
             OR (q.boleta_numero IS NOT NULL AND UPPER(q.boleta_numero) = ?)
-            OR (1 = ? AND (UPPER(q.documento_numero) LIKE ? OR (q.boleta_numero IS NOT NULL AND UPPER(q.boleta_numero) LIKE ?)))
-          ) AND q.entregado = 0
+            OR (q.referencia_doc IS NOT NULL AND UPPER(q.referencia_doc) = ?)
+            OR (1 = ? AND (UPPER(q.documento_numero) LIKE ? OR (q.boleta_numero IS NOT NULL AND UPPER(q.boleta_numero) LIKE ?) OR (q.referencia_doc IS NOT NULL AND UPPER(q.referencia_doc) LIKE ?)))
+          ) AND q.entregado = 0 AND q.estado NOT IN ('pendiente_autorizacion', 'aprobado_fuera_de_ruta', 'anulado')
           ORDER BY CASE 
             WHEN UPPER(COALESCE(q.boleta_numero, '')) = ? THEN 1
             WHEN UPPER(q.documento_numero) = ? THEN 2
-            ELSE 3 
+            WHEN UPPER(COALESCE(q.referencia_doc, '')) = ? THEN 3
+            ELSE 4 
           END, q.id DESC
           LIMIT 1
-        `).get(token, token, usePartialLike ? 1 : 0, likePattern, likePattern, token, token) as any;
+        `).get(token, token, token, usePartialLike ? 1 : 0, likePattern, likePattern, likePattern, token, token, token) as any;
 
         if (!queueDoc && usePartialLike) {
           queueDoc = db.prepare(`
@@ -177,10 +197,14 @@ export async function POST(req: NextRequest) {
             FROM ops_delivery_queue q
             LEFT JOIN ops_delivery_assignments a ON q.asignacion_id = a.id AND a.activa = 1
             LEFT JOIN core_users u ON a.empleado_id = u.id
-            WHERE (UPPER(q.documento_numero) LIKE ? OR (q.boleta_numero IS NOT NULL AND UPPER(q.boleta_numero) LIKE ?)) AND q.entregado = 0
+            WHERE (
+              UPPER(q.documento_numero) LIKE ? 
+              OR (q.boleta_numero IS NOT NULL AND UPPER(q.boleta_numero) LIKE ?)
+              OR (q.referencia_doc IS NOT NULL AND UPPER(q.referencia_doc) LIKE ?)
+            ) AND q.entregado = 0 AND q.estado NOT IN ('pendiente_autorizacion', 'aprobado_fuera_de_ruta', 'anulado')
             ORDER BY q.id DESC
             LIMIT 1
-          `).get(`%${token}%`, `%${token}%`) as any;
+          `).get(`%${token}%`, `%${token}%`, `%${token}%`) as any;
         }
 
         if (queueDoc) {

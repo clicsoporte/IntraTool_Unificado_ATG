@@ -45,9 +45,9 @@ export function formatFechaEntrega(fechaStr?: string): string {
 }
 
 export function calculateAssignmentDurations(ass: any, docsForAss: any[]) {
-    const start = ass.fecha_creacion ? new Date(ass.fecha_creacion).getTime() : null;
+    const start = (ass.fecha_salida || ass.fecha_creacion) ? new Date(ass.fecha_salida || ass.fecha_creacion).getTime() : null;
     const returnStart = ass.fecha_inicio_retorno ? new Date(ass.fecha_inicio_retorno).getTime() : null;
-    const completed = ass.fecha_completada ? new Date(ass.fecha_completada).getTime() : null;
+    const completed = (ass.fecha_llegada_bodega || ass.fecha_completada) ? new Date(ass.fecha_llegada_bodega || ass.fecha_completada).getTime() : null;
     
     const now = new Date().getTime();
 

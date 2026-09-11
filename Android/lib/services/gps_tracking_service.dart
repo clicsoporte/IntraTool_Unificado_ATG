@@ -43,10 +43,10 @@ class GpsTrackingService {
   static Future<void> _sendCurrentLocationFix() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      String? userId = prefs.getString('user_id');
-      if (userId == null) {
-        final rawUser = prefs.get('user_id');
-        if (rawUser != null) userId = rawUser.toString();
+      String? userId;
+      final rawUser = prefs.get('user_id');
+      if (rawUser != null) {
+        userId = rawUser.toString();
       }
       String? vehiclePlate = prefs.getString('vehicle_plate') ?? prefs.getString('current_vehicle_plate');
       

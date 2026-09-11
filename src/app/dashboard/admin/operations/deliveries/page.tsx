@@ -23,7 +23,8 @@ import {
     Clock, 
     SlidersHorizontal,
     RefreshCw,
-    Trash2
+    Trash2,
+    MapPin
 } from 'lucide-react';
 import { 
     getDeliverySettings, 
@@ -168,6 +169,7 @@ export default function AdminOperationsPage() {
         apk_require_evidence_photo: 'disabled',
         apk_require_invoice_photo: 'disabled',
         apk_require_signature: 'false',
+        apk_require_incident_notes: 'false',
         apk_print_show_client: 'true',
         apk_print_show_lines: 'true',
         apk_print_footer_text: '¡Gracias por preferirnos!\nEl articulo viaja por cuenta y riesgo del cliente.',
@@ -843,22 +845,70 @@ export default function AdminOperationsPage() {
                                         </span>
                                     </div>
 
-                                    <div className="space-y-2">
-                                        <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
-                                            <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-600" />
-                                            Radio Parqueo Sede (Metros)
-                                        </Label>
-                                        <Input
-                                            type="number"
-                                            min="50"
-                                            max="2000"
-                                            value={settings.parqueo_radio_metros || '500'}
-                                            onChange={(e) => setSettings(prev => ({ ...prev, parqueo_radio_metros: e.target.value }))}
-                                            className="rounded-lg font-bold"
-                                        />
-                                        <span className="text-[10px] text-muted-foreground block">
-                                            Radio de geocerca del patio/sede central (m) para detectar entrada y salida.
-                                        </span>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div className="space-y-2">
+                                            <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                                                <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                                                Latitud Parqueo / Sede Empresa
+                                            </Label>
+                                            <Input
+                                                type="text"
+                                                placeholder="Ej: 10.025541"
+                                                value={settings.parqueo_latitud || '10.025541'}
+                                                onChange={(e) => setSettings(prev => ({ ...prev, parqueo_latitud: e.target.value }))}
+                                                className="rounded-lg font-mono font-bold"
+                                            />
+                                            <span className="text-[10px] text-muted-foreground block">
+                                                Coordenada de Latitud decimal del predio/empresa.
+                                            </span>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                                                <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                                                Longitud Parqueo / Sede Empresa
+                                            </Label>
+                                            <Input
+                                                type="text"
+                                                placeholder="Ej: -84.273252"
+                                                value={settings.parqueo_longitud || '-84.273252'}
+                                                onChange={(e) => setSettings(prev => ({ ...prev, parqueo_longitud: e.target.value }))}
+                                                className="rounded-lg font-mono font-bold"
+                                            />
+                                            <span className="text-[10px] text-muted-foreground block">
+                                                Coordenada de Longitud decimal del predio/empresa.
+                                            </span>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <div className="flex items-center justify-between">
+                                                <Label className="text-xs font-bold text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                                                    <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-600" />
+                                                    Radio Parqueo Sede (Metros)
+                                                </Label>
+                                                {settings.parqueo_latitud && settings.parqueo_longitud && (
+                                                    <a
+                                                        href={`https://www.google.com/maps/search/?api=1&query=${settings.parqueo_latitud},${settings.parqueo_longitud}`}
+                                                        target="_blank"
+                                                        rel="noreferrer"
+                                                        className="text-[10px] text-indigo-600 hover:underline font-bold flex items-center gap-0.5"
+                                                    >
+                                                        🗺️ Ver Mapa
+                                                    </a>
+                                                )}
+                                            </div>
+                                            <Input
+                                                type="number"
+                                                min="50"
+                                                max="2000"
+                                                value={settings.parqueo_radio_metros || '500'}
+                                                onChange={(e) => setSettings(prev => ({ ...prev, parqueo_radio_metros: e.target.value }))}
+                                                className="rounded-lg font-bold"
+                                            />
+                                            <span className="text-[10px] text-muted-foreground block">
+                                                Radio de geocerca del patio/sede central (m) para detectar entrada y salida.
+                                            </span>
+                                        </div>
                                     </div>
 
                                     {/* Auto-inicio de ruta por salida de patio */}
@@ -1517,6 +1567,66 @@ export default function AdminOperationsPage() {
                                     </div>
                                 </div>
 
+                                {/* Supervisión de Entregas vía Telegram (Múltiples Chat IDs) */}
+                                <div className="space-y-4 pt-4 border-t border-muted/40">
+                                    <div className="flex items-center gap-2">
+                                        <Send className="w-4 h-4 text-sky-500" />
+                                        <span className="text-sm font-bold text-sky-600 dark:text-sky-400">Avisos a Supervisores vía Telegram (Múltiples Destinatarios)</span>
+                                        <Badge variant="outline" className="text-[9px] font-extrabold bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300">
+                                            Canal de Supervisión
+                                        </Badge>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground font-medium">
+                                        Permite enviar una copia en tiempo real de los reportes de entrega directamente a los supervisores o grupos de Telegram (choferes finalizando entregas desde APK o Telegram).
+                                    </p>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 p-4 bg-sky-500/5 dark:bg-sky-950/10 border border-sky-500/15 rounded-xl">
+                                        <div className="md:col-span-2 space-y-2">
+                                            <Label className="text-xs font-bold flex items-center justify-between text-muted-foreground uppercase tracking-wider">
+                                                <span>Telegram Chat IDs de Supervisores / Grupos</span>
+                                                <span className="text-[10px] text-sky-600 font-extrabold normal-case">Admite varios separados por coma o salto de línea</span>
+                                            </Label>
+                                            <Textarea
+                                                rows={2}
+                                                value={settings.supervisor_telegram_chat_ids || ''}
+                                                onChange={(e) => setSettings(prev => ({ ...prev, supervisor_telegram_chat_ids: e.target.value }))}
+                                                className="rounded-lg font-mono text-xs focus-visible:ring-sky-500 bg-background"
+                                                placeholder="-1002345678901, 987654321, 123456789"
+                                            />
+                                            <span className="text-[10px] text-muted-foreground block font-medium">
+                                                Para grupos o canales use el ID que inicia en <code>-100...</code> o IDs personales de supervisores.
+                                            </span>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <Label className="text-xs font-bold flex items-center gap-1.5 text-muted-foreground uppercase tracking-wider">
+                                                Filtro de Eventos a Notificar
+                                            </Label>
+                                            <Select
+                                                value={settings.supervisor_telegram_filter || 'all'}
+                                                onValueChange={(val) => setSettings(prev => ({ ...prev, supervisor_telegram_filter: val }))}
+                                            >
+                                                <SelectTrigger className="rounded-lg font-bold bg-background border-muted text-xs h-9">
+                                                    <SelectValue placeholder="Seleccione eventos" />
+                                                </SelectTrigger>
+                                                <SelectContent className="rounded-xl shadow-lg border-muted">
+                                                    <SelectItem value="all" className="text-xs font-bold text-emerald-600">
+                                                        ✅ Todas las entregas (Completas, Incidencias y Rechazos)
+                                                    </SelectItem>
+                                                    <SelectItem value="incidents_only" className="text-xs font-bold text-amber-600">
+                                                        ⚠️ Solo Incidencias (Incompletas y Rechazadas)
+                                                    </SelectItem>
+                                                    <SelectItem value="rejected_only" className="text-xs font-bold text-rose-600">
+                                                        ❌ Solo Entregas Rechazadas
+                                                    </SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                            <span className="text-[10px] text-muted-foreground block font-medium">
+                                                Filtre la intensidad de mensajes que reciben los supervisores en Telegram.
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+
                                 {/* Consecutivos de Recolecta */}
                                 <div className="space-y-4 pt-4 border-t border-muted/40">
                                     <div className="flex items-center gap-2">
@@ -2041,6 +2151,25 @@ export default function AdminOperationsPage() {
                                     <Switch
                                         checked={settings.apk_require_invoice_photo === 'mandatory'}
                                         onCheckedChange={(val) => setSettings(prev => ({ ...prev, apk_require_invoice_photo: val ? 'mandatory' : 'disabled' }))}
+                                    />
+                                </div>
+
+                                {/* Incident Notes Settings */}
+                                <div className="flex flex-row items-center justify-between p-4 bg-muted/20 rounded-xl border border-muted/40 gap-3">
+                                    <div className="space-y-1">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            <Label className="text-sm font-bold flex items-center gap-1.5">
+                                                Motivo Obligatorio en Rechazo / Parcial
+                                            </Label>
+                                            <PlatformBadge type="apk" />
+                                        </div>
+                                        <span className="text-xs text-muted-foreground font-medium block">
+                                            Obligar al chofer a escribir el motivo en Notas si la entrega es Parcial o Rechazada.
+                                        </span>
+                                    </div>
+                                    <Switch
+                                        checked={settings.apk_require_incident_notes === 'true' || settings.apk_require_incident_notes === 'mandatory'}
+                                        onCheckedChange={(val) => setSettings(prev => ({ ...prev, apk_require_incident_notes: val ? 'true' : 'false' }))}
                                     />
                                 </div>
 

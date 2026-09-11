@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import '../models/delivery_doc.dart';
 import 'app_logger.dart';
@@ -29,11 +30,27 @@ class ApiService {
 
   static String? get authToken => _authToken;
 
+  static Future<void> _processRenewedToken(http.Response res, [Map<String, dynamic>? data]) async {
+    try {
+      String? newToken = res.headers['x-renewed-token'] ?? res.headers['X-Renewed-Token'];
+      if (newToken == null && data != null && data['renewedToken'] != null) {
+        newToken = data['renewedToken']?.toString();
+      }
+      if (newToken != null && newToken.isNotEmpty && newToken != _authToken) {
+        setAuthToken(newToken);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('auth_token', newToken);
+        AppLogger.log('🔑 [Auto-Renovación Silenciosa de Sesión] Token renovado por 30 días adicionales', level: 'SUCCESS');
+      }
+    } catch (_) {}
+  }
+
   String get baseUrl => cleanUrl(rawBaseUrl);
 
   static Map<String, String> get defaultHeaders {
     final headers = <String, String>{
       'Content-Type': 'application/json',
+      'Accept-Encoding': 'gzip, deflate',
       'X-Fleet-App': 'ClicDriver',
       'X-Fleet-Version': AppConfig.appVersion,
     };
@@ -75,7 +92,12 @@ class ApiService {
         headers: defaultHeaders,
         body: jsonEncode(body),
       ).timeout(const Duration(seconds: 8));
-      return jsonDecode(res.body);
+      final data = jsonDecode(res.body);
+      if (data is Map<String, dynamic>) {
+        _processRenewedToken(res, data);
+        return data;
+      }
+      return {'success': true, 'raw': res.body};
     } catch (e) {
       AppLogger.log('POST $url FAILED: $e', level: 'ERROR');
       return {'success': false, 'error': e.toString()};
@@ -86,7 +108,12 @@ class ApiService {
     final url = Uri.parse('$baseUrl$path');
     try {
       final res = await http.get(url, headers: defaultHeaders).timeout(const Duration(seconds: 8));
-      return jsonDecode(res.body);
+      final data = jsonDecode(res.body);
+      if (data is Map<String, dynamic>) {
+        _processRenewedToken(res, data);
+        return data;
+      }
+      return {'success': true, 'raw': res.body};
     } catch (e) {
       AppLogger.log('GET $url FAILED: $e', level: 'ERROR');
       return {'success': false, 'error': e.toString()};
@@ -132,6 +159,19 @@ class ApiService {
           deliveries: list,
         );
       }
+
+      if (res.statusCode == 401) {
+        try {
+          final data = jsonDecode(res.body);
+          final errorMsg = data['error'] ?? '🔒 Tu sesión ha vencido por seguridad. Por favor, ingresa nuevamente con tu usuario y contraseña.';
+          AppLogger.log('GET $url -> HTTP 401 SESIÓN EXPIRADA: $errorMsg', level: 'WARN');
+          throw Exception(errorMsg);
+        } catch (e) {
+          if (e is Exception) rethrow;
+          throw Exception('🔒 Tu sesión ha vencido por seguridad. Por favor, ingresa nuevamente con tu usuario y contraseña en la aplicación.');
+        }
+      }
+
       AppLogger.log('GET $url -> status ${res.statusCode}: ${res.body}', level: 'ERROR');
       throw Exception('Error obteniendo entregas (${res.statusCode}): ${res.body}');
     } catch (e) {

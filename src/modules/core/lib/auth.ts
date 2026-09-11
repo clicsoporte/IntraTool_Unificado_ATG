@@ -23,8 +23,45 @@ const SALT_ROUNDS = 10;
 const SESSION_COOKIE_NAME = 'clic-tools-session';
 const SESSION_DURATION = 12 * 60 * 60 * 1000; // 12 hours in milliseconds
 
+let _cachedAuthCookieSecret: string | null = null;
+
 function getSessionCookieSecret(): string {
-    return process.env.NEXTAUTH_SECRET || process.env.FLEET_JWT_SECRET || 'clic-tools-core-auth-secret-fallback-2026';
+    const secret = process.env.NEXTAUTH_SECRET || process.env.FLEET_JWT_SECRET;
+    if (secret && secret.trim().length > 0) {
+        return secret.trim();
+    }
+
+    if (_cachedAuthCookieSecret) {
+        return _cachedAuthCookieSecret;
+    }
+
+    // Persistencia en SQLite en ops_delivery_settings para sobrevivir reinicios
+    try {
+        const Database = require('better-sqlite3');
+        const path = require('path');
+        const dbPath = path.join(process.cwd(), 'dbs', 'database.sqlite');
+        const db = new Database(dbPath);
+
+        db.exec("CREATE TABLE IF NOT EXISTS ops_delivery_settings (key TEXT PRIMARY KEY, value TEXT)");
+        const row = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'system_jwt_secret'").get() as any;
+
+        if (row && row.value && row.value.length >= 32) {
+            _cachedAuthCookieSecret = row.value;
+            db.close();
+            return _cachedAuthCookieSecret!;
+        }
+
+        const generated = crypto.randomBytes(64).toString('hex');
+        db.prepare("INSERT INTO ops_delivery_settings (key, value) VALUES ('system_jwt_secret', ?) ON CONFLICT(key) DO UPDATE SET value = ?").run(generated, generated);
+        _cachedAuthCookieSecret = generated;
+        db.close();
+        return _cachedAuthCookieSecret!;
+    } catch (_) {
+        if (!_cachedAuthCookieSecret) {
+            _cachedAuthCookieSecret = 'clic-tools-core-auth-secret-fallback-2026';
+        }
+        return _cachedAuthCookieSecret;
+    }
 }
 
 function signSessionCookie(userId: number): string {
@@ -37,7 +74,7 @@ function parseSignedSessionCookie(cookieValue: string): number | null {
     if (!cookieValue || typeof cookieValue !== 'string') return null;
     const parts = cookieValue.split('.');
     
-    // Soporte para firma HMAC: userId.signature
+    // Firma HMAC estricta: userId.signature
     if (parts.length === 2) {
         const [rawId, signature] = parts;
         const parsedId = Number(rawId);
@@ -46,17 +83,11 @@ function parseSignedSessionCookie(cookieValue: string): number | null {
         const secret = getSessionCookieSecret();
         const expectedSignature = crypto.createHmac('sha256', secret).update(String(parsedId)).digest('hex');
         
-        if (crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+        if (signature.length === expectedSignature.length && crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
             return parsedId;
         }
-        return null;
     }
 
-    // Fallback de transición para sesiones previas no firmadas durante rollout
-    const fallbackId = Number(cookieValue);
-    if (!isNaN(fallbackId) && fallbackId > 0) {
-        return fallbackId;
-    }
     return null;
 }
 

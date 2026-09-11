@@ -623,6 +623,10 @@ class MainActivity : FlutterFragmentActivity() {
                                 dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_DATA_ROAMING)
                             }
 
+                            // Forzar encendido nativo de Datos Móviles y Wi-Fi (Always ON)
+                            try { dpm.setGlobalSetting(adminComponent, "mobile_data", "1") } catch (_: Exception) {}
+                            try { dpm.setGlobalSetting(adminComponent, "wifi_on", "1") } catch (_: Exception) {}
+
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                                 dpm.setUninstallBlocked(adminComponent, packageName, blockUninstall)
                             }
@@ -882,6 +886,24 @@ class MainActivity : FlutterFragmentActivity() {
                             }
                         } catch (_: Exception) {}
 
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
+                }
+                "ensureConnectivityAlwaysOn" -> {
+                    try {
+                        if (dpm.isDeviceOwnerApp(packageName)) {
+                            try { dpm.setGlobalSetting(adminComponent, "mobile_data", "1") } catch (_: Exception) {}
+                            try { dpm.setGlobalSetting(adminComponent, "wifi_on", "1") } catch (_: Exception) {}
+                        }
+                        try {
+                            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? android.net.wifi.WifiManager
+                            if (wifiManager != null && !wifiManager.isWifiEnabled) {
+                                @Suppress("DEPRECATION")
+                                wifiManager.isWifiEnabled = true
+                            }
+                        } catch (_: Exception) {}
                         result.success(true)
                     } catch (e: Exception) {
                         result.success(false)

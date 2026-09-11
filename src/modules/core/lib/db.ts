@@ -480,6 +480,10 @@ export async function getAllCustomers(): Promise<Customer[]> {
 }
 
 export async function saveAllCustomers(customers: Customer[]): Promise<void> {
+    if (!Array.isArray(customers) || customers.length === 0) {
+        logWarn('saveAllCustomers cancelado: payload de clientes vacío o inválido.');
+        return;
+    }
     const db = await getDb();
     const insert = db.prepare('INSERT INTO core_customers (id, name, address, phone, taxId, currency, creditLimit, paymentCondition, salesperson, active, email, electronicDocEmail) VALUES (@id, @name, @address, @phone, @taxId, @currency, @creditLimit, @paymentCondition, @salesperson, @active, @email, @electronicDocEmail)');
     const transaction = db.transaction((customersToSave: Customer[]) => {
@@ -511,6 +515,10 @@ export async function getAllProducts(): Promise<Product[]> {
 }
 
 export async function saveAllProducts(products: Product[]): Promise<void> {
+    if (!Array.isArray(products) || products.length === 0) {
+        logWarn('saveAllProducts cancelado: payload de productos vacío o inválido.');
+        return;
+    }
     const db = await getDb();
     const insert = db.prepare('INSERT INTO core_products (id, description, classification, lastEntry, active, notes, unit, isBasicGood, cabys, barcode) VALUES (@id, @description, @classification, @lastEntry, @active, @notes, @unit, @isBasicGood, @cabys, @barcode)');
     
@@ -1269,6 +1277,7 @@ export async function listAllUpdateBackups(): Promise<UpdateBackupInfo[]> {
 }
 
 export async function restoreDatabase(moduleId: string, backupFile: File): Promise<void> {
+    await authorizeAction('admin:import:run');
     if (!moduleId || !backupFile) {
         throw new Error("Module ID and backup file are required.");
     }
@@ -1285,6 +1294,7 @@ export async function restoreDatabase(moduleId: string, backupFile: File): Promi
 }
 
 export async function restoreAllFromUpdateBackup(timestamp: string): Promise<void> {
+    await authorizeAction('admin:import:run');
     const backups = await listAllUpdateBackups();
     const backupsToRestore = backups.filter(b => b.date === timestamp);
 

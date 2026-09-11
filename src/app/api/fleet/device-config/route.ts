@@ -243,6 +243,11 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
+    const authResult = await authenticateFleetRequest(req);
+    if ('response' in authResult) {
+      return authResult.response;
+    }
+
     const db = await getDb();
     const { searchParams } = new URL(req.url);
     const hardwareId = searchParams.get('hardwareId');

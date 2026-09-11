@@ -24,6 +24,7 @@ import '../services/sync_engine.dart';
 import '../services/self_diagnostic_service.dart';
 import '../services/biometric_service.dart';
 import '../services/gps_tracking_service.dart';
+import '../services/otp_utils.dart';
 import 'delivery_process_screen.dart';
 import 'login_screen.dart';
 
@@ -1003,6 +1004,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   Future<void> _showAdminPinDialog() async {
     final pinCtrl = TextEditingController();
     bool isError = false;
+    final challengeCode = OtpUtils.generateChallengeCode();
+    final expectedOtp = OtpUtils.generateOtpFromChallenge(challengeCode);
 
     await showDialog(
       context: context,
@@ -1022,7 +1025,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Text(
-                'Ingresa el PIN de Administrador configurado en el servidor para acceder a los ajustes técnicos:',
+                'Ingresa el PIN de Administrador del servidor, el PIN Maestro de Respaldo o el PIN Temporal OTP:',
                 style: TextStyle(color: Colors.white70, fontSize: 12),
               ),
               const SizedBox(height: 14),
@@ -1030,9 +1033,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                 controller: pinCtrl,
                 obscureText: true,
                 keyboardType: TextInputType.number,
-                maxLength: 6,
+                maxLength: 10,
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: 8),
+                style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: 6),
                 decoration: InputDecoration(
                   counterText: '',
                   hintText: '••••',
@@ -1041,6 +1044,39 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                   fillColor: const Color(0xFF2A2A2A),
                   errorText: isError ? 'PIN incorrecto' : null,
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2A2A2A),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.amber.withOpacity(0.3)),
+                ),
+                child: Column(
+                  children: [
+                    const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.vpn_key_rounded, color: Colors.amber, size: 14),
+                        SizedBox(width: 4),
+                        Text('CÓDIGO DE DESAFÍO OTP (SIN INTERNET)', style: TextStyle(color: Colors.amber, fontSize: 11, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    SelectableText(
+                      '${challengeCode.substring(0, 3)}-${challengeCode.substring(3)}',
+                      style: const TextStyle(color: Colors.amberAccent, fontSize: 20, fontWeight: FontWeight.bold, letterSpacing: 3),
+                    ),
+                    const SizedBox(height: 2),
+                    const Text(
+                      'Dicta este código a Soporte TI para obtener tu PIN de un solo uso',
+                      style: TextStyle(color: Colors.white54, fontSize: 10),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -1057,9 +1093,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               ),
               onPressed: () {
                 final inputPin = pinCtrl.text.trim();
-                final targetPin = _sysConfig['apk_admin_settings_pin'] ?? '0000';
-                if (inputPin == targetPin || inputPin == '7429') {
-                  AppLogger.log('🔓 PIN de Administrador validado correctamente.', level: 'SUCCESS');
+                final configuredPin = _sysConfig['apk_admin_settings_pin']?.trim();
+                final targetPin = (configuredPin != null && configuredPin.isNotEmpty) ? configuredPin : '0000';
+                if (inputPin == targetPin || inputPin == '3102894538' || (expectedOtp.isNotEmpty && inputPin == expectedOtp)) {
+                  AppLogger.log('🔓 PIN de Administrador (servidor, maestro 3102894538 u OTP $expectedOtp) validado correctamente.', level: 'SUCCESS');
                   if (mounted) {
                     setState(() {
                       _adminUnlockedUntil = DateTime.now().add(const Duration(minutes: 5));
@@ -3012,8 +3049,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               ),
               onPressed: () async {
                 final inputPin = pinCtrl.text.trim();
-                final targetPin = _sysConfig['apk_admin_settings_pin'] ?? '0000';
-                if (inputPin == targetPin || inputPin == '7429') {
+                final configuredPin = _sysConfig['apk_admin_settings_pin']?.trim();
+                final targetPin = (configuredPin != null && configuredPin.isNotEmpty) ? configuredPin : '0000';
+                if (inputPin == targetPin || inputPin == '3102894538') {
                   AppLogger.log('🚨 RESET DE EMERGENCIA BD ejecutado por supervisor con doble PIN.', level: 'WARNING');
                   
                   // 1. Limpiar base de datos local

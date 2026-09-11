@@ -37,8 +37,9 @@ export async function searchDeliveryAuditLogs(filters: AuditFilterParams): Promi
         }
 
         if (filters.documentoNumero && filters.documentoNumero.trim() !== '') {
-            whereSql += ` AND q.documento_numero LIKE ?`;
-            params.push(`%${filters.documentoNumero.trim()}%`);
+            whereSql += ` AND (q.documento_numero LIKE ? OR q.boleta_numero LIKE ? OR q.referencia_doc LIKE ?)`;
+            const docTerm = `%${filters.documentoNumero.trim()}%`;
+            params.push(docTerm, docTerm, docTerm);
         }
 
         if (filters.fechaDesde && filters.fechaDesde.trim() !== '') {
@@ -78,16 +79,16 @@ export async function searchDeliveryAuditLogs(filters: AuditFilterParams): Promi
         }
 
         if (filters.searchTerm && filters.searchTerm.trim() !== '') {
-            whereSql += ` AND (q.documento_numero LIKE ? OR q.cliente_nombre LIKE ? OR q.comentario LIKE ?)`;
+            whereSql += ` AND (q.documento_numero LIKE ? OR q.boleta_numero LIKE ? OR q.referencia_doc LIKE ? OR q.cliente_nombre LIKE ? OR q.comentario LIKE ?)`;
             const term = `%${filters.searchTerm.trim()}%`;
-            params.push(term, term, term);
+            params.push(term, term, term, term, term);
         }
 
         // Count Total Records
         const countSql = `
             SELECT COUNT(*) as count 
             FROM ops_delivery_queue q
-            LEFT JOIN core_erp_invoice_headers h ON q.documento_numero = h.FACTURA
+            LEFT JOIN core_erp_invoice_headers h ON (q.documento_numero = h.FACTURA OR (q.referencia_doc IS NOT NULL AND q.referencia_doc = h.FACTURA))
             LEFT JOIN ops_delivery_assignments a ON (q.asignacion_id = a.id OR q.devolucion_asignacion_id = a.id)
             LEFT JOIN ops_delivery_routes r ON a.ruta_id = r.id
             LEFT JOIN core_users u ON a.empleado_id = u.id
@@ -102,6 +103,11 @@ export async function searchDeliveryAuditLogs(filters: AuditFilterParams): Promi
             SELECT 
                 q.id,
                 q.documento_numero,
+                q.boleta_numero,
+                q.referencia_doc,
+                q.motivo_salida,
+                q.autorizado_por,
+                q.fecha_autorizacion,
                 q.tipo_documento,
                 q.cliente_id,
                 q.cliente_nombre,
@@ -120,12 +126,15 @@ export async function searchDeliveryAuditLogs(filters: AuditFilterParams): Promi
                 q.nombre_recibe,
                 q.latitud,
                 q.longitud,
-                q.hora_ingreso_geocerca,
-                q.hora_entrega_efectiva,
-                q.hora_salida_geocerca,
-                q.tiempo_descarga_min,
+                COALESCE(q.fecha_llegada_geocerca, q.hora_ingreso_geocerca) as hora_ingreso_geocerca,
+                COALESCE(q.fecha_entrega, q.hora_entrega_efectiva) as hora_entrega_efectiva,
+                COALESCE(q.fecha_salida_geocerca, q.hora_salida_geocerca) as hora_salida_geocerca,
+                COALESCE(q.tiempo_estadia_min, q.tiempo_descarga_min, 0) as tiempo_descarga_min,
                 q.tiempo_espera_post_entrega_min,
-                q.tiempo_total_permanencia_min,
+                COALESCE(q.tiempo_estadia_min, q.tiempo_total_permanencia_min, 0) as tiempo_total_permanencia_min,
+                q.geocerca_auto_llegada,
+                q.geocerca_auto_salida,
+                q.ralenti_cliente_minutos,
                 a.fecha as asignacion_fecha,
                 r.name as ruta_nombre,
                 u.name as chofer_nombre,
@@ -137,7 +146,7 @@ export async function searchDeliveryAuditLogs(filters: AuditFilterParams): Promi
                 h.EMBARCAR_A as direccion_embarque_erp,
                 h.DIREC_EMBARQUE as direccion_factura_erp
             FROM ops_delivery_queue q
-            LEFT JOIN core_erp_invoice_headers h ON q.documento_numero = h.FACTURA
+            LEFT JOIN core_erp_invoice_headers h ON (q.documento_numero = h.FACTURA OR (q.referencia_doc IS NOT NULL AND q.referencia_doc = h.FACTURA))
             LEFT JOIN ops_delivery_assignments a ON (q.asignacion_id = a.id OR q.devolucion_asignacion_id = a.id)
             LEFT JOIN ops_delivery_routes r ON a.ruta_id = r.id
             LEFT JOIN core_users u ON a.empleado_id = u.id
@@ -175,12 +184,14 @@ export async function exportDeliveryAuditLogsToCsv(filters: AuditFilterParams): 
 
     try {
         const headers = [
-            'Documento',
+            'No. Documento',
+            'No. Boleta',
+            'Doc. Referencia / Origen',
             'Tipo Documento',
-            'Estado',
+            'Estado Entrega',
             'Fecha Factura ERP',
-            'Fecha Asignacion Ruta',
-            'Fecha Entrega Efectiva',
+            'Fecha Despacho Ruta',
+            'Fecha/Hora Entrega Real',
             'Fecha Registro Cola',
             'Fecha Promesa ERP',
             'Cliente ID',
@@ -213,6 +224,8 @@ export async function exportDeliveryAuditLogsToCsv(filters: AuditFilterParams): 
 
             const row = [
                 `"${(item.documento_numero || '').replace(/"/g, '""')}"`,
+                `"${(item.boleta_numero || '').replace(/"/g, '""')}"`,
+                `"${(item.referencia_doc || '').replace(/"/g, '""')}"`,
                 `"${(item.tipo_documento || '').replace(/"/g, '""')}"`,
                 `"${(item.estado || '').replace(/"/g, '""')}"`,
                 `"${(item.fecha_factura_erp || '').replace(/"/g, '""')}"`,
@@ -280,7 +293,7 @@ export async function getDeliveryDocumentDetail(docId: number): Promise<{
                 h.DIREC_EMBARQUE as direccion_factura_erp,
                 h.VENDEDOR as vendedor
             FROM ops_delivery_queue q
-            LEFT JOIN core_erp_invoice_headers h ON q.documento_numero = h.FACTURA
+            LEFT JOIN core_erp_invoice_headers h ON (q.documento_numero = h.FACTURA OR (q.referencia_doc IS NOT NULL AND q.referencia_doc = h.FACTURA))
             LEFT JOIN ops_delivery_assignments a ON (q.asignacion_id = a.id OR q.devolucion_asignacion_id = a.id)
             LEFT JOIN ops_delivery_routes r ON a.ruta_id = r.id
             LEFT JOIN core_users u ON a.empleado_id = u.id
@@ -307,7 +320,8 @@ export async function getDeliveryDocumentDetail(docId: number): Promise<{
 
         // 2. Si no tiene líneas reportadas (ej. entrega completa sin discrepancias), traer las líneas de la factura ERP
         if (!lines || lines.length === 0) {
-            if (doc.tipo_documento === 'factura') {
+            const cleanDocNumber = (doc.referencia_doc || doc.documento_numero || '').replace('-PARTIAL', '').replace('-RETRY', '');
+            if (doc.tipo_documento === 'factura' || doc.tipo_documento === 'boleta' || doc.motivo_salida) {
                 const erpLines = db.prepare(`
                     SELECT 
                         l.ARTICULO as codigo, 
@@ -318,7 +332,7 @@ export async function getDeliveryDocumentDetail(docId: number): Promise<{
                     FROM core_erp_invoice_lines l
                     LEFT JOIN core_products p ON l.ARTICULO = p.id
                     WHERE l.FACTURA = ?
-                `).all(doc.documento_numero) as any[];
+                `).all(cleanDocNumber) as any[];
                 if (erpLines && erpLines.length > 0) {
                     lines = erpLines;
                 }

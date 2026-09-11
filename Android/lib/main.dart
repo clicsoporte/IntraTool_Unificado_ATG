@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'config.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/login_screen.dart';
+import 'services/api_service.dart';
 import 'services/background_sync_service.dart';
 import 'services/version_service.dart';
 
@@ -11,6 +12,12 @@ void main() async {
   final prefs = await SharedPreferences.getInstance();
   final bool isLoggedIn = prefs.getBool('is_logged_in') ?? false;
   final String serverUrl = prefs.getString('server_url') ?? AppConfig.defaultBaseUrl;
+
+  // Restaurar token JWT en memoria de ApiService para autenticación inmediata
+  final String? savedToken = prefs.getString('auth_token');
+  if (savedToken != null && savedToken.isNotEmpty) {
+    ApiService.setAuthToken(savedToken);
+  }
 
   // Motor OTA Aislado: Ejecución temprana en arranque
   VersionService.checkAndExecuteOtaUpdateEarly(serverUrl);

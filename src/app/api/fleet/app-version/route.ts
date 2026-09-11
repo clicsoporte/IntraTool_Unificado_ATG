@@ -1,6 +1,16 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/modules/core/lib/db';
 import { logWarn, logError } from '@/modules/core/lib/logger';
+let hasEnsuredDeviceColumns = false;
+function ensureDeviceColumns(db: any) {
+    if (hasEnsuredDeviceColumns) return;
+    try { db.prepare("ALTER TABLE fleet_registered_devices ADD COLUMN serial_number TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE fleet_registered_devices ADD COLUMN imei TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE fleet_registered_devices ADD COLUMN battery_voltage REAL").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE fleet_registered_devices ADD COLUMN battery_health TEXT").run(); } catch (_) {}
+    try { db.prepare("ALTER TABLE fleet_registered_devices ADD COLUMN battery_tech TEXT").run(); } catch (_) {}
+    hasEnsuredDeviceColumns = true;
+}
 
 export async function GET(request: Request) {
     return handleVersionCheck(request);
@@ -23,11 +33,7 @@ async function handleVersionCheck(request: Request) {
         }
 
         const db = await getDb();
-        try { db.prepare("ALTER TABLE fleet_registered_devices ADD COLUMN serial_number TEXT").run(); } catch (_) {}
-        try { db.prepare("ALTER TABLE fleet_registered_devices ADD COLUMN imei TEXT").run(); } catch (_) {}
-        try { db.prepare("ALTER TABLE fleet_registered_devices ADD COLUMN battery_voltage REAL").run(); } catch (_) {}
-        try { db.prepare("ALTER TABLE fleet_registered_devices ADD COLUMN battery_health TEXT").run(); } catch (_) {}
-        try { db.prepare("ALTER TABLE fleet_registered_devices ADD COLUMN battery_tech TEXT").run(); } catch (_) {}
+        ensureDeviceColumns(db);
         const url = new URL(request.url);
         
         let hwid = url.searchParams.get('hwid') || '';

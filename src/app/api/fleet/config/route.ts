@@ -47,6 +47,7 @@ export async function GET() {
       apk_require_evidence_photo: 'disabled',
       apk_require_invoice_photo: 'disabled',
       apk_require_signature: 'false',
+      apk_require_incident_notes: 'false',
       driver_boleta_print_enabled: 'true',
       release_codes_enabled: 'false',
       apk_print_show_client: 'true',
@@ -72,6 +73,15 @@ export async function GET() {
       sms_gateway_it_phones: '',
     };
 
+    // Obtener URLs de alta disponibilidad y versión oficial
+    let serverUrlPrimary = '';
+    let serverUrlFallback = '';
+    try {
+      const verRow = db.prepare("SELECT server_url_primary, server_url_fallback FROM ops_app_version_settings WHERE id = 1").get() as any;
+      if (verRow?.server_url_primary) serverUrlPrimary = verRow.server_url_primary;
+      if (verRow?.server_url_fallback) serverUrlFallback = verRow.server_url_fallback;
+    } catch (_) {}
+
     // Obtener token de Telegram bot si está configurado en el sistema
     let telegramBotToken = '';
     try {
@@ -84,13 +94,17 @@ export async function GET() {
 
     const mergedConfig = {
       ...defaultConfig,
+      telegram_bot_token: telegramBotToken,
+      ...(serverUrlPrimary ? { server_url_primary: serverUrlPrimary } : {}),
+      ...(serverUrlFallback ? { server_url_fallback: serverUrlFallback } : {}),
       ...config,
     };
 
-    // [Security] Omitir PIN administrativo y claves privadas en endpoint público
-    delete (mergedConfig as any).apk_admin_settings_pin;
+    // [Security] Omitir claves privadas del sistema e información sensible en endpoint público
     delete (mergedConfig as any).system_jwt_secret;
     delete (mergedConfig as any).agent_secret_key;
+    delete (mergedConfig as any).telegram_bot_token;
+    delete (mergedConfig as any).apk_admin_settings_pin;
 
     return NextResponse.json({
       success: true,

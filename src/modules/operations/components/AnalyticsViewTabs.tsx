@@ -83,29 +83,38 @@ export function AnalyticsViewTabs({
     });
   };
 
-  // 1. KPI Calculations
+  // 1. KPI Calculations (Matemática Estricta Auditada)
   const totalDocs = queueDocs.length;
   const completedDocs = queueDocs.filter((d: any) => d.estado === 'completo');
   const incompleteDocs = queueDocs.filter((d: any) => d.estado === 'incompleto');
   const rejectedDocs = queueDocs.filter((d: any) => d.estado === 'rechazado');
+  const processedDocs = queueDocs.filter((d: any) => ['completo', 'incompleto', 'rechazado'].includes(d.estado));
 
-  const otifRate = totalDocs > 0 ? ((completedDocs.length / totalDocs) * 100).toFixed(1) : '100.0';
+  // Tasa OTIF estricta sobre documentos procesados en calle (no distorsiona en la mañana)
+  const otifRate = processedDocs.length > 0 
+    ? ((completedDocs.length / processedDocs.length) * 100).toFixed(1) 
+    : '100.0';
 
-  const docsWithDescarga = queueDocs.filter((d: any) => d.tiempo_descarga_min > 0);
-  const avgDescargaMin = docsWithDescarga.length > 0
-    ? Math.round(docsWithDescarga.reduce((acc: number, curr: any) => acc + curr.tiempo_descarga_min, 0) / docsWithDescarga.length)
+  // Usar prioridad de tiempo de estancia satelital (tiempo_estadia_min) o fallback a descarga reportada
+  const docsWithEstadia = queueDocs.filter((d: any) => (d.tiempo_estadia_min || d.tiempo_descarga_min) > 0);
+  const avgDescargaMin = docsWithEstadia.length > 0
+    ? Math.round(docsWithEstadia.reduce((acc: number, curr: any) => acc + (curr.tiempo_estadia_min || curr.tiempo_descarga_min || 0), 0) / docsWithEstadia.length)
     : 0;
 
-  // 2. Client Retention Map
-  const clientRetentionMap: Record<string, { name: string; count: number; totalDescarga: number }> = {};
+  // 2. Client Retention & Dwell Map
+  const clientRetentionMap: Record<string, { name: string; count: number; totalDescarga: number; totalRalenti: number }> = {};
   queueDocs.forEach((d: any) => {
     const clientName = d.cliente_nombre || d.cliente_nombre_core || d.cliente_id || 'Cliente Desconocido';
     if (!clientRetentionMap[clientName]) {
-      clientRetentionMap[clientName] = { name: clientName, count: 0, totalDescarga: 0 };
+      clientRetentionMap[clientName] = { name: clientName, count: 0, totalDescarga: 0, totalRalenti: 0 };
     }
     clientRetentionMap[clientName].count += 1;
-    if (d.tiempo_descarga_min) {
-      clientRetentionMap[clientName].totalDescarga += d.tiempo_descarga_min;
+    const est = d.tiempo_estadia_min || d.tiempo_descarga_min || 0;
+    if (est > 0) {
+      clientRetentionMap[clientName].totalDescarga += est;
+    }
+    if (d.ralenti_cliente_minutos) {
+      clientRetentionMap[clientName].totalRalenti += d.ralenti_cliente_minutos;
     }
   });
 
@@ -127,18 +136,22 @@ export function AnalyticsViewTabs({
     if (d.estado === 'completo') driverMap[driverName].completed += 1;
     if (d.estado === 'incompleto') driverMap[driverName].incomplete += 1;
     if (d.estado === 'rechazado') driverMap[driverName].rejected += 1;
-    if (d.tiempo_descarga_min) {
-      driverMap[driverName].totalDescarga += d.tiempo_descarga_min;
+    const est = d.tiempo_estadia_min || d.tiempo_descarga_min || 0;
+    if (est > 0) {
+      driverMap[driverName].totalDescarga += est;
       driverMap[driverName].descargaCount += 1;
     }
   });
 
   const driverList = Object.values(driverMap)
-    .map(dr => ({
-      ...dr,
-      otifRate: dr.total > 0 ? Math.round((dr.completed / dr.total) * 100) : 100,
-      avgDescarga: dr.descargaCount > 0 ? Math.round(dr.totalDescarga / dr.descargaCount) : 0
-    }))
+    .map(dr => {
+      const processed = dr.completed + dr.incomplete + dr.rejected;
+      return {
+        ...dr,
+        otifRate: processed > 0 ? Math.round((dr.completed / processed) * 100) : 100,
+        avgDescarga: dr.descargaCount > 0 ? Math.round(dr.totalDescarga / dr.descargaCount) : 0
+      };
+    })
     .sort((a, b) => b.total - a.total);
 
   // 4. Vehicle Performance Map

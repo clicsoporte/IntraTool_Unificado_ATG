@@ -58,6 +58,8 @@ next-env.d.ts
 .idea/
 .idx/
 *.code-workspace
+*.nonproject
+.nonproject
 
 # Temporary Scratch Scripts
 /scratch/

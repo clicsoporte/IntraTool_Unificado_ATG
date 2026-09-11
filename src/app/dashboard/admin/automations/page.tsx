@@ -77,9 +77,13 @@ const eventLabels: Record<string, string> = {
     onDeliveryPartial: 'Boleta de Entrega Incompleta / Faltante (Logística)',
     onDeliveryArrivalGeofence: 'Notificación de Arribo a Instalaciones del Cliente (Logística)',
     onDriverWaitingCustomer: '⏱️ Chofer en Espera de Atención en Cliente (Logística)',
+    onBoletaCreated: '📄 Nueva Boleta Operativa Creada (Salida de Bodega)',
+    onBoletaApproved: '✅ Boleta Operativa Autorizada para Despacho (Salida de Bodega)',
 };
 
 const eventVariables: Record<string, string[]> = {
+    onBoletaCreated: ['boletaNumero', 'motivoSalida', 'clienteNombre', 'clienteId', 'referenciaDoc', 'creadoPor', 'totalItems'],
+    onBoletaApproved: ['boletaNumero', 'motivoSalida', 'clienteNombre', 'autorizadoPor', 'fechaAutorizacion'],
     onFleetMaintenanceDue: ['plate', 'brand', 'model', 'progress', 'remaining', 'currentMileage', 'odometerUnit'],
     onFleetPermitExpiring: ['plate', 'permitType', 'expirationDate', 'daysLeft'],
     onFleetFuelLogAdded: ['plate', 'brand', 'model', 'date', 'mileageBefore', 'liters', 'cost', 'driverId', 'userName'],

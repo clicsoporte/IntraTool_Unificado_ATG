@@ -19,7 +19,16 @@ async function processMobileTelemetry(params: Record<string, string>) {
     const heading = parseFloat(headingStr);
     const battery = parseFloat(battStr);
 
-    if (!rawId || isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) {
+    if (
+        !rawId ||
+        isNaN(lat) ||
+        isNaN(lng) ||
+        (lat === 0 && lng === 0) ||
+        lat < -90 ||
+        lat > 90 ||
+        lng < -180 ||
+        lng > 180
+    ) {
         return { success: false, error: 'Parámetros de ubicación móviles no válidos' };
     }
 

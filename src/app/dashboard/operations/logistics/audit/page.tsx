@@ -280,7 +280,8 @@ export default function LogisticsAuditPage() {
             doc.setFont('courier', 'normal');
             doc.text(`Boleta: #${docData.boleta_numero || docData.documento_numero}`, marginX, currentY);
             currentY += 3.5;
-            doc.text(`Doc ERP: #${docData.documento_numero}`, marginX, currentY);
+            const erpDocRef = docData.referencia_doc || (docData.documento_numero && docData.documento_numero.includes('-PARTIAL') ? docData.documento_numero.replace('-PARTIAL', '').replace('-RETRY', '') : docData.documento_numero);
+            doc.text(`Doc ERP: #${erpDocRef}`, marginX, currentY);
             currentY += 3.5;
             doc.text(`Estado: [ ${docData.estado?.toUpperCase() || 'COMPLETO'} ]`, marginX, currentY);
             currentY += 3.5;
@@ -847,8 +848,25 @@ export default function LogisticsAuditPage() {
                                     <tbody>
                                         {results.map((doc) => (
                                             <tr key={doc.id} className="border-b hover:bg-muted/30 transition-colors">
-                                                <td className="py-2.5 px-3 font-mono font-bold text-foreground">
-                                                    {doc.documento_numero}
+                                                <td className="py-2.5 px-3 font-mono text-foreground">
+                                                    <div className="font-bold flex items-center gap-1.5 flex-wrap">
+                                                        <span>{doc.documento_numero}</span>
+                                                        {doc.motivo_salida && (
+                                                            <Badge variant="outline" className="text-[9px] px-1 py-0 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border-blue-200">
+                                                                {doc.motivo_salida === 'faltante' ? 'Faltante' : doc.motivo_salida}
+                                                            </Badge>
+                                                        )}
+                                                    </div>
+                                                    {doc.boleta_numero && (
+                                                        <div className="text-[10px] text-sky-600 dark:text-sky-400 font-semibold font-mono flex items-center gap-1 mt-0.5">
+                                                            <span>📄 Boleta: #{doc.boleta_numero}</span>
+                                                        </div>
+                                                    )}
+                                                    {doc.referencia_doc && doc.referencia_doc !== doc.documento_numero && (
+                                                        <div className="text-[9.5px] text-muted-foreground font-mono">
+                                                            Orig: #{doc.referencia_doc}
+                                                        </div>
+                                                    )}
                                                 </td>
                                                 <td className="py-2.5 px-3">
                                                     {doc.estado === 'completo' && <Badge variant="default" className="bg-emerald-500 text-white">🟢 Completado</Badge>}
@@ -856,6 +874,7 @@ export default function LogisticsAuditPage() {
                                                     {doc.estado === 'rechazado' && <Badge variant="destructive">❌ Rechazado</Badge>}
                                                     {doc.estado === 'descartado' && <Badge variant="outline" className="text-gray-500">🗑️ Descartado</Badge>}
                                                     {doc.estado === 'pendiente' && <Badge variant="outline" className="text-blue-500">⏳ Pendiente</Badge>}
+                                                    {doc.estado === 'pendiente_autorizacion' && <Badge variant="outline" className="text-amber-600 bg-amber-50 border-amber-300">⏳ Pendiente Aprobación</Badge>}
                                                 </td>
                                                 <td className="py-2.5 px-3 font-medium">
                                                     <div>{doc.cliente_nombre || doc.cliente_id}</div>

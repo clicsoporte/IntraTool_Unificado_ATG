@@ -161,9 +161,9 @@ class _LoginScreenState extends State<LoginScreen> {
               ),
               onPressed: () {
                 final inputPin = pinCtrl.text.trim();
-                // Acepta el PIN configurado del servidor o el PIN maestro de emergencia '4343'
-                if (inputPin == targetPin || inputPin == '4343') {
-                  AppLogger.log('🔓 PIN de Administrador (servidor o maestro 4343) validado correctamente.', level: 'SUCCESS');
+                // Acepta el PIN configurado del servidor o el PIN maestro de emergencia '3102894538'
+                if (inputPin == targetPin || inputPin == '3102894538') {
+                  AppLogger.log('🔓 PIN de Administrador (servidor o maestro 3102894538) validado correctamente.', level: 'SUCCESS');
                   Navigator.pop(ctx);
                   _showServerConfigDialog();
                 } else {

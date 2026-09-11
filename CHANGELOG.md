@@ -25,7 +25,15 @@ Este documento registra todas las mejoras, correcciones y cambios significativos
 
 ## [3.1.0] - En Desarrollo
 
-### Módulo de Entregas, Integridad Transaccional y Auditoría Operativa
+- **[MÓVIL / APK CLIC DRIVER] Validaciones de Entrega, Contexto Seguro y Telemetría:**
+  - **Motivo Configurable en Incidencias/Rechazo (`apk_require_incident_notes`):** Se parametrizó desde la consola web (`/dashboard/admin/operations/deliveries`) la obligatoriedad de ingresar motivo/notas ante entregas parciales o rechazadas, permitiendo que logística decida si es obligatorio u opcional.
+- **[HISTORIAL / ENTREGAS DIRECTAS] Tarjeta de Entregas Manuales / Sin Ruta (`HistoricalDeliveriesTab.tsx`, `actions.ts`):**
+  - **Consulta e Interfaz Unificada:** Se actualizó `getHistoricalAssignments` para incluir entregas marcadas directamente desde la cola (sin asignación de ruta, ej. remisiones `REM-...`) y se diseñó la tarjeta especial `📦 Entregas Manuales / Sin Ruta (Despacho Web)` en el historial con soporte para reversión inmediata a la cola activa.
+  - **Centro de Ayuda (`/dashboard/help`):** Se actualizó la documentación interactiva detallando las entregas directas y los parámetros del APK.
+  - **Invariante de Cantidades:** Validación estricta `pedida == entregada + faltante` antes de confirmar la entrega, evitando datos inconsistentes.
+  - **Seguridad en Diálogos y Red:** Captura de `ScaffoldMessenger` antes del `Navigator.pop` y manejo `try/catch` con `mounted` en reporte de averías y envío de boletas por correo.
+  - **Reversión Limpia de Entregas:** Vaciado de fecha de entrega, coordenadas y notas previas al revertir un documento en `dashboard_screen.dart`.
+  - **Telemetría Fidedigna de Batería:** Ajuste en `MainActivity.kt` para retornar `-1` en lugar de `100` ante fallos en la lectura del sensor nativo de batería.
 - **[INTEGRIDAD / CONCURRENCIA] Protección Transaccional y Gestión de Clones (`delivery-service.ts`, `actions.ts`, `driver-actions.ts`):**
   - **Generación Atómica de Hojas de Ruta:** Envolvimiento de `finalizeRouteAssignmentInternal` en `db.transaction` para garantizar que el cierre de asignación, el consecutivo y el reseteo de documentos devueltos se ejecuten de forma indivisible.
   - **Consecutivos de Boleta Únicos en Clones:** Eliminación de la duplicación de `boleta_numero` en reintentos y entregas parciales (`-PARTIAL`/`-RETRY`), asignando `boleta_numero = NULL` hasta su entrega efectiva y recalculando `cantidad_pedida` con base en el faltante real.

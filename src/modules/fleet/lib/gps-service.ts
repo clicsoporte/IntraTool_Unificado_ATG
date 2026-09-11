@@ -300,7 +300,7 @@ async function syncNavixyTelemetryToDb(results: NavixyTrackerState[]) {
                 if (autoStartEnabled && isOutsideDepot && (!activeAssignment.fecha_salida || activeAssignment.activa === 0)) {
                     db.prepare(`
                         UPDATE ops_delivery_assignments
-                        SET activa = 1, fecha_salida = COALESCE(fecha_salida, ?), latitud_inicio = COALESCE(latitud_inicio, ?), longitud_inicio = COALESCE(longitud_inicio, ?)
+                        SET activa = 1, fecha_salida = COALESCE(fecha_salida, ?), latitud_inicio = COALESCE(latitud_inicio, ?), longitud_inicio = COALESCE(longitud_inicio, ?), origen_salida = 'auto_geofence'
                         WHERE id = ?
                     `).run(nowIso, t.lat, t.lng, activeAssignment.id);
 
@@ -327,11 +327,69 @@ async function syncNavixyTelemetryToDb(results: NavixyTrackerState[]) {
                             SET fecha_inicio_retorno = COALESCE(fecha_inicio_retorno, ?),
                                 fecha_llegada_bodega = COALESCE(fecha_llegada_bodega, ?),
                                 latitud_llegada = ?,
-                                longitud_llegada = ?
+                                longitud_llegada = ?,
+                                origen_llegada = 'auto_geofence'
                             WHERE id = ?
                         `).run(nowIso, nowIso, t.lat, t.lng, activeAssignment.id);
 
                         logInfo(`🏁 [Auto-Llegada a Patio] Camión ${t.plate} ingresó al patio central (${Math.round(distToDepot)}m). Llegada registrada para Ruta #${activeAssignment.id}.`);
+                    }
+                }
+
+                // 4. AUTO-GEOCERCA CLIENTES Y PROVEEDORES (Auto-Ingreso, Auto-Salida y Tiempo de Estancia)
+                const customerGeofenceRadius = parseFloat(opsSettings.geofence_customer_radius_m || '200');
+                const pendingDeliveries = db.prepare(`
+                    SELECT q.id, q.cliente_id, q.fecha_llegada_geocerca, q.fecha_salida_geocerca, c.latitude, c.longitude, c.geofence_radius_m
+                    FROM ops_delivery_queue q
+                    LEFT JOIN core_customers c ON q.cliente_id = c.id
+                    WHERE q.asignacion_id = ? AND q.entregado = 0
+                `).all(activeAssignment.id) as Array<{
+                    id: number;
+                    cliente_id: string;
+                    fecha_llegada_geocerca: string | null;
+                    fecha_salida_geocerca: string | null;
+                    latitude: number | null;
+                    longitude: number | null;
+                    geofence_radius_m: number | null;
+                }>;
+
+                for (const del of pendingDeliveries) {
+                    if (del.latitude && del.longitude) {
+                        const targetRadius = del.geofence_radius_m || customerGeofenceRadius;
+                        const distToCust = calcularDistanciaGeografica(del.latitude, del.longitude, t.lat, t.lng);
+
+                        // Auto-Ingreso a Cliente/Proveedor & Detección de Ralentí en Cliente
+                        if (distToCust <= targetRadius) {
+                            if (!del.fecha_llegada_geocerca) {
+                                db.prepare(`
+                                    UPDATE ops_delivery_queue
+                                    SET fecha_llegada_geocerca = ?, geocerca_auto_llegada = 1
+                                    WHERE id = ?
+                                `).run(nowIso, del.id);
+                                logInfo(`📍 [Auto-Geocerca Cliente] Camión ${t.plate} llegó a cliente ${del.cliente_id} (${Math.round(distToCust)}m).`);
+                            }
+
+                            // Acumular tiempo de ralentí en cliente si el motor está encendido y el camión está detenido
+                            if (t.ignition && t.speed === 0) {
+                                db.prepare(`
+                                    UPDATE ops_delivery_queue
+                                    SET ralenti_cliente_minutos = COALESCE(ralenti_cliente_minutos, 0) + 1
+                                    WHERE id = ?
+                                `).run(del.id);
+                            }
+                        } else if (del.fecha_llegada_geocerca && !del.fecha_salida_geocerca) {
+                            // Auto-Salida de Cliente/Proveedor & Cálculo de Estancia
+                            const arrTime = new Date(del.fecha_llegada_geocerca).getTime();
+                            const nowTime = new Date(nowIso).getTime();
+                            const estanciaMin = Math.max(1, Math.round((nowTime - arrTime) / (1000 * 60)));
+
+                            db.prepare(`
+                                UPDATE ops_delivery_queue
+                                SET fecha_salida_geocerca = ?, tiempo_estadia_min = ?, geocerca_auto_salida = 1
+                                WHERE id = ?
+                            `).run(nowIso, estanciaMin, del.id);
+                            logInfo(`🚪 [Auto-Geocerca Salida] Camión ${t.plate} salió de cliente ${del.cliente_id}. Estancia: ${estanciaMin} min.`);
+                        }
                     }
                 }
             }

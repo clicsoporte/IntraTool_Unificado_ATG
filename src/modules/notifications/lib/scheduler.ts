@@ -4,6 +4,7 @@ import { getDb } from '@/modules/core/lib/db';
 import { CORE_TABLE_NAMES } from '@/modules/core/lib/schema';
 import { logInfo, logError } from '@/modules/core/lib/logger';
 import { recalculateFleetMetrics } from '@/modules/fleet/lib/db';
+import { populateDeliveryQueueFromERPInternal } from '@/modules/operations/lib/actions';
 
 /**
  * Main runner for automated tasks.
@@ -41,24 +42,36 @@ export async function runSystemAudits(force: boolean = false, targetTaskId?: str
  */
 function shouldRunTask(task: any): boolean {
     const now = new Date();
+    const schedule = task.schedule ? task.schedule.trim() : '* * * * *';
+    const parts = schedule.split(/\s+/);
     
-    // 1. Check if it already ran today to prevent duplicate runs
-    if (task.lastRun) {
-        const lastRunDate = new Date(task.lastRun).toDateString();
-        if (lastRunDate === now.toDateString()) {
-            return false; // Already ran today
-        }
-    }
-    
-    // 2. Parse simple cron expression
-    const schedule = task.schedule;
-    if (!schedule) return true;
-    
+    // Parse cron fields
     try {
-        const parts = schedule.trim().split(/\s+/);
         if (parts.length === 5) {
             const [min, hour, dom, month, dow] = parts;
-            
+            const isSubDaily = min.startsWith('*/') || min === '*' || hour.startsWith('*/') || hour === '*';
+
+            // 1. Check lastRun:
+            if (task.lastRun) {
+                const lastRunTime = new Date(task.lastRun).getTime();
+                const elapsedMinutes = (now.getTime() - lastRunTime) / (1000 * 60);
+
+                if (min.startsWith('*/')) {
+                    const interval = parseInt(min.replace('*/', ''), 10);
+                    if (!isNaN(interval) && elapsedMinutes < (interval - 1)) {
+                        return false; // Not enough time has passed for this minute interval
+                    }
+                } else if (isSubDaily && elapsedMinutes < 1) {
+                    return false; // Prevent rapid duplicate runs within the same minute
+                } else if (!isSubDaily) {
+                    // For once-a-day or daily tasks (e.g. 0 8 * * *), check if already ran today
+                    const lastRunDate = new Date(task.lastRun).toDateString();
+                    if (lastRunDate === now.toDateString()) {
+                        return false; // Already ran today
+                    }
+                }
+            }
+                
             // Check day of week (dow)
             if (dow !== '*') {
                 const currentDayOfWeek = now.getDay(); // 0 is Sunday, 1 is Monday, ..., 6 is Saturday
@@ -123,6 +136,9 @@ async function executeTask(taskId: string) {
             break;
         case 'fleet-alerts-summary':
             await runAlertsSummaryReport();
+            break;
+        case 'deliveries-auto-queue':
+            await populateDeliveryQueueFromERPInternal({ daysLookback: 5, excludeCreditNotes: false });
             break;
         // Add more system tasks here
         default:

@@ -185,6 +185,45 @@ class _DeliveryProcessScreenState extends State<DeliveryProcessScreen> {
       }
     }
 
+    // Motivo Obligatorio en Rechazo / Parcial (según configuración web)
+    final requireIncidentNotes = _sysConfig['apk_require_incident_notes'] == 'true' || _sysConfig['apk_require_incident_notes'] == 'mandatory';
+    if (requireIncidentNotes) {
+      if (_estado == 'incompleto' && _notesCtrl.text.trim().isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('⚠️ Debe especificar en las Notas / Observaciones el motivo de la entrega parcial o faltante.'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 4),
+          ),
+        );
+        return;
+      }
+      if (_estado == 'rechazado' && _notesCtrl.text.trim().isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('⚠️ Debe ingresar en las Notas / Observaciones el motivo detallado del rechazo.'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 4),
+          ),
+        );
+        return;
+      }
+    }
+
+    // Validación de invariante: Pedida == Entregada + Faltante en cada renglón
+    for (final line in widget.doc.lines) {
+      if (line.pedida != (line.entregada + line.faltante)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('⚠️ Inconsistencia en artículo ${line.codigo}: Pedida (${line.pedida}) ≠ Entregada (${line.entregada}) + Faltante (${line.faltante}).'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+          ),
+        );
+        return;
+      }
+    }
+
     // 3. Paso Obligatorio 3: Nombre de la Persona que Recibe o Rechaza
     if (_recibeCtrl.text.trim().isEmpty) {
       final isRechazado = _estado == 'rechazado';
@@ -247,14 +286,16 @@ class _DeliveryProcessScreenState extends State<DeliveryProcessScreen> {
     });
 
     try {
-      // Capture Telemetry location of customer delivery
+      // Capture Telemetry location of customer delivery (Navixy del camión actuará como principal/fallback en servidor)
       try {
         final pos = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high).timeout(const Duration(seconds: 4));
         widget.doc.latitud = pos.latitude;
         widget.doc.longitud = pos.longitude;
-        AppLogger.log('📍 Telemetría Capturada (${widget.doc.clienteNombre}): Lat ${pos.latitude}, Lng ${pos.longitude}', level: 'SUCCESS', category: 'entrega');
+        AppLogger.log('📍 Telemetría Celular Capturada (${widget.doc.clienteNombre}): Lat ${pos.latitude}, Lng ${pos.longitude}', level: 'SUCCESS', category: 'entrega');
       } catch (e) {
-        AppLogger.log('⚠️ Telemetría no disponible al entregar: $e', level: 'WARNING', category: 'entrega');
+        widget.doc.latitud = null;
+        widget.doc.longitud = null;
+        AppLogger.log('📡 Telemetría celular no disponible al entregar (se usará GPS Navixy de cabina en servidor): $e', level: 'INFO', category: 'entrega');
       }
 
       if (mounted) setState(() => _savingPhase = '📸 Guardando firma y fotos...');

@@ -250,10 +250,10 @@ export default function RouteSheetsReportPage() {
         // Formato Horizontal (Letter Landscape): Ancho 279.4mm, Alto 215.9mm
         const doc = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'letter' });
         
-        const marginX = 12;
+        const marginX = 8;
         const pageWidth = 279.4;
         const pageHeight = 215.9;
-        const contentWidth = pageWidth - (marginX * 2); // 255.4mm
+        const contentWidth = pageWidth - (marginX * 2); // 263.4mm (Márgenes horizontales compactos de 8mm)
 
         const companyName = companyInfo?.name || "INDUSTRIAS GAREND S.A.";
         const companyTaxId = companyInfo?.taxId ? `Cédula Jurídica: ${companyInfo.taxId}` : "Cédula Jurídica: 3-101-133082";
@@ -265,25 +265,25 @@ export default function RouteSheetsReportPage() {
 
         // Función reusable para dibujar el membrete superior y control ISO 9001 en cada página
         const drawHeader = (pageNumber: number, totalPagesCount?: number) => {
-            let y = 14;
+            let y = 12;
 
             // Datos de Empresa
             doc.setFont('Helvetica', 'bold');
-            doc.setFontSize(14);
+            doc.setFontSize(13);
             doc.setTextColor(30, 58, 138); // Dark Blue
             doc.text(companyName.toUpperCase(), marginX, y);
             
-            doc.setFontSize(8.5);
+            doc.setFontSize(8);
             doc.setFont('Helvetica', 'normal');
             doc.setTextColor(71, 85, 105);
-            doc.text(`${companyTaxId} | ${companyContact}`, marginX, y + 4.5);
-            doc.text(companyAddress, marginX, y + 8.5);
+            doc.text(`${companyTaxId} | ${companyContact}`, marginX, y + 4.2);
+            doc.text(companyAddress, marginX, y + 8);
 
             // Badge Box Superior Derecho con Consecutivo y Código ISO 9001
-            const badgeW = 98;
+            const badgeW = 100;
             const badgeH = 19;
             const badgeX = pageWidth - marginX - badgeW;
-            const badgeY = 9;
+            const badgeY = 7;
 
             doc.setFillColor(239, 246, 255);
             doc.setDrawColor(147, 197, 253);
@@ -296,7 +296,7 @@ export default function RouteSheetsReportPage() {
 
             doc.setFontSize(12);
             doc.setTextColor(29, 78, 216);
-            doc.text(previewDoc.consecutivo, badgeX + 40, badgeY + 4.8);
+            doc.text(previewDoc.consecutivo, badgeX + 38, badgeY + 4.8);
 
             // Cuadro ISO 9001
             doc.setFillColor(224, 242, 254);
@@ -317,29 +317,31 @@ export default function RouteSheetsReportPage() {
             doc.setTextColor(30, 58, 138);
             doc.text(pageStr, badgeX + badgeW - 24, badgeY + 16.5);
 
-            y += 13;
+            y += 12;
             doc.setDrawColor(226, 232, 240);
             doc.line(marginX, y, marginX + contentWidth, y);
-            y += 3.5;
+            y += 3;
 
-            // Datos del Viaje en Una Sola Fila Compacta Horizontal
+            // Fila de Vinculación de Ruta (LIGA DE RUTA OBLIGATORIA EN TODAS LAS PÁGINAS)
+            // Fecha, Consecutivo, Paginación, Ruta, Chofer, Vehículo
             doc.setFillColor(248, 250, 252);
-            doc.setDrawColor(226, 232, 240);
+            doc.setDrawColor(203, 213, 225);
             doc.roundedRect(marginX, y, contentWidth, 8, 1, 1, 'FD');
 
             doc.setFontSize(7.5);
+            doc.setFont('Helvetica', 'normal');
             doc.setTextColor(71, 85, 105);
             doc.text("Ruta:", marginX + 3, y + 5.2);
             doc.setFont('Helvetica', 'bold');
             doc.setTextColor(15, 23, 42);
-            doc.text(previewDoc.ruta_nombre || 'N/A', marginX + 13, y + 5.2);
+            doc.text(previewDoc.ruta_nombre || 'N/A', marginX + 12, y + 5.2);
 
             doc.setFont('Helvetica', 'normal');
             doc.setTextColor(71, 85, 105);
-            doc.text("Chofer:", marginX + 80, y + 5.2);
+            doc.text("Chofer:", marginX + 75, y + 5.2);
             doc.setFont('Helvetica', 'bold');
             doc.setTextColor(15, 23, 42);
-            doc.text(previewDoc.chofer_nombre || 'N/A', marginX + 92, y + 5.2);
+            doc.text(previewDoc.chofer_nombre || 'N/A', marginX + 87, y + 5.2);
 
             doc.setFont('Helvetica', 'normal');
             doc.setTextColor(71, 85, 105);
@@ -351,7 +353,7 @@ export default function RouteSheetsReportPage() {
             return y + 12;
         };
 
-        // Encabezados de la Tabla Horizontal
+        // Encabezados de la Tabla Horizontal con Columna de Firma
         const drawTableHeaders = (y: number) => {
             doc.setFillColor(241, 245, 249);
             doc.rect(marginX, y, contentWidth, 7, 'F');
@@ -362,14 +364,21 @@ export default function RouteSheetsReportPage() {
             doc.setFontSize(7.5);
             doc.setTextColor(51, 65, 85);
 
-            // Columnas Horizontales con Firma Digital y Anchos Precisos sin Solapamiento
-            doc.text("Hora", marginX + 2, y + 4.8);                // x: 14mm  (ancho: 14mm)
-            doc.text("Cliente / Destino", marginX + 16, y + 4.8);   // x: 28mm  (ancho: 52mm)
-            doc.text("N° Doc", marginX + 70, y + 4.8);              // x: 82mm  (ancho: 28mm)
-            doc.text("Dirección (EMB)", marginX + 100, y + 4.8);    // x: 112mm (ancho: 64mm)
-            doc.text("Recibido Por", marginX + 166, y + 4.8);       // x: 178mm (ancho: 36mm)
-            doc.text("Estado", marginX + 204, y + 4.8);             // x: 216mm (ancho: 24mm)
-            doc.text("Firma Digital", marginX + 230, y + 4.8);      // x: 242mm (ancho: 25mm)
+            // Anchos optimizados: Total 263.4mm con márgenes horizontales de 8mm
+            // 1. Hora:          offset + 2   (x = 10mm,  ancho: 26mm)
+            // 2. Cliente:       offset + 28  (x = 36mm,  ancho: 64mm)
+            // 3. N° Doc/Boleta: offset + 92  (x = 100mm, ancho: 34mm)
+            // 4. Dirección EMB: offset + 126 (x = 134mm, ancho: 52mm) -> Reducido
+            // 5. Recibido Por:  offset + 178 (x = 186mm, ancho: 25mm) -> Reducido
+            // 6. Estado:        offset + 204 (x = 212mm, ancho: 23mm)
+            // 7. Firma:         offset + 228 (x = 236mm, ancho: 34mm) -> Espacio perfecto para recuadro de firma
+            doc.text("Hora (Ing / Ent / Sal)", marginX + 2, y + 4.8);
+            doc.text("Cliente / Destino", marginX + 28, y + 4.8);
+            doc.text("N° Doc / Boleta", marginX + 92, y + 4.8);
+            doc.text("Dirección (EMB)", marginX + 126, y + 4.8);
+            doc.text("Recibido Por", marginX + 178, y + 4.8);
+            doc.text("Estado", marginX + 204, y + 4.8);
+            doc.text("Firma", marginX + 234, y + 4.8);
 
             return y + 7;
         };
@@ -386,7 +395,7 @@ export default function RouteSheetsReportPage() {
         const candidateTrs = deliveryTableTrs.length > 0 ? deliveryTableTrs : fallbackTrs;
         const rows = candidateTrs.filter(tr => {
             const tds = tr.querySelectorAll('td');
-            // La fila de entregas tiene 7 columnas y no contiene las etiquetas de encabezado de datos generales
+            // La fila de entregas tiene al menos 6 columnas y no contiene las etiquetas de encabezado de datos generales
             const text = tr.textContent || '';
             const isMetadataRow = text.includes('Ruta:') || text.includes('Chofer:') || text.includes('Vehículo:');
             return tds.length >= 6 && !isMetadataRow;
@@ -402,18 +411,32 @@ export default function RouteSheetsReportPage() {
             rows.forEach((row) => {
                 const cols = row.querySelectorAll('td');
                 if (cols.length >= 6) {
-                    const hora = cols[0]?.textContent?.trim() || '';
-                    const clienteRaw = cols[1]?.textContent?.trim() || '';
-                    const clienteLines = clienteRaw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-                    const cliente = clienteLines[0] || '';
+                    const horaRaw = cols[0]?.innerText || cols[0]?.textContent || '';
+                    const horaLines = horaRaw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+                    // Separar nombre de cliente y ID de cliente
+                    const clienteEl = cols[1];
+                    let clienteName = '';
+                    let clienteId = '';
+                    if (clienteEl) {
+                        const strongEl = clienteEl.querySelector('strong');
+                        const spanEl = clienteEl.querySelector('span');
+                        clienteName = strongEl?.textContent?.trim() || '';
+                        clienteId = spanEl?.textContent?.trim() || '';
+                        if (!clienteName) {
+                            const raw = clienteEl.textContent?.trim() || '';
+                            const parts = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+                            clienteName = parts[0] || '';
+                            clienteId = parts[1] || '';
+                        }
+                    }
+
                     const docNum = cols[2]?.textContent?.trim() || '';
                     const direccion = cols[3]?.textContent?.trim() || '';
                     const recibidoPor = cols[4]?.textContent?.trim() || '';
                     const estado = cols[5]?.textContent?.trim() || '';
-                    const imgEl = cols[6]?.querySelector('img');
-                    const firmaSrc = imgEl ? imgEl.getAttribute('src') : null;
 
-                    const rowHeight = 12.5; // Altura estándar para acomodar la firma digital
+                    const rowHeight = 13.5; // Altura cómoda para alojar recuadro de firma y multi-línea
 
                     // Salto de página para entregas si supera el límite de página
                     if (currentY + rowHeight > pageHeight - 15) {
@@ -426,130 +449,108 @@ export default function RouteSheetsReportPage() {
                     doc.setDrawColor(241, 245, 249);
                     doc.line(marginX, currentY, marginX + contentWidth, currentY);
 
-                    // 1. Hora
+                    // 1. Hora (Ing / Ent / Sal) - x = marginX + 2, ancho útil 25mm
                     doc.setFont('Helvetica', 'normal');
-                    doc.setFontSize(7.5);
-                    doc.setTextColor(30, 41, 59);
-                    doc.text(hora, marginX + 2, currentY + 7);
-
-                    // 2. Cliente (max 52mm de ancho)
-                    const splitClient = doc.splitTextToSize(cliente, 52);
-                    doc.setFont('Helvetica', 'bold');
-                    doc.text(splitClient[0], marginX + 16, currentY + 5.5);
-                    if (clienteLines[1]) {
-                        doc.setFont('Helvetica', 'normal');
-                        doc.setFontSize(6.5);
-                        doc.setTextColor(100, 116, 139);
-                        doc.text(clienteLines[1], marginX + 16, currentY + 9.5);
+                    doc.setFontSize(6.5);
+                    doc.setTextColor(51, 65, 85);
+                    if (horaLines.length > 0) {
+                        let horaLineY = currentY + 3.8;
+                        horaLines.forEach((line) => {
+                            doc.text(line, marginX + 2, horaLineY);
+                            horaLineY += 3.1;
+                        });
+                    } else {
+                        doc.text('--:--', marginX + 2, currentY + 6.5);
                     }
 
-                    // 3. N° Doc y Boleta asociada (Factura / Boleta / Devolución ajustado a 27mm max)
+                    // 2. Cliente / Destino - x = marginX + 28, ancho útil 62mm
+                    const splitClient = doc.splitTextToSize(clienteName, 62);
+                    doc.setFont('Helvetica', 'bold');
+                    doc.setFontSize(7);
+                    doc.setTextColor(15, 23, 42);
+                    doc.text(splitClient[0], marginX + 28, currentY + 4.2);
+                    if (splitClient[1]) {
+                        doc.text(splitClient[1], marginX + 28, currentY + 7.4);
+                        if (clienteId) {
+                            doc.setFont('Helvetica', 'normal');
+                            doc.setFontSize(6);
+                            doc.setTextColor(100, 116, 139);
+                            doc.text(clienteId, marginX + 28, currentY + 10.6);
+                        }
+                    } else if (clienteId) {
+                        doc.setFont('Helvetica', 'normal');
+                        doc.setFontSize(6);
+                        doc.setTextColor(100, 116, 139);
+                        doc.text(clienteId, marginX + 28, currentY + 7.8);
+                    }
+
+                    // 3. N° Doc y Boleta asociada - x = marginX + 92, ancho útil 32mm
                     const docCellRaw = cols[2]?.textContent?.trim() || '';
                     const docLines = docCellRaw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-                    const primaryDocNum = docLines[0] || docNum;
+                    const rawPrimaryDocNum = docLines[0] || docNum;
+                    const primaryDocNum = rawPrimaryDocNum.replace('-PARTIAL', '').replace('-RETRY', '').trim();
                     const boletaLine = docLines.find(l => l.includes('Boleta:')) || '';
 
                     doc.setFont('Helvetica', 'bold');
-                    doc.setFontSize(7.5);
+                    doc.setFontSize(7);
                     doc.setTextColor(15, 23, 42);
-                    doc.text(primaryDocNum, marginX + 70, boletaLine ? currentY + 5.2 : currentY + 7);
+                    doc.text(primaryDocNum, marginX + 92, boletaLine ? currentY + 4.5 : currentY + 6.8);
 
                     if (boletaLine) {
                         doc.setFont('Helvetica', 'bold');
-                        doc.setFontSize(6.2);
+                        doc.setFontSize(6);
                         doc.setTextColor(2, 132, 199); // #0284c7 (Sky Blue)
                         const cleanBoleta = boletaLine.replace('📄', '').trim();
-                        doc.text(cleanBoleta, marginX + 70, currentY + 9.5);
+                        doc.text(cleanBoleta, marginX + 92, currentY + 8.8);
                     }
 
-                    // 4. Dirección EMB (ancho 63mm max)
+                    // 4. Dirección EMB - x = marginX + 126, ancho útil 50mm (reducido para dar espacio a la firma)
                     doc.setFont('Helvetica', 'normal');
-                    doc.setFontSize(7);
+                    doc.setFontSize(6.5);
                     doc.setTextColor(71, 85, 105);
-                    const splitAddress = doc.splitTextToSize(direccion, 63);
-                    doc.text(splitAddress[0] || '', marginX + 100, currentY + 5.5);
+                    const splitAddress = doc.splitTextToSize(direccion, 50);
+                    doc.text(splitAddress[0] || '', marginX + 126, currentY + 4.5);
                     if (splitAddress[1]) {
-                        doc.text(splitAddress[1], marginX + 100, currentY + 9);
+                        doc.text(splitAddress[1], marginX + 126, currentY + 7.8);
+                    }
+                    if (splitAddress[2]) {
+                        doc.text(splitAddress[2], marginX + 126, currentY + 11.0);
                     }
 
-                    // 5. Recibido Por (ancho 35mm max)
-                    const splitRecibido = doc.splitTextToSize(recibidoPor || '-', 35);
-                    doc.text(splitRecibido[0] || '-', marginX + 166, currentY + 7);
+                    // 5. Recibido Por - x = marginX + 178, ancho útil 24mm (reducido para dar espacio a la firma)
+                    const splitRecibido = doc.splitTextToSize(recibidoPor || '-', 24);
+                    doc.setFont('Helvetica', 'normal');
+                    doc.setFontSize(6.8);
+                    doc.setTextColor(30, 41, 59);
+                    doc.text(splitRecibido[0] || '-', marginX + 178, currentY + 6.8);
 
-                    // 6. Color y Texto de Estado (ancho 22mm max)
+                    // 6. Color y Texto de Estado - x = marginX + 204, ancho útil 22mm
                     if (estado.toLowerCase().includes('completo')) {
-                        doc.setTextColor(5, 150, 105);
+                        doc.setTextColor(5, 150, 105); // Verde esmeralda
                     } else if (estado.toLowerCase().includes('no entregado')) {
-                        doc.setTextColor(180, 83, 9); // ámbar #b45309
+                        doc.setTextColor(180, 83, 9); // Ámbar oscuro
                     } else if (estado.toLowerCase().includes('incompleto')) {
                         doc.setTextColor(217, 119, 6);
                     } else {
                         doc.setTextColor(220, 38, 38);
                     }
                     doc.setFont('Helvetica', 'bold');
-                    doc.setFontSize(7.5);
-                    doc.text(estado, marginX + 204, currentY + 7);
+                    doc.setFontSize(7);
+                    doc.text(estado, marginX + 204, currentY + 6.8);
 
-                    // 7. Renderizado de Firma Digital en Recuadro Uniforme
-                    const sigBoxX = marginX + 228;
-                    const sigBoxY = currentY + 1.2;
-                    const sigBoxW = 24;
-                    const sigBoxH = 10;
-
+                    // 7. Cuadro de Firma en PDF - x = marginX + 228, ancho 32mm, alto 9.5mm
                     doc.setDrawColor(203, 213, 225);
                     doc.setFillColor(255, 255, 255);
-                    doc.roundedRect(sigBoxX, sigBoxY, sigBoxW, sigBoxH, 1, 1, 'FD');
-
-                    if (firmaSrc && firmaSrc.startsWith('data:image')) {
-                        try {
-                            doc.addImage(firmaSrc, 'PNG', sigBoxX + 1, sigBoxY + 0.8, sigBoxW - 2, sigBoxH - 1.6);
-                        } catch (imgErr) {
-                            console.warn("No se pudo insertar la firma en PDF", imgErr);
-                            doc.setFont('Helvetica', 'italic');
-                            doc.setFontSize(5.5);
-                            doc.setTextColor(148, 163, 184);
-                            doc.text("Firma Registrada", sigBoxX + 2, sigBoxY + 5.5);
-                        }
-                    } else {
-                        doc.setFont('Helvetica', 'italic');
-                        doc.setFontSize(5.5);
-                        doc.setTextColor(148, 163, 184);
-                        doc.text("Sin Firma Digital", sigBoxX + 2.5, sigBoxY + 5.5);
-                    }
+                    doc.roundedRect(marginX + 228, currentY + 1.8, 32, 9.5, 1, 1, 'FD');
+                    doc.setFont('Helvetica', 'italic');
+                    doc.setFontSize(6);
+                    doc.setTextColor(148, 163, 184);
+                    doc.text("Firma", marginX + 241, currentY + 7.2);
 
                     currentY += rowHeight;
                 }
             });
         }
-
-        // Helper para renderizar el Bloque Estándar de Firmas de Cierre en cualquier página
-        const drawSignaturesBlock = (startY: number) => {
-            const sigColW = contentWidth * 0.42;
-            const sigColSpacing = contentWidth * 0.16;
-
-            doc.setDrawColor(148, 163, 184);
-            doc.setLineWidth(0.4);
-            // Línea firma chofer
-            doc.line(marginX + 10, startY + 12, marginX + 10 + sigColW, startY + 12);
-            // Línea firma logística
-            doc.line(marginX + 10 + sigColW + sigColSpacing, startY + 12, marginX + contentWidth - 10, startY + 12);
-
-            doc.setFont('Helvetica', 'bold');
-            doc.setFontSize(8.5);
-            doc.setTextColor(51, 65, 85);
-            doc.text("FIRMA CHOFER / TRANSPORTISTA", marginX + 10 + (sigColW / 2) - 26, startY + 17);
-            doc.text("RECIBIDO / VERIFICADO LOGÍSTICA", marginX + 10 + sigColW + sigColSpacing + (sigColW / 2) - 26, startY + 17);
-
-            doc.setFont('Helvetica', 'normal');
-            doc.setFontSize(7.5);
-            doc.setTextColor(100, 116, 139);
-            doc.text(previewDoc.chofer_nombre || 'Transportista', marginX + 10 + (sigColW / 2) - 15, startY + 22);
-            doc.text("Firma de Conforme", marginX + 10 + sigColW + sigColSpacing + (sigColW / 2) - 15, startY + 22);
-        };
-
-        // Renderizar firmas de cierre al final de la Hoja 1
-        const page1SigY = Math.min(currentY + 6, pageHeight - 35);
-        drawSignaturesBlock(page1SigY);
 
         // PÁGINA 2 OBLIGATORIA: ANEXO DE LIMPIEZA E INSPECCIÓN DE VEHÍCULOS ISO 9001
         doc.addPage();
@@ -629,9 +630,6 @@ export default function RouteSheetsReportPage() {
         doc.text("CONFORME", marginX + col1W + 7, finalPageY + 5);
         finalPageY += 10;
 
-        // Renderizar firmas de cierre en Hoja 2
-        drawSignaturesBlock(finalPageY);
-
         // Pie de página ISO 9001
         doc.setFontSize(7);
         doc.setTextColor(148, 163, 184);
@@ -641,9 +639,9 @@ export default function RouteSheetsReportPage() {
         // SEGUNDA PASADA: ESTAMPAR 'Hoja X de Y' EN TODAS LAS PÁGINAS PARA TRAZABILIDAD
         // =========================================================================
         const totalPages = doc.getNumberOfPages();
-        const badgeW = 98;
+        const badgeW = 100;
         const badgeX = pageWidth - marginX - badgeW;
-        const badgeY = 9;
+        const badgeY = 7;
 
         for (let p = 1; p <= totalPages; p++) {
             doc.setPage(p);

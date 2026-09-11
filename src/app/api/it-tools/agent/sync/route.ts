@@ -5,7 +5,7 @@ import { IT_TOOLS_TABLES } from '@/modules/it-tools/lib/schema';
 import crypto from 'crypto';
 
 // Helper to validate agent API key
-async function validateAgentAuth(req: NextRequest, db: any): Promise<{ authed: boolean; secretKey: string }> {
+async function validateAgentAuth(req: NextRequest, db: any): Promise<{ authed: boolean; secretKey: string | null }> {
   const authHeader = req.headers.get('Authorization') || req.headers.get('X-Agent-Secret-Key');
   
   db.exec("CREATE TABLE IF NOT EXISTS it_settings (key TEXT PRIMARY KEY, value TEXT)");
@@ -20,18 +20,17 @@ async function validateAgentAuth(req: NextRequest, db: any): Promise<{ authed: b
 
   const currentSecret = secretSetting.value.trim();
 
-  // Permitir handshake/registro inicial si el agente no posee token en su instalacion
   if (!authHeader) {
-    return { authed: true, secretKey: currentSecret };
+    return { authed: false, secretKey: null };
   }
 
   const token = authHeader.replace(/^Bearer\s+/i, '').trim();
   const tokenBuf = Buffer.from(token);
   const secretBuf = Buffer.from(currentSecret);
 
-  if (tokenBuf.length !== secretBuf.length) return { authed: false, secretKey: currentSecret };
+  if (tokenBuf.length !== secretBuf.length) return { authed: false, secretKey: null };
   const isValid = crypto.timingSafeEqual(tokenBuf, secretBuf);
-  return { authed: isValid, secretKey: currentSecret };
+  return { authed: isValid, secretKey: isValid ? currentSecret : null };
 }
 
 /**

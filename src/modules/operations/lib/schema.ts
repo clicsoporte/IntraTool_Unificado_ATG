@@ -594,6 +594,11 @@ export async function initializeOperationsSchema(db: Database) {
         if (!cols.includes('firma_cliente')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN firma_cliente TEXT;`);
         if (!cols.includes('nombre_recibe')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN nombre_recibe TEXT;`);
         if (!cols.includes('boleta_numero')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN boleta_numero TEXT;`);
+        if (!cols.includes('motivo_salida')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN motivo_salida TEXT;`);
+        if (!cols.includes('referencia_doc')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN referencia_doc TEXT;`);
+        if (!cols.includes('requiere_autorizacion')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN requiere_autorizacion INTEGER DEFAULT 0;`);
+        if (!cols.includes('autorizado_por')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN autorizado_por TEXT;`);
+        if (!cols.includes('fecha_autorizacion')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN fecha_autorizacion TEXT;`);
     } catch (e: any) {
         console.warn('Self-healing ops_delivery_queue check warning:', e.message);
     }
@@ -740,6 +745,70 @@ export async function initializeOperationsSchema(db: Database) {
         if (!devCols.includes('mdm_pending_reboot')) db.exec(`ALTER TABLE fleet_registered_devices ADD COLUMN mdm_pending_reboot INTEGER DEFAULT 0;`);
     } catch (e: any) {
         console.warn('Self-healing auxiliary tables check warning:', e.message);
+    }
+
+    // Ensure origen_salida and origen_llegada columns for ops_delivery_assignments
+    try {
+        const assignCols = db.prepare("PRAGMA table_info('ops_delivery_assignments')").all().map((c: any) => c.name);
+        if (!assignCols.includes('origen_salida')) db.exec(`ALTER TABLE ops_delivery_assignments ADD COLUMN origen_salida TEXT DEFAULT 'manual';`);
+        if (!assignCols.includes('origen_llegada')) db.exec(`ALTER TABLE ops_delivery_assignments ADD COLUMN origen_llegada TEXT DEFAULT 'manual';`);
+    } catch (e: any) {
+        console.warn('Self-healing ops_delivery_assignments origin columns warning:', e.message);
+    }
+
+    // Ensure geofence columns for ops_delivery_queue, core_customers, core_suppliers
+    try {
+        const queueCols = db.prepare("PRAGMA table_info('ops_delivery_queue')").all().map((c: any) => c.name);
+        if (!queueCols.includes('fecha_llegada_geocerca')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN fecha_llegada_geocerca TEXT;`);
+        if (!queueCols.includes('fecha_salida_geocerca')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN fecha_salida_geocerca TEXT;`);
+        if (!queueCols.includes('tiempo_estadia_min')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN tiempo_estadia_min INTEGER;`);
+        if (!queueCols.includes('geocerca_auto_llegada')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN geocerca_auto_llegada INTEGER DEFAULT 0;`);
+        if (!queueCols.includes('geocerca_auto_salida')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN geocerca_auto_salida INTEGER DEFAULT 0;`);
+        if (!queueCols.includes('ralenti_cliente_minutos')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN ralenti_cliente_minutos INTEGER DEFAULT 0;`);
+
+        const custCols = db.prepare("PRAGMA table_info('core_customers')").all().map((c: any) => c.name);
+        if (!custCols.includes('latitude')) db.exec(`ALTER TABLE core_customers ADD COLUMN latitude REAL;`);
+        if (!custCols.includes('longitude')) db.exec(`ALTER TABLE core_customers ADD COLUMN longitude REAL;`);
+        if (!custCols.includes('geofence_radius_m')) db.exec(`ALTER TABLE core_customers ADD COLUMN geofence_radius_m INTEGER DEFAULT 200;`);
+        if (!custCols.includes('hora_apertura')) db.exec(`ALTER TABLE core_customers ADD COLUMN hora_apertura TEXT;`);
+        if (!custCols.includes('hora_cierre')) db.exec(`ALTER TABLE core_customers ADD COLUMN hora_cierre TEXT;`);
+        if (!custCols.includes('pausa_inicio')) db.exec(`ALTER TABLE core_customers ADD COLUMN pausa_inicio TEXT;`);
+        if (!custCols.includes('pausa_fin')) db.exec(`ALTER TABLE core_customers ADD COLUMN pausa_fin TEXT;`);
+        if (!custCols.includes('es_prioritario')) db.exec(`ALTER TABLE core_customers ADD COLUMN es_prioritario INTEGER DEFAULT 0;`);
+        if (!custCols.includes('requiere_cita')) db.exec(`ALTER TABLE core_customers ADD COLUMN requiere_cita INTEGER DEFAULT 0;`);
+        if (!custCols.includes('aplica_multa')) db.exec(`ALTER TABLE core_customers ADD COLUMN aplica_multa INTEGER DEFAULT 0;`);
+        if (!custCols.includes('notas_recepcion')) db.exec(`ALTER TABLE core_customers ADD COLUMN notas_recepcion TEXT;`);
+
+        const suppCols = db.prepare("PRAGMA table_info('core_suppliers')").all().map((c: any) => c.name);
+        if (suppCols.length > 0) {
+            if (!suppCols.includes('latitude')) db.exec(`ALTER TABLE core_suppliers ADD COLUMN latitude REAL;`);
+            if (!suppCols.includes('longitude')) db.exec(`ALTER TABLE core_suppliers ADD COLUMN longitude REAL;`);
+            if (!suppCols.includes('geofence_radius_m')) db.exec(`ALTER TABLE core_suppliers ADD COLUMN geofence_radius_m INTEGER DEFAULT 200;`);
+        }
+    } catch (e: any) {
+        console.warn('Self-healing geofence customer/supplier columns warning:', e.message);
+    }
+
+    // 🚀 Performance Optimization: Índices de Alta Velocidad para Operaciones y Telemetría
+    try {
+        db.exec(`
+            CREATE INDEX IF NOT EXISTS idx_ops_queue_asignacion_estado 
+            ON ops_delivery_queue (asignacion_id, estado, entregado);
+
+            CREATE INDEX IF NOT EXISTS idx_ops_queue_fechas 
+            ON ops_delivery_queue (fecha_entrega, fecha_registro);
+
+            CREATE INDEX IF NOT EXISTS idx_ops_queue_cliente 
+            ON ops_delivery_queue (cliente_id);
+
+            CREATE INDEX IF NOT EXISTS idx_ops_gps_logs_asignacion_id 
+            ON ops_delivery_gps_logs (asignacion_id, id DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_ops_assignments_fecha 
+            ON ops_delivery_assignments (fecha, activa);
+        `);
+    } catch (e: any) {
+        console.warn('Warning creating operational database indices:', e.message);
     }
 
     console.log('Operations schema initialized at version', currentVersion < 17 ? 17 : currentVersion);

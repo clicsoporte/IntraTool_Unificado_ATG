@@ -62,6 +62,14 @@ export default function OperationsPage() {
             icon: Truck,
             bgColor: "bg-teal-600",
             color: "text-teal-600"
+        },
+        {
+            href: "/dashboard/operations/vouchers",
+            title: "Boletas Operativas (Salidas de Bodega) 📄",
+            description: "Creación y autorización digital de boletas para alistamiento en bodega: entregas incompletas, muestras, regalías y devoluciones sin factura.",
+            icon: FileSignature,
+            bgColor: "bg-blue-600",
+            color: "text-blue-600"
         }
     ];
 

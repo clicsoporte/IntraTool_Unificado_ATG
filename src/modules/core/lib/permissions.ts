@@ -32,6 +32,7 @@ export const permissionGroups = {
     ],
     "Centro de Operaciones y Trazabilidad (Nuevo)": [
         "operations:access", "operaciones_chofer_web", "operations:create", "operations:read:all", "operations:approve", "operations:sign",
+        "operations:vouchers:read", "operations:vouchers:create", "operations:vouchers:approve",
         "deliveries:read", "deliveries:write", "deliveries:revert", "deliveries:admin", "deliveries:collect", "deliveries:customers",
         "deliveries:route-sheets", "deliveries:gps:read", "deliveries:analytics:read", "deliveries:analytics:read:all", "deliveries:audit:read"
     ],
@@ -96,6 +97,9 @@ export const permissionTranslations = {
     "consignments:closures:create": "Consignación: Crear Cierres",
     "consignments:closures:annul": "Consignación: Anular Cierres",
     "operations:access": "Operaciones: Acceso General", "operaciones_chofer_web": "Operaciones: Portal Entregas Móvil (Choferes)", "operations:create": "Operaciones: Crear Documentos", "operations:read:all": "Operaciones: Ver Todos", "operations:approve": "Operaciones: Aprobar Documentos", "operations:sign": "Operaciones: Firmar Entregas/Recibos",
+    "operations:vouchers:read": "Boletas Operativas: Consultar e Imprimir",
+    "operations:vouchers:create": "Boletas Operativas: Crear Boleta de Salida",
+    "operations:vouchers:approve": "Boletas Operativas: Autorizar y Aprobar Salida (Supervisión/Jefatura)",
     "deliveries:read": "Entregas: Ver Monitor y Dashboard",
     "deliveries:write": "Entregas: Registrar Entregas y Despachar",
     "deliveries:revert": "Entregas: Revertir Estado de Entregas Procesadas",
@@ -331,6 +335,9 @@ export const permissionTree: Partial<Record<AppPermission, AppPermission[]>> = {
     "operations:read:all": ["operations:access"],
     "operations:approve": ["operations:access"],
     "operations:sign": ["operations:access"],
+    "operations:vouchers:read": ["operations:access"],
+    "operations:vouchers:create": ["operations:vouchers:read"],
+    "operations:vouchers:approve": ["operations:vouchers:read"],
     "operations:access": ["dashboard:access"],
 };
 

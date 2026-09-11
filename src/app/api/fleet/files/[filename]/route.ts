@@ -13,10 +13,7 @@ export async function GET(
   if (!webUser) {
     const fleetAuth = await authenticateFleetRequest(request);
     if ('response' in fleetAuth) {
-      const authHeader = request.headers.get('authorization') || request.headers.get('Authorization');
-      if (authHeader) {
-        return fleetAuth.response;
-      }
+      return fleetAuth.response;
     }
   }
 

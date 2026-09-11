@@ -6,13 +6,18 @@ import 'photo_storage_service.dart';
 
 class OfflineDbService {
   static Database? _db;
+  static bool _hasHealed = false;
 
   Future<Database> get database async {
     if (_db != null) {
-      await autoHealSchema(_db!);
+      if (!_hasHealed) {
+        _hasHealed = true;
+        await autoHealSchema(_db!);
+      }
       return _db!;
     }
     _db = await _initDb();
+    _hasHealed = true;
     await autoHealSchema(_db!);
     return _db!;
   }
@@ -88,6 +93,29 @@ class OfflineDbService {
       if (!colNames.contains('it_emergency_phones')) {
         await db.execute('ALTER TABLE deliveries ADD COLUMN it_emergency_phones TEXT');
       }
+      if (!colNames.contains('es_prioritario')) {
+        await db.execute('ALTER TABLE deliveries ADD COLUMN es_prioritario INTEGER DEFAULT 0');
+      }
+      if (!colNames.contains('requiere_cita')) {
+        await db.execute('ALTER TABLE deliveries ADD COLUMN requiere_cita INTEGER DEFAULT 0');
+      }
+      if (!colNames.contains('aplica_multa')) {
+        await db.execute('ALTER TABLE deliveries ADD COLUMN aplica_multa INTEGER DEFAULT 0');
+      }
+      if (!colNames.contains('hora_apertura')) {
+        await db.execute('ALTER TABLE deliveries ADD COLUMN hora_apertura TEXT');
+      }
+      if (!colNames.contains('hora_cierre')) {
+        await db.execute('ALTER TABLE deliveries ADD COLUMN hora_cierre TEXT');
+      }
+      if (!colNames.contains('notas_recepcion')) {
+        await db.execute('ALTER TABLE deliveries ADD COLUMN notas_recepcion TEXT');
+      }
+
+      // 🚀 Performance Indexes para SQLite Móvil
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_del_synced_estado ON deliveries (is_synced, estado)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_del_lines_delivery_id ON delivery_lines (delivery_id)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_app_logs_synced ON app_logs (is_synced, id)');
 
       await db.execute('''
         CREATE TABLE IF NOT EXISTS delivery_lines (

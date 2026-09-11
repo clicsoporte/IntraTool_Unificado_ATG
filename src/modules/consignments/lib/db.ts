@@ -633,16 +633,16 @@ export async function annulPeriodClosure(closureId: number, updatedBy: string): 
             throw new Error("Acción no permitida: Solo se pueden anular cierres que se encuentren en estado 'Aprobado'.");
         }
 
-        const isUsed = db.prepare('SELECT id FROM period_closures WHERE previous_closure_id = ?').get(closureId);
+        const isUsed = db.prepare(`SELECT id FROM ${CONSIGNMENTS_TABLES.closures} WHERE previous_closure_id = ?`).get(closureId);
         if (isUsed) {
             throw new Error("Anulación bloqueada: Este cierre no se puede anular porque ya fue utilizado como el punto de partida para el siguiente período de facturación.");
         }
         
         const newNotes = `Anulado por ${updatedBy} el ${new Date().toISOString()}`;
-        db.prepare(`UPDATE period_closures SET status = 'annulled', notes = ? WHERE id = ?`).run(newNotes, closureId);
+        db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.closures} SET status = 'annulled', notes = ? WHERE id = ?`).run(newNotes, closureId);
 
         if (closureToAnnul.is_initial_inventory === 1) {
-            db.prepare('UPDATE consignment_agreements SET has_initial_inventory = 0 WHERE id = ?').run(closureToAnnul.agreement_id);
+            db.prepare(`UPDATE ${CONSIGNMENTS_TABLES.agreements} SET has_initial_inventory = 0 WHERE id = ?`).run(closureToAnnul.agreement_id);
             logWarn(`Initial inventory flag reset for agreement ${closureToAnnul.agreement_id} due to closure annulment.`);
         }
         
@@ -796,7 +796,7 @@ export async function getConsignmentsReportData(
         effectiveStartDate = dateRange.from;
         effectiveEndDate = dateRange.to;
         initialStockClosure = db.prepare(`
-            SELECT * FROM period_closures 
+            SELECT * FROM ${CONSIGNMENTS_TABLES.closures} 
             WHERE agreement_id = ? AND status = 'approved' AND created_at < ? 
             ORDER BY created_at DESC LIMIT 1
         `).get(agreementIdNum, effectiveStartDate.toISOString()) as PeriodClosure | null;
@@ -817,7 +817,7 @@ export async function getConsignmentsReportData(
     const getStockFromClosure = (closure: PeriodClosure | null): Map<string, number> => {
         const stockMap = new Map<string, number>();
         if (closure?.physical_count_ref) {
-            const counts = db.prepare('SELECT product_id, quantity FROM physical_counts WHERE agreement_id = ? AND counted_at = ?').all(closure.agreement_id, closure.physical_count_ref) as { product_id: string, quantity: number }[];
+            const counts = db.prepare(`SELECT product_id, quantity FROM ${CONSIGNMENTS_TABLES.counts} WHERE agreement_id = ? AND counted_at = ?`).all(closure.agreement_id, closure.physical_count_ref) as { product_id: string, quantity: number }[];
             counts.forEach(c => stockMap.set(c.product_id, c.quantity));
         }
         return stockMap;
