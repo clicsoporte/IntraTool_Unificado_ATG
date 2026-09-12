@@ -515,11 +515,10 @@ export default function VouchersPage() {
             if (res.success) {
                 toast({ 
                     title: 'Despacho Procesado', 
-                    description: customMedio === 'camion' || (!customMedio && selectedApproveBoleta?.medio_envio === 'camion')
+                    description: customMedio === 'camion'
                         ? 'Se ha enviado a la Cola General de Despacho (Camiones).'
                         : 'Se ha procesado como Salida Directa (Encomienda / Vendedor).'
                 });
-                setSelectedApproveBoleta(null);
                 loadData();
             } else {
                 throw new Error(res.error);
@@ -848,7 +847,7 @@ export default function VouchersPage() {
                         </DialogDescription>
                     </DialogHeader>
 
-                    <form onSubmit={handleCreateBoleta} className="space-y-4 pt-2">
+                    <form onSubmit={(e) => handleCreateBoletaWithParams(e, true)} className="space-y-4 pt-2">
                         {/* Motivo y Documento Referencia */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div className="space-y-1.5">
