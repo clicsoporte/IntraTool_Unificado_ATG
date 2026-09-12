@@ -111,7 +111,8 @@ export default function VouchersPage() {
         motivoSalida: 'faltante' as 'faltante' | 'devolucion' | 'muestra' | 'regalia' | 'otro',
         referenciaDoc: '',
         comentario: '',
-        direccionEmbarqueId: ''
+        direccionEmbarqueId: '',
+        medioEnvio: 'camion' as 'camion' | 'encomienda' | 'vendedor_mostrador'
     });
 
     // Reference Document search state
@@ -474,16 +475,6 @@ export default function VouchersPage() {
         }
     };
 
-    const [formData, setFormData] = useState({
-        clienteId: '',
-        clienteNombre: '',
-        motivoSalida: 'faltante' as 'faltante' | 'devolucion' | 'muestra' | 'regalia' | 'otro',
-        referenciaDoc: '',
-        comentario: '',
-        direccionEmbarqueId: '',
-        medioEnvio: 'camion' as 'camion' | 'encomienda' | 'vendedor_mostrador'
-    });
-
     const handleApprove = async (id: number) => {
         try {
             const { approveBoletaOperativaAction } = await import('@/modules/operations/lib/actions');
@@ -493,7 +484,6 @@ export default function VouchersPage() {
                     title: 'Boleta Autorizada por Jefatura', 
                     description: 'La boleta ahora tiene validez oficial para alistamiento y salida de bodega.' 
                 });
-                setSelectedApproveBoleta(null);
                 loadData();
             } else {
                 throw new Error(res.error);
@@ -1157,52 +1147,6 @@ export default function VouchersPage() {
                             </Button>
                         </DialogFooter>
                     </form>
-                </DialogContent>
-            </Dialog>
-
-            {/* Modal de Opciones de Autorización */}
-            <Dialog open={!!selectedApproveBoleta} onOpenChange={(open) => !open && setSelectedApproveBoleta(null)}>
-                <DialogContent className="max-w-md rounded-2xl">
-                    <DialogHeader>
-                        <DialogTitle className="text-base font-bold flex items-center gap-2 text-emerald-600">
-                            <CheckCircle2 className="w-5 h-5" /> Autorizar Boleta #{selectedApproveBoleta?.boleta_numero || selectedApproveBoleta?.documento_numero}
-                        </DialogTitle>
-                        <DialogDescription className="text-xs">
-                            Seleccione el destino de entrega para esta boleta autorizada.
-                        </DialogDescription>
-                    </DialogHeader>
-
-                    <div className="space-y-3 py-2">
-                        <div className="p-3 bg-muted/40 rounded-xl border border-muted text-xs space-y-1">
-                            <div><strong className="text-foreground">Cliente:</strong> {selectedApproveBoleta?.cliente_nombre}</div>
-                            <div><strong className="text-foreground">Motivo:</strong> {selectedApproveBoleta?.motivo_salida || 'Salida de Bodega'}</div>
-                        </div>
-
-                        <div className="grid grid-cols-1 gap-3 pt-2">
-                            <Button
-                                onClick={() => handleApprove(selectedApproveBoleta.id, true)}
-                                className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs h-12 flex flex-col items-center justify-center gap-0.5"
-                            >
-                                <span>🚛 Enviar a Cola General de Despacho</span>
-                                <span className="text-[10px] font-normal opacity-90">Asignar a chofer / camión en ruta diaria</span>
-                            </Button>
-
-                            <Button
-                                variant="outline"
-                                onClick={() => handleApprove(selectedApproveBoleta.id, false)}
-                                className="border-blue-300 text-blue-700 hover:bg-blue-50 font-bold rounded-xl text-xs h-12 flex flex-col items-center justify-center gap-0.5"
-                            >
-                                <span>📦 Salida Directa (Encomienda / Vendedor)</span>
-                                <span className="text-[10px] text-muted-foreground font-normal">Alistar en bodega sin ocupar cupo en camiones</span>
-                            </Button>
-                        </div>
-                    </div>
-
-                    <DialogFooter>
-                        <Button variant="ghost" onClick={() => setSelectedApproveBoleta(null)} className="rounded-xl text-xs font-bold">
-                            Cancelar
-                        </Button>
-                    </DialogFooter>
                 </DialogContent>
             </Dialog>
 
