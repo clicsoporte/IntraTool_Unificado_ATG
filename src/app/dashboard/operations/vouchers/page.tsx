@@ -337,7 +337,7 @@ export default function VouchersPage() {
         }
     };
 
-    const handleCreateBoleta = async (e: React.FormEvent) => {
+    const handleCreateBoletaWithParams = async (e: React.FormEvent, sendToApprovalImmediate = true) => {
         e.preventDefault();
         if (!formData.clienteNombre.trim()) {
             toast({ title: 'Campo Requerido', description: 'Ingrese el cliente o destinatario.', variant: 'destructive' });
@@ -354,16 +354,17 @@ export default function VouchersPage() {
         try {
             const res = await createBoletaOperativaAction({
                 ...formData,
+                sendToApprovalImmediate,
                 items: validItems
             });
 
             if (res.success) {
                 toast({
-                    title: 'Boleta Creada',
+                    title: sendToApprovalImmediate ? 'Boleta Enviada a Aprobación' : 'Borrador Guardado',
                     description: `Se ha generado la Boleta #${res.boletaNumero} exitosamente.`,
                 });
                 setIsCreateOpen(false);
-                setFormData({ clienteId: '', clienteNombre: '', motivoSalida: 'faltante', referenciaDoc: '', comentario: '', direccionEmbarqueId: '' });
+                setFormData({ clienteId: '', clienteNombre: '', motivoSalida: 'faltante', referenciaDoc: '', comentario: '', direccionEmbarqueId: '', medioEnvio: 'camion' });
                 setRefDocSearch('');
                 setCustomerSearch('');
                 setShipmentAddresses([]);
@@ -473,17 +474,24 @@ export default function VouchersPage() {
         }
     };
 
-    const [selectedApproveBoleta, setSelectedApproveBoleta] = useState<any | null>(null);
+    const [formData, setFormData] = useState({
+        clienteId: '',
+        clienteNombre: '',
+        motivoSalida: 'faltante' as 'faltante' | 'devolucion' | 'muestra' | 'regalia' | 'otro',
+        referenciaDoc: '',
+        comentario: '',
+        direccionEmbarqueId: '',
+        medioEnvio: 'camion' as 'camion' | 'encomienda' | 'vendedor_mostrador'
+    });
 
-    const handleApprove = async (id: number, sendToQueue: boolean) => {
+    const handleApprove = async (id: number) => {
         try {
-            const res = await approveBoletaOperativaAction(id, sendToQueue);
+            const { approveBoletaOperativaAction } = await import('@/modules/operations/lib/actions');
+            const res = await approveBoletaOperativaAction(id);
             if (res.success) {
                 toast({ 
-                    title: 'Boleta Autorizada', 
-                    description: sendToQueue 
-                        ? 'La boleta se ha enviado a la Cola General de Despacho.' 
-                        : 'La boleta ha sido autorizada para entrega directa / encomienda (fuera de ruta de camión).' 
+                    title: 'Boleta Autorizada por Jefatura', 
+                    description: 'La boleta ahora tiene validez oficial para alistamiento y salida de bodega.' 
                 });
                 setSelectedApproveBoleta(null);
                 loadData();
@@ -492,6 +500,42 @@ export default function VouchersPage() {
             }
         } catch (e: any) {
             toast({ title: 'Error al autorizar', description: e.message, variant: 'destructive' });
+        }
+    };
+
+    const handleSendToApproval = async (id: number) => {
+        try {
+            const { sendBoletaToApprovalAction } = await import('@/modules/operations/lib/actions');
+            const res = await sendBoletaToApprovalAction(id);
+            if (res.success) {
+                toast({ title: 'Enviado a Aprobación', description: 'La boleta ha pasado a revisión de Jefatura / Supervisión.' });
+                loadData();
+            } else {
+                throw new Error(res.error);
+            }
+        } catch (e: any) {
+            toast({ title: 'Error al enviar', description: e.message, variant: 'destructive' });
+        }
+    };
+
+    const handleDispatch = async (id: number, customMedio?: 'camion' | 'encomienda' | 'vendedor_mostrador') => {
+        try {
+            const { dispatchBoletaAction } = await import('@/modules/operations/lib/actions');
+            const res = await dispatchBoletaAction(id, customMedio);
+            if (res.success) {
+                toast({ 
+                    title: 'Despacho Procesado', 
+                    description: customMedio === 'camion' || (!customMedio && selectedApproveBoleta?.medio_envio === 'camion')
+                        ? 'Se ha enviado a la Cola General de Despacho (Camiones).'
+                        : 'Se ha procesado como Salida Directa (Encomienda / Vendedor).'
+                });
+                setSelectedApproveBoleta(null);
+                loadData();
+            } else {
+                throw new Error(res.error);
+            }
+        } catch (e: any) {
+            toast({ title: 'Error al procesar despacho', description: e.message, variant: 'destructive' });
         }
     };
 
@@ -697,16 +741,24 @@ export default function VouchersPage() {
                                                 {b.total_items || (b.items?.length || 0)}
                                             </TableCell>
                                             <TableCell className="text-center">
-                                                {b.estado === 'pendiente_autorizacion' ? (
+                                                {(!b.estado || b.estado === 'borrador') ? (
+                                                    <Badge variant="outline" className="bg-slate-100 text-slate-700 border-slate-300 text-[10px] font-extrabold">
+                                                        ✏️ Borrador
+                                                    </Badge>
+                                                ) : b.estado === 'pendiente_autorizacion' ? (
                                                     <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-300 text-[10px] font-extrabold">
                                                         ⏳ Por Autorizar
                                                     </Badge>
+                                                ) : b.estado === 'aprobado' ? (
+                                                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300 text-[10px] font-extrabold">
+                                                        ✅ Aprobado (Bodega)
+                                                    </Badge>
                                                 ) : b.estado === 'pendiente' ? (
                                                     <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-300 text-[10px] font-extrabold">
-                                                        ✅ Cola Despacho
+                                                        🚛 Cola Despacho
                                                     </Badge>
                                                 ) : b.estado === 'aprobado_fuera_de_ruta' ? (
-                                                    <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-300 text-[10px] font-extrabold">
+                                                    <Badge variant="outline" className="bg-indigo-50 text-indigo-700 border-indigo-300 text-[10px] font-extrabold">
                                                         📦 Salida Directa
                                                     </Badge>
                                                 ) : (
@@ -714,28 +766,67 @@ export default function VouchersPage() {
                                                         {b.estado}
                                                     </Badge>
                                                 )}
+                                                {b.medio_envio && (
+                                                    <div className="text-[9px] text-muted-foreground mt-0.5 font-bold uppercase tracking-wider">
+                                                        {b.medio_envio === 'camion' ? '🚚 Chofer / Camión' : b.medio_envio === 'encomienda' ? '📦 Encomienda' : '👤 Vendedor/Bodega'}
+                                                    </div>
+                                                )}
                                             </TableCell>
                                             <TableCell className="text-right space-x-1">
-                                                {(b.estado === 'pendiente_autorizacion' || b.estado === 'pendiente') && (
-                                                    <Button
-                                                        size="sm"
-                                                        variant="ghost"
-                                                        onClick={() => handleOpenEdit(b)}
-                                                        className="h-8 text-xs font-bold text-slate-700 hover:bg-slate-100 dark:text-slate-300"
-                                                        title="Editar líneas, cantidades y notas"
-                                                    >
-                                                        <Edit3 className="w-3.5 h-3.5 mr-1" /> Editar
-                                                    </Button>
+                                                {(!b.estado || b.estado === 'borrador') && (
+                                                    <>
+                                                        <Button
+                                                            size="sm"
+                                                            variant="ghost"
+                                                            onClick={() => handleOpenEdit(b)}
+                                                            className="h-8 text-xs font-bold text-slate-700 hover:bg-slate-100"
+                                                        >
+                                                            <Edit3 className="w-3.5 h-3.5 mr-1" /> Editar
+                                                        </Button>
+                                                        <Button
+                                                            size="sm"
+                                                            variant="outline"
+                                                            onClick={() => handleSendToApproval(b.id)}
+                                                            className="h-8 text-xs font-bold text-amber-700 border-amber-300 hover:bg-amber-50"
+                                                        >
+                                                            🚀 Enviar a Aprobación
+                                                        </Button>
+                                                    </>
                                                 )}
                                                 {b.estado === 'pendiente_autorizacion' && canApprove && (
                                                     <Button
                                                         size="sm"
                                                         variant="outline"
-                                                        onClick={() => setSelectedApproveBoleta(b)}
+                                                        onClick={() => handleApprove(b.id)}
                                                         className="h-8 text-xs font-bold text-emerald-600 border-emerald-300 hover:bg-emerald-50"
                                                     >
                                                         <CheckCircle2 className="w-3.5 h-3.5 mr-1" /> Autorizar
                                                     </Button>
+                                                )}
+                                                {(b.estado === 'aprobado' || b.estado === 'pendiente' || b.estado === 'aprobado_fuera_de_ruta') && (
+                                                    <>
+                                                        {b.estado === 'aprobado' && (
+                                                            <Button
+                                                                size="sm"
+                                                                variant="outline"
+                                                                onClick={() => handleDispatch(b.id)}
+                                                                className="h-8 text-xs font-bold text-blue-600 border-blue-300 hover:bg-blue-50"
+                                                            >
+                                                                {b.medio_envio === 'camion' ? '🚚 Enviar a Ruta' : '📦 Confirmar Salida Directa'}
+                                                            </Button>
+                                                        )}
+                                                        {b.estado === 'pendiente' && (
+                                                            <Button
+                                                                size="sm"
+                                                                variant="ghost"
+                                                                onClick={() => handleDispatch(b.id, 'encomienda')}
+                                                                className="h-8 text-xs font-semibold text-indigo-600 hover:bg-indigo-50"
+                                                                title="Sacar de cola de camiones y pasar a Salida Directa"
+                                                            >
+                                                                📦 Mover a Salida Directa
+                                                            </Button>
+                                                        )}
+                                                    </>
                                                 )}
                                                 <Button
                                                     size="sm"
@@ -992,6 +1083,41 @@ export default function VouchersPage() {
                             )}
                         </div>
 
+                        {/* Selector de Método / Medio de Envío */}
+                        <div className="p-3.5 bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-2xl space-y-2">
+                            <Label className="text-xs font-black uppercase tracking-wider text-blue-700 dark:text-blue-300 flex items-center gap-1.5">
+                                🚚 Método / Medio de Envío Solicitado *
+                            </Label>
+                            <Select
+                                value={formData.medioEnvio}
+                                onValueChange={(val: any) => setFormData(prev => ({ ...prev, medioEnvio: val }))}
+                            >
+                                <SelectTrigger className="rounded-xl text-xs font-bold bg-background h-10 border-blue-200">
+                                    <SelectValue placeholder="Seleccione medio de envío..." />
+                                </SelectTrigger>
+                                <SelectContent className="rounded-xl">
+                                    <SelectItem value="camion">
+                                        <div className="flex items-center gap-2">
+                                            <span className="font-bold">🚚 Chofer / Camión en Ruta</span>
+                                            <span className="text-[10px] text-muted-foreground">(Ingresa a la Cola General de Transporte tras aprobación)</span>
+                                        </div>
+                                    </SelectItem>
+                                    <SelectItem value="encomienda">
+                                        <div className="flex items-center gap-2">
+                                            <span className="font-bold">📦 Encomienda / Transporte Externo</span>
+                                            <span className="text-[10px] text-muted-foreground">(Salida directa por bodega sin ocupar camiones)</span>
+                                        </div>
+                                    </SelectItem>
+                                    <SelectItem value="vendedor_mostrador">
+                                        <div className="flex items-center gap-2">
+                                            <span className="font-bold">👤 Vendedor / Retiro en Mostrador</span>
+                                            <span className="text-[10px] text-muted-foreground">(Entrega física directa en instalaciones)</span>
+                                        </div>
+                                    </SelectItem>
+                                </SelectContent>
+                            </Select>
+                        </div>
+
                         <div className="space-y-1.5 pt-2">
                             <Label className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Notas / Instrucciones de Alistamiento</Label>
                             <Textarea
@@ -1003,12 +1129,31 @@ export default function VouchersPage() {
                             />
                         </div>
 
-                        <DialogFooter className="pt-4">
+                        <DialogFooter className="pt-4 flex flex-col sm:flex-row gap-2">
                             <Button type="button" variant="outline" onClick={() => setIsCreateOpen(false)} className="rounded-xl font-bold text-xs">
                                 Cancelar
                             </Button>
-                            <Button type="submit" disabled={creating} className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs">
-                                {creating ? <RefreshCw className="w-4 h-4 animate-spin" /> : 'Generar Boleta de Salida'}
+                            <Button 
+                                type="button" 
+                                variant="secondary"
+                                disabled={creating} 
+                                onClick={(e) => {
+                                    handleCreateBoletaWithParams(e, false);
+                                }}
+                                className="rounded-xl font-bold text-xs border"
+                            >
+                                ✏️ Guardar Borrador
+                            </Button>
+                            <Button 
+                                type="button" 
+                                disabled={creating} 
+                                onClick={(e) => {
+                                    handleCreateBoletaWithParams(e, true);
+                                }}
+                                className="bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs shadow-md shadow-blue-500/20"
+                            >
+                                {creating ? <RefreshCw className="w-4 h-4 animate-spin mr-1" /> : null}
+                                🚀 Guardar y Enviar a Aprobación
                             </Button>
                         </DialogFooter>
                     </form>

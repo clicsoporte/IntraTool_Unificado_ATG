@@ -3932,6 +3932,8 @@ export async function createBoletaOperativaAction(data: {
     referenciaDoc?: string;
     comentario?: string;
     direccionEmbarqueId?: string;
+    medioEnvio?: 'camion' | 'encomienda' | 'vendedor_mostrador';
+    sendToApprovalImmediate?: boolean;
     items: Array<{ codigo: string; descripcion: string; cantidad: number }>;
 }): Promise<{ success: boolean; boletaNumero?: string; error?: string }> {
     const db = await getDb();
@@ -3947,10 +3949,11 @@ export async function createBoletaOperativaAction(data: {
             const cols = tableInfo.map((c: any) => c.name);
             if (!cols.includes('motivo_salida')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN motivo_salida TEXT;`);
             if (!cols.includes('referencia_doc')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN referencia_doc TEXT;`);
-            if (!cols.includes('requiere_autorizacion')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN requiere_autorizacion INTEGER DEFAULT 0;`);
+            if (!cols.includes('requiere_autorizacion')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN requiere_autorizacion INTEGER DEFAULT 1;`);
             if (!cols.includes('autorizado_por')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN autorizado_por TEXT;`);
             if (!cols.includes('fecha_autorizacion')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN fecha_autorizacion TEXT;`);
             if (!cols.includes('direccion_embarque_id')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN direccion_embarque_id TEXT;`);
+            if (!cols.includes('medio_envio')) db.exec(`ALTER TABLE ops_delivery_queue ADD COLUMN medio_envio TEXT DEFAULT 'camion';`);
         } catch (e) {}
 
         // Verificar si se usa un consecutivo único unificado para todas las boletas
@@ -3985,19 +3988,18 @@ export async function createBoletaOperativaAction(data: {
             }
 
             const todayStr = new Date().toISOString();
+            const selectedMedioEnvio = data.medioEnvio || 'camion';
 
-            // Verificar si requiere aprobación según configuración
-            const requireAuthRow = db.prepare("SELECT value FROM ops_delivery_settings WHERE key = 'boletas_require_authorization'").get() as { value: string } | undefined;
-            const requiresAuth = requireAuthRow?.value === 'true' ? 1 : 0;
-            const initialEstado = requiresAuth === 1 ? 'pendiente_autorizacion' : 'pendiente';
+            // Por regla de negocio, si envía a aprobación nace en 'pendiente_autorizacion', si no en 'borrador'
+            const initialEstado = data.sendToApprovalImmediate !== false ? 'pendiente_autorizacion' : 'borrador';
 
             const result = db.prepare(`
                 INSERT INTO ops_delivery_queue (
                     documento_numero, tipo_documento, cliente_id, cliente_nombre,
                     creado_por, fecha_registro, entregado, estado, comentario,
                     boleta_numero, motivo_salida, referencia_doc, requiere_autorizacion,
-                    autorizado_por, fecha_autorizacion, direccion_embarque_id
-                ) VALUES (?, 'boleta', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    direccion_embarque_id, medio_envio
+                ) VALUES (?, 'boleta', ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 1, ?, ?)
             `).run(
                 boletaNum,
                 data.clienteId || 'CLI-GENERIC',
@@ -4009,10 +4011,8 @@ export async function createBoletaOperativaAction(data: {
                 boletaNum,
                 data.motivoSalida,
                 data.referenciaDoc || null,
-                requiresAuth,
-                requiresAuth === 0 ? 'AUTO' : null,
-                requiresAuth === 0 ? todayStr : null,
-                data.direccionEmbarqueId || null
+                data.direccionEmbarqueId || null,
+                selectedMedioEnvio
             );
 
             const deliveryId = Number(result.lastInsertRowid);
@@ -4091,9 +4091,22 @@ export async function getBoletasOperativasAction(filters?: {
     }
 }
 
+export async function sendBoletaToApprovalAction(boletaId: number): Promise<{ success: boolean; error?: string }> {
+    const db = await getDb();
+    const currentUser = await getCurrentUser();
+    if (!currentUser) return { success: false, error: 'No autorizado' };
+
+    try {
+        db.prepare(`UPDATE ops_delivery_queue SET estado = 'pendiente_autorizacion' WHERE id = ? AND (estado = 'borrador' OR estado IS NULL)`).run(boletaId);
+        revalidatePath('/dashboard/operations/vouchers');
+        return { success: true };
+    } catch (e: any) {
+        return { success: false, error: e.message };
+    }
+}
+
 export async function approveBoletaOperativaAction(
-    boletaId: number, 
-    sendToQueue: boolean = true
+    boletaId: number
 ): Promise<{ success: boolean; error?: string }> {
     const db = await getDb();
     const currentUser = await getCurrentUser();
@@ -4103,19 +4116,47 @@ export async function approveBoletaOperativaAction(
 
     try {
         const todayStr = new Date().toISOString();
-        const nextState = sendToQueue ? 'pendiente' : 'aprobado_fuera_de_ruta';
-
+        // Al aprobar la jefatura, la boleta pasa a estado 'aprobado' (autorización física oficial de bodega)
         db.prepare(`
             UPDATE ops_delivery_queue
-            SET estado = ?, autorizado_por = ?, fecha_autorizacion = ?
+            SET estado = 'aprobado', autorizado_por = ?, fecha_autorizacion = ?
             WHERE id = ?
-        `).run(nextState, currentUser.name || currentUser.email, todayStr, boletaId);
+        `).run(currentUser.name || currentUser.email, todayStr, boletaId);
 
         revalidatePath('/dashboard/operations/vouchers');
         revalidatePath('/dashboard/operations/logistics/deliveries/operation');
         return { success: true };
     } catch (e: any) {
         logError('Error approving boleta operativa:', e.message);
+        return { success: false, error: e.message };
+    }
+}
+
+export async function dispatchBoletaAction(
+    boletaId: number,
+    customMedioEnvio?: 'camion' | 'encomienda' | 'vendedor_mostrador'
+): Promise<{ success: boolean; error?: string }> {
+    const db = await getDb();
+    const currentUser = await getCurrentUser();
+    if (!currentUser) return { success: false, error: 'No autorizado' };
+
+    try {
+        const doc = db.prepare('SELECT id, medio_envio, estado FROM ops_delivery_queue WHERE id = ?').get(boletaId) as any;
+        if (!doc) return { success: false, error: 'Boleta no encontrada' };
+
+        const medio = customMedioEnvio || doc.medio_envio || 'camion';
+        const nextState = medio === 'camion' ? 'pendiente' : 'aprobado_fuera_de_ruta';
+
+        db.prepare(`
+            UPDATE ops_delivery_queue
+            SET estado = ?, medio_envio = ?
+            WHERE id = ?
+        `).run(nextState, medio, boletaId);
+
+        revalidatePath('/dashboard/operations/vouchers');
+        revalidatePath('/dashboard/operations/logistics/deliveries/operation');
+        return { success: true };
+    } catch (e: any) {
         return { success: false, error: e.message };
     }
 }
@@ -4367,7 +4408,34 @@ export async function getBoletaPrintHtmlAction(boletaId: number): Promise<{ succ
             </tr>
         `).join('');
 
-        const html = `
+        // Intentar obtener plantilla personalizada desde /dashboard/admin/automations (Diseño Mensajes)
+        let customTemplate: any = null;
+        try {
+            const { getAllNotificationTemplates } = await import('@/modules/notifications/lib/db');
+            const allTpls = await getAllNotificationTemplates();
+            customTemplate = allTpls.find((t: any) => t.eventId === 'boleta_print_template');
+        } catch (_) {}
+
+        let html = '';
+        if (customTemplate && customTemplate.body && customTemplate.body.trim().length > 20) {
+            html = customTemplate.body
+                .replace(/{{companyName}}/g, company?.name || 'INDUSTRIAS GAREND S.A.')
+                .replace(/{{companyTaxId}}/g, company?.taxId || '3-101-133082')
+                .replace(/{{companyAddress}}/g, company?.address || 'Alajuela, Costa Rica')
+                .replace(/{{companyPhone}}/g, company?.phone || '+506 2458-4343')
+                .replace(/{{companyEmail}}/g, company?.email || 'ventas@industriasgarend.com')
+                .replace(/{{boletaNumero}}/g, doc.boleta_numero || doc.documento_numero)
+                .replace(/{{motivoTitle}}/g, motivoTitle)
+                .replace(/{{fechaRegistro}}/g, `${new Date(doc.fecha_registro).toLocaleDateString('es-CR')} ${new Date(doc.fecha_registro).toLocaleTimeString('es-CR', { hour: '2-digit', minute: '2-digit' })}`)
+                .replace(/{{clienteNombre}}/g, doc.cliente_nombre || 'Cliente General')
+                .replace(/{{clienteId}}/g, doc.cliente_id || 'N/A')
+                .replace(/{{originalDocRef}}/g, originalDocRef || 'N/A')
+                .replace(/{{creadoPor}}/g, doc.creado_por || 'Sistema')
+                .replace(/{{autorizadoPor}}/g, doc.autorizado_por || 'Pendiente de Autorización')
+                .replace(/{{comentario}}/g, doc.comentario || '')
+                .replace(/{{itemsTableHtml}}/g, linesHtml);
+        } else {
+            html = `
             <!DOCTYPE html>
             <html>
             <head>
@@ -4471,8 +4539,8 @@ export async function getBoletaPrintHtmlAction(boletaId: number): Promise<{ succ
                     </div>
                 </div>
             </body>
-            </html>
-        `;
+            </html>`;
+        }
 
         return { success: true, html };
     } catch (e: any) {

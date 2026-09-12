@@ -79,9 +79,11 @@ const eventLabels: Record<string, string> = {
     onDriverWaitingCustomer: '⏱️ Chofer en Espera de Atención en Cliente (Logística)',
     onBoletaCreated: '📄 Nueva Boleta Operativa Creada (Salida de Bodega)',
     onBoletaApproved: '✅ Boleta Operativa Autorizada para Despacho (Salida de Bodega)',
+    boleta_print_template: '🖨️ Formato de PDF Imprimible: Boleta Operativa (Bodega)',
 };
 
 const eventVariables: Record<string, string[]> = {
+    boleta_print_template: ['boletaNumero', 'motivoTitle', 'clienteNombre', 'clienteId', 'originalDocRef', 'creadoPor', 'autorizadoPor', 'fechaRegistro', 'comentario', 'itemsTableHtml', 'companyName', 'companyTaxId', 'companyAddress', 'companyPhone', 'companyEmail'],
     onBoletaCreated: ['boletaNumero', 'motivoSalida', 'clienteNombre', 'clienteId', 'referenciaDoc', 'creadoPor', 'totalItems'],
     onBoletaApproved: ['boletaNumero', 'motivoSalida', 'clienteNombre', 'autorizadoPor', 'fechaAutorizacion'],
     onFleetMaintenanceDue: ['plate', 'brand', 'model', 'progress', 'remaining', 'currentMileage', 'odometerUnit'],
